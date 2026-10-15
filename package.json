@@ -1,0 +1,43 @@
+{
+  "name": "attend",
+  "version": "0.0.0",
+  "description": "The attention layer for agents: decide when an event should wake your agent.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/asher-aqi/attend.git"
+  },
+  "keywords": [
+    "agents",
+    "mcp",
+    "mcp-events",
+    "attention",
+    "llm",
+    "proactive-agents",
+    "debounce",
+    "event-driven"
+  ],
+  "engines": {
+    "node": ">=22.5"
+  },
+  "files": [
+    "dist",
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "check": "pnpm typecheck && pnpm test && pnpm build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5"
+  },
+  "packageManager": "pnpm@12.8.1"
+}
