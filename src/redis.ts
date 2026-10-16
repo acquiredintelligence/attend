@@ -9,7 +9,10 @@
  * On Redis Cluster, put a hash tag in the prefix, such as 'attend:{app}:', so that every key a
  * script touches lands in one slot.
  */
-import type { Event, EventLog, LogEntry, ScopeRecord, StateStore } from './types.js';
+import { boundary } from './internal/adapter.js';
+import type { EventLog, LogEntry, StateStore } from './types.js';
+
+const { parseEvent, parseRecord, text } = boundary('attend/redis');
 
 export type RedisSend = (args: string[]) => Promise<unknown>;
 
@@ -48,7 +51,7 @@ export function redisStore(send: RedisSend, options?: RedisOptions): StateStore 
   return {
     async get(scope) {
       const reply = await send(['HGET', key(scope), 'record']);
-      return reply === null || reply === undefined ? null : parseRecord(text(reply), scope);
+      return reply === null || reply === undefined ? null : parseRecord(reply, scope);
     },
     async put(record, expectedVersion) {
       const dueAt = record.dueAt === null ? '' : String(record.dueAt);
@@ -91,14 +94,6 @@ export function redisLog(send: RedisSend, options?: RedisOptions & { blockingSen
   };
 }
 
-const decoder = new TextDecoder();
-
-function text(reply: unknown): string {
-  if (typeof reply === 'string') return reply;
-  if (reply instanceof Uint8Array) return decoder.decode(reply);
-  throw new Error(`attend/redis: expected a string reply, got ${typeof reply}`);
-}
-
 function integer(reply: unknown): number {
   if (typeof reply === 'number') return reply;
   if (typeof reply === 'bigint') return Number(reply);
@@ -123,7 +118,7 @@ function parseEntries(reply: unknown): LogEntry[] {
     const [id, fields] = list(item);
     const [name, value] = list(fields);
     if (text(name) !== 'event') throw new Error('attend/redis: corrupt log entry');
-    return { position: toPosition(text(id)), event: parseEvent(text(value)) };
+    return { position: toPosition(text(id)), event: parseEvent(value) };
   });
 }
 
@@ -137,23 +132,4 @@ function streamId(position: string): string {
   const [, ms, seq] = /^(\d{20})-(\d{20})$/.exec(position) ?? [];
   if (ms === undefined || seq === undefined) throw new Error(`attend/redis: not a position from this log: "${position}"`);
   return `${BigInt(ms)}-${BigInt(seq)}`;
-}
-
-/** The adapter wrote this JSON from a `ScopeRecord`; past the identity checks, the shape is its own. */
-function parseRecord(json: string, scope: string): ScopeRecord {
-  const parsed: unknown = JSON.parse(json);
-  if (typeof parsed !== 'object' || parsed === null || Reflect.get(parsed, 'scope') !== scope || typeof Reflect.get(parsed, 'version') !== 'number') {
-    throw new Error(`attend/redis: corrupt record for scope "${scope}"`);
-  }
-  return parsed as ScopeRecord;
-}
-
-function parseEvent(json: string): Event {
-  const parsed: unknown = JSON.parse(json);
-  const field = (name: string): unknown => (typeof parsed === 'object' && parsed !== null ? Reflect.get(parsed, name) : undefined);
-  const data = field('data');
-  if (typeof field('id') !== 'string' || typeof field('name') !== 'string' || typeof field('at') !== 'number' || typeof data !== 'object' || data === null) {
-    throw new Error('attend/redis: corrupt log entry');
-  }
-  return parsed as Event;
 }
