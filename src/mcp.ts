@@ -36,10 +36,10 @@ export interface McpEventsOptions {
   /** Poll interval when the server sends no `nextPollMs`. Default 10000. */
   pollMs?: number;
   /**
-   * How many stream notifications may wait while `emit` persists an earlier one. Past that, the
-   * source drops what it holds, reports `overflow`, and reopens the stream from the last
-   * committed cursor, so the server sends them again. Dropped events are lost only for an event
-   * type the server cannot replay from a cursor. Default 1000.
+   * How many stream notifications may wait while `emit` persists earlier ones. Past that, the
+   * source stops the stream, persists everything it holds, reports `overflow`, and reopens from
+   * the committed cursor, so the server sends the rest again. Notifications that arrive after
+   * the stop are lost only for an event type the server cannot replay from a cursor. Default 1000.
    */
   maxBuffered?: number;
   /**
@@ -58,7 +58,7 @@ export type McpEventsError =
   | { kind: 'stream'; code: number; message: string; data: unknown }
   /** A payload that failed validation and was skipped, with its cursor kept. */
   | { kind: 'malformed'; method: string; message: string; payload: unknown }
-  /** `buffered` notifications were waiting on `emit`; the stream reopens from the committed cursor. */
+  /** `buffered` notifications were waiting on `emit`; they are persisted, then the stream reopens from the committed cursor. */
   | { kind: 'overflow'; buffered: number }
   /** Nothing arrived for `idleTimeoutMs`; the stream reopens from the committed cursor. */
   | { kind: 'idle' }
@@ -83,6 +83,8 @@ const ERROR_POLICY: Readonly<Record<number, Policy>> = {
 const STREAM_TIMEOUT_MS = 2 ** 31 - 1;
 /** Pause before reopening a stream the server ended or the source closed, so a server that ends every stream at once never spins. */
 const REOPEN_MS = 1000;
+/** Events already waiting in the inbox fold into one `emit`, so a slow store costs one write per batch rather than per event. */
+const EMIT_BATCH = 500;
 /** Closed subscription ids remembered, so a straggling notification from a stream this Client just closed is dropped rather than reported. */
 const CLOSED_REMEMBERED = 256;
 const SUBSCRIPTION_KEY = 'io.modelcontextprotocol/subscriptionId';
@@ -118,7 +120,7 @@ const envelope = <M extends string>(method: M) => z.object({ method: z.literal(m
 
 // ─── the per-Client demux ────────────────────────────────────────────────────
 
-type Note = { kind: StreamMethod; params: unknown };
+type Note = { [K in StreamMethod]: { kind: K; params: unknown } }[StreamMethod];
 type Item = Note | { kind: 'done' } | { kind: 'failed'; error: unknown } | { kind: 'overflow'; buffered: number } | { kind: 'idle' };
 
 interface Subscription {
@@ -196,11 +198,12 @@ function forget(demux: Demux, id: string): void {
 
 /**
  * The queue between the SDK's notification handlers and the stream loop, which takes the next
- * item only once `emit` resolves. A notification past `max` empties it, drops every later one,
- * calls `onOverflow`, and leaves `overflow` as the next item. The request's outcome always queues.
+ * run of items only once `emit` resolves. A notification past `max` closes the intake: it and
+ * every later one are dropped, `onOverflow` runs, and `overflow` queues behind what is held, so
+ * the loop persists all of it before it sees the marker. The request's outcome always queues.
  */
-function inbox(max: number, onOverflow: () => void): { push(note: Note): void; close(item: Item): void; next(): Promise<Item> } {
-  let items: Item[] = [];
+function inbox(max: number, onOverflow: () => void): { push(note: Note): void; close(item: Item): void; take(limit: number): Promise<Item[]> } {
+  const items: Item[] = [];
   let overflowed = false;
   let wake: (() => void) | null = null;
   const enqueue = (item: Item) => {
@@ -216,18 +219,13 @@ function inbox(max: number, onOverflow: () => void): { push(note: Note): void; c
         return;
       }
       overflowed = true;
-      const buffered = items.length;
-      items = [];
-      enqueue({ kind: 'overflow', buffered });
+      enqueue({ kind: 'overflow', buffered: items.length });
       onOverflow();
     },
     close: enqueue,
-    async next() {
-      for (;;) {
-        const item = items.shift();
-        if (item !== undefined) return item;
-        await new Promise<void>((resolve) => (wake = resolve));
-      }
+    async take(limit) {
+      while (items.length === 0) await new Promise<void>((resolve) => (wake = resolve));
+      return items.splice(0, limit);
     },
   };
 }
@@ -370,47 +368,60 @@ export function mcpEventsSource(client: Client, options: McpEventsOptions): Sour
         );
       }
       armIdle();
+      // Consecutive events fold into one batch, which carries the last cursor among them: the
+      // same position a one-by-one emit would have left, in one store write.
+      let folded: Event[] = [];
+      let foldedCursor: string | undefined;
+      const flush = async () => {
+        if (folded.length === 0 && foldedCursor === undefined) return;
+        const out = batch(folded, foldedCursor);
+        folded = [];
+        foldedCursor = undefined;
+        await deliver(out);
+      };
       for (;;) {
-        const item = await items.next();
-        switch (item.kind) {
-          case 'done':
-          case 'terminated':
-            return { kind: 'ended' };
-          case 'failed':
-            return signal.aborted ? { kind: 'ended' } : { kind: 'failed', error: item.error };
-          case 'overflow':
-            report({ kind: 'overflow', buffered: item.buffered });
-            return { kind: 'ended' };
-          case 'idle':
-            report({ kind: 'idle' });
-            return { kind: 'ended' };
-          case 'active': {
-            const active = parsePayload(Active, item.params, 'notifications/events/active');
-            if (active) await deliver(batch([], active.cursor, active.truncated));
-            break;
-          }
-          case 'event': {
+        for (const item of await items.take(EMIT_BATCH)) {
+          if (item.kind === 'event') {
             const parsed = parseOccurrence(item.params);
-            if (parsed.ok) await deliver(batch([parsed.event], parsed.cursor));
-            else {
-              report({ kind: 'malformed', method: 'notifications/events/event', message: parsed.message, payload: item.params });
-              await deliver(batch([], cursorOf(item.params)));
+            if (parsed.ok) folded.push(parsed.event);
+            else report({ kind: 'malformed', method: 'notifications/events/event', message: parsed.message, payload: item.params });
+            const cursor = parsed.ok ? parsed.cursor : cursorOf(item.params);
+            if (typeof cursor === 'string') foldedCursor = cursor;
+            continue;
+          }
+          await flush();
+          switch (item.kind) {
+            case 'done':
+            case 'terminated':
+              return { kind: 'ended' };
+            case 'failed':
+              return signal.aborted ? { kind: 'ended' } : { kind: 'failed', error: item.error };
+            case 'overflow':
+              report({ kind: 'overflow', buffered: item.buffered });
+              return { kind: 'ended' };
+            case 'idle':
+              report({ kind: 'idle' });
+              return { kind: 'ended' };
+            case 'active': {
+              const active = parsePayload(Active, item.params, 'notifications/events/active');
+              if (active) await deliver(batch([], active.cursor, active.truncated));
+              break;
             }
-            break;
+            case 'heartbeat': {
+              const heartbeat = parsePayload(Heartbeat, item.params, 'notifications/events/heartbeat');
+              if (heartbeat) await deliver(batch([], heartbeat.cursor));
+              break;
+            }
+            case 'error': {
+              const failure = parsePayload(StreamError, item.params, 'notifications/events/error');
+              if (failure) report({ kind: 'stream', code: failure.error.code, message: failure.error.message, data: failure.error.data });
+              break;
+            }
+            default:
+              return assertNever(item);
           }
-          case 'heartbeat': {
-            const heartbeat = parsePayload(Heartbeat, item.params, 'notifications/events/heartbeat');
-            if (heartbeat) await deliver(batch([], heartbeat.cursor));
-            break;
-          }
-          case 'error': {
-            const failure = parsePayload(StreamError, item.params, 'notifications/events/error');
-            if (failure) report({ kind: 'stream', code: failure.error.code, message: failure.error.message, data: failure.error.data });
-            break;
-          }
-          default:
-            return assertNever(item);
         }
+        await flush();
       }
     } finally {
       cancelIdle();

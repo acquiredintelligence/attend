@@ -107,13 +107,18 @@ const ingestedTotals = (h: ReturnType<typeof setup>) => {
   return { count: ingested.reduce((n, t) => n + t.count, 0), duplicates: ingested.reduce((n, t) => n + t.duplicates, 0) };
 };
 
+const WRITE_MS = 1;
+
 /**
- * Drive the fake clock a second at a time, letting real I/O run between ticks, until `total`
- * events reached the sink or `budgetMs` of wall time passed. Returns the wall time taken.
+ * Drive the fake clock a second at a time until `total` events reached the sink or `budgetMs`
+ * of wall time passed. Returns the wall time taken. Each fake second waits out a real store
+ * write first: on a real clock a 1 ms write can never span a 10 s delivery lease, and the
+ * fake clock must not outrun it either.
  */
 async function catchUp(h: ReturnType<typeof setup>, total: number, budgetMs: number): Promise<number> {
   const started = performance.now();
   while (deliveredIds(h).length < total && performance.now() - started < budgetMs) {
+    await new Promise((resolve) => setTimeout(resolve, 2 * WRITE_MS));
     await h.clock.advance(1000);
     await settle();
   }
@@ -455,11 +460,11 @@ describe('mcpEventsSource over a real Client and Server', () => {
     slow.release();
     await settle();
     expect(h.errors).toEqual([{ kind: 'overflow', buffered: 2 }]);
-    expect((await h.store.get('s'))?.cursors).toEqual({ [KEY]: '1' });
+    expect((await h.store.get('s'))?.cursors).toEqual({ [KEY]: '3' });
     await h.clock.advance(1000);
     expect(h.streamRequests(server)).toEqual([
       { name: 'alpha', cursor: null },
-      { name: 'alpha', cursor: '1' },
+      { name: 'alpha', cursor: '3' },
     ]);
 
     for (let round = 0; round < 10 && deliveredIds(h).length < 6; round += 1) await h.clock.advance(1000);
@@ -490,7 +495,7 @@ describe('mcpEventsSource over a real Client and Server', () => {
     ]);
     await server.append('alpha', occ('e5'));
     await h.clock.advance(1000);
-    expect(deliveredIds(h)).toEqual(['e1', 'e5']);
+    expect(deliveredIds(h)).toEqual(['e1', 'e2', 'e3', 'e5']);
     await h.stop();
   });
 
@@ -498,7 +503,7 @@ describe('mcpEventsSource over a real Client and Server', () => {
     const server = mcpEventsTestServer(ALPHA);
     server.burst = true;
     const client = await server.connect();
-    const h = setup([{ route: 'queue' }], slowStore(1));
+    const h = setup([{ route: 'queue' }], slowStore(WRITE_MS));
     await server.append('alpha', ...BACKLOG.map((id) => occ(id)));
     void h.attach('s', client, { mode: 'stream' });
     // Three stream cycles, each a handful of 1 ms writes: well under a second. The livelock
@@ -513,12 +518,12 @@ describe('mcpEventsSource over a real Client and Server', () => {
     ]);
     expect(h.streamRequests(server)).toEqual([
       { name: 'alpha', cursor: null },
-      { name: 'alpha', cursor: '999' },
-      { name: 'alpha', cursor: '1998' },
+      { name: 'alpha', cursor: '1000' },
+      { name: 'alpha', cursor: '2000' },
     ]);
     expect((await h.store.get('s'))?.cursors).toEqual({ [KEY]: '2500' });
     await h.stop();
-  }, 20_000);
+  }, 15_000);
 
   test('a burst backlog past maxBuffered on a memory store reaches the sink once each, in order', async () => {
     const server = mcpEventsTestServer(ALPHA);
@@ -533,7 +538,7 @@ describe('mcpEventsSource over a real Client and Server', () => {
     expect(ingestedTotals(h)).toEqual({ count: 2500, duplicates: 0 });
     expect((await h.store.get('s'))?.cursors).toEqual({ [KEY]: '2500' });
     await h.stop();
-  }, 20_000);
+  }, 15_000);
 
   test('a stream with no notification for idleTimeoutMs is reported idle and reopened from the committed cursor', async () => {
     const server = mcpEventsTestServer(ALPHA);
