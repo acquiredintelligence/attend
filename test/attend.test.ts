@@ -451,8 +451,10 @@ describe('routes and defaultNotice', () => {
 
   test('defaultNotice lists the events, what was left out, and one line on the route', () => {
     expect(defaultNotice(decision('queue'))).toBe(
-      ['Some events before these were lost.', 'close a', 'build.done {"ok":true}', '(2 background events left out)', 'Take this up when the current step is done.'].join('\n'),
+      ['Some events before these were lost.', 'close a', 'build.done {"ok":true}', '(2 background events dropped from this window)', 'Take this up when the current step is done.'].join('\n'),
     );
-    expect(defaultNotice(decision('interrupt'), { maxLines: 1 }).split('\n')[0]).toBe('(1 earlier events left out)');
+    expect(defaultNotice(decision('interrupt'), { maxLines: 1 })).toBe(
+      ['(1 older events not shown)', 'Some events before these were lost.', 'build.done {"ok":true}', '(2 background events dropped from this window)', 'Attend to this now, even mid-task.'].join('\n'),
+    );
   });
 });

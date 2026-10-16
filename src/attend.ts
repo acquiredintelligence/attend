@@ -373,10 +373,10 @@ export function defaultNotice(decision: Decision, options?: { maxLines?: number 
   const lines = decision.window.events.filter((e) => e.kind !== 'context').map((e) => e.text ?? `${e.name} ${JSON.stringify(e.data)}`);
   const shown = lines.slice(-max);
   const out: string[] = [];
-  if (lines.length > shown.length) out.push(`(${lines.length - shown.length} earlier events left out)`);
+  if (lines.length > shown.length) out.push(`(${lines.length - shown.length} older events not shown)`);
   if (decision.window.gap) out.push('Some events before these were lost.');
   out.push(...shown);
-  if (decision.window.dropped > 0) out.push(`(${decision.window.dropped} background events left out)`);
+  if (decision.window.dropped > 0) out.push(`(${decision.window.dropped} background events dropped from this window)`);
   out.push(ROUTE_HINT[decision.route]);
   return out.join('\n');
 }
