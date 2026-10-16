@@ -10,7 +10,8 @@
  *
  * When the Client's transport closes, the SDK fails every open request with
  * `ConnectionClosed` (-32000). The source turns that into a `PermanentError`, so `attach`
- * rejects: the app must reconnect the Client (or make a new one) and attach again.
+ * rejects: the app must reconnect the Client (or make a new one) and attach again. A source
+ * waiting between polls or before a reopen is woken by the close and rejects the same way.
  */
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
@@ -144,6 +145,27 @@ interface Demux {
 
 const demuxes = new WeakMap<Client, Demux>();
 const wrappedTransports = new WeakSet<Transport>();
+const closings = new WeakMap<Transport, AbortSignal>();
+
+/**
+ * Aborts when `transport` closes. The SDK sets `transport.onclose` at connect and clears
+ * `client.transport` inside it, so a wrapper installed after connect fires once the Client
+ * already reads as closed.
+ */
+function closingOf(transport: Transport): AbortSignal {
+  let signal = closings.get(transport);
+  if (!signal) {
+    const controller = new AbortController();
+    const onclose = transport.onclose;
+    transport.onclose = () => {
+      onclose?.();
+      controller.abort();
+    };
+    signal = controller.signal;
+    closings.set(transport, signal);
+  }
+  return signal;
+}
 
 /**
  * The SDK never returns a request's JSON-RPC id, so the demux wraps `transport.send` and
@@ -280,7 +302,7 @@ export function mcpEventsSource(client: Client, options: McpEventsOptions): Sour
         if (signal.aborted) return;
         if (outcome.kind === 'overflowed') continue;
         if (outcome.kind === 'ended') {
-          await sleep(clock, REOPEN_MS, signal);
+          await pause(REOPEN_MS, signal);
           continue;
         }
         if (policyOf(outcome.error) === 'fallback' && mode === 'auto' && delivery === 'stream') {
@@ -330,7 +352,7 @@ export function mcpEventsSource(client: Client, options: McpEventsOptions): Sour
       }
       await deliver(batch(events, result.cursor, result.truncated));
       if (result.hasMore) continue;
-      await sleep(clock, result.nextPollMs ?? pollMs, signal);
+      await pause(result.nextPollMs ?? pollMs, signal);
     }
     return { kind: 'ended' };
   }
@@ -437,6 +459,12 @@ export function mcpEventsSource(client: Client, options: McpEventsOptions): Sour
       if (subscription.id !== null) forget(demux, subscription.id);
       if (!settled) controller.abort(new Error('attend: stream closed'));
     }
+  }
+
+  /** Sleep `ms` on the clock, or return at once when `signal` aborts or the Client's transport closes. */
+  function pause(ms: number, signal: AbortSignal): Promise<void> {
+    const transport = client.transport;
+    return transport ? sleep(clock, ms, AbortSignal.any([signal, closingOf(transport)])) : Promise.resolve();
   }
 
   function parsePayload<S extends z.ZodType>(schema: S, payload: unknown, method: string): z.output<S> | null {

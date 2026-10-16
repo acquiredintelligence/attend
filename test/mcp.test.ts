@@ -629,6 +629,39 @@ describe('mcpEventsSource over a real Client and Server', () => {
     await h.stop();
   });
 
+  test('a Client closed while a poll source waits between polls ends the subscription at once, not at the next poll', async () => {
+    const server = mcpEventsTestServer(ALPHA);
+    server.nextPollMs = null;
+    const client = await server.connect();
+    const h = setup();
+    const polling = h.attend.attach('s', h.source(client, { pollMs: 10_000 }));
+    void polling.catch(() => undefined);
+    await settle();
+    expect(server.requests.map((r) => r.method)).toEqual(['events/poll']);
+    await client.close();
+    const outcome = await Promise.race([polling.then(() => 'resolved', (error: unknown) => error), settle().then(() => 'pending')]);
+    expect(outcome).toBeInstanceOf(PermanentError);
+    expect(outcome).toMatchObject({ message: 'attend/mcp: the Client closed; reconnect it and attach again' });
+    await h.stop();
+  });
+
+  test('a Client closed during the pause before a terminated stream reopens ends the subscription at once', async () => {
+    const server = mcpEventsTestServer(ALPHA);
+    const client = await server.connect();
+    const h = setup();
+    const streaming = h.attend.attach('s', h.source(client, { mode: 'stream' }));
+    void streaming.catch(() => undefined);
+    await settle();
+    await server.terminate('alpha');
+    await settle();
+    expect(server.liveStreams('alpha')).toEqual([]);
+    await client.close();
+    const outcome = await Promise.race([streaming.then(() => 'resolved', (error: unknown) => error), settle().then(() => 'pending')]);
+    expect(outcome).toBeInstanceOf(PermanentError);
+    expect(outcome).toMatchObject({ message: 'attend/mcp: the Client closed; reconnect it and attach again' });
+    await h.stop();
+  });
+
   test('a notification for a subscription no stream here opened is reported as unrouted and changes nothing', async () => {
     const server = mcpEventsTestServer(ALPHA);
     const client = await server.connect();
