@@ -70,15 +70,56 @@ async function rejects(run: () => Promise<unknown>): Promise<void> {
 
 type StoreCase = [string, (store: ScopeStore) => Promise<void>];
 
+/**
+ * The store under test, with every value its reads return, and every write it was given, kept beside a
+ * structuredClone. After a case closes the store and yields one macrotask, none of them may have changed,
+ * so each read shape any case uses also checks aliasing. A store must return plain, cloneable data.
+ */
+function watched(inner: ScopeStore): { store: ScopeStore; check: () => void } {
+  const kept: [unknown, unknown][] = [];
+  const keep = async <T>(pending: Promise<T>): Promise<T> => {
+    const value = await pending;
+    kept.push([value, structuredClone(value)]);
+    return value;
+  };
+  const log = inner.log;
+  const store: ScopeStore = {
+    durable: inner.durable,
+    load: (scope) => keep(inner.load(scope)),
+    commit: (writes) => {
+      kept.push([writes, structuredClone(writes)]);
+      return keep(inner.commit(writes));
+    },
+    due: (now, limit, after) => keep(inner.due(now, limit, after)),
+    remove: (scope) => inner.remove(scope),
+    log: {
+      epoch: () => log.epoch(),
+      bounds: () => keep(log.bounds()),
+      read: (query) => keep(log.read(query)),
+      find: (kind, id) => keep(log.find(kind, id)),
+      wait: (after, blockMs, signal) => log.wait(after, blockMs, signal),
+      trim: (retention) => log.trim(retention),
+      compare: (a, b) => log.compare(a, b),
+    },
+    ...(inner.close ? { close: () => inner.close?.() ?? Promise.resolve() } : {}),
+  };
+  return { store, check: () => kept.forEach(([value, clone], i) => assertEqual(value, clone, `returned value ${i} unchanged by later calls`)) };
+}
+
 function casesFor(make: () => Promise<ScopeStore> | ScopeStore, cases: StoreCase[]): ConformanceCase[] {
   return cases.map(([name, run]) => ({
     name,
     async run() {
-      const store = await make();
+      const { store, check } = watched(await make());
+      let closed = false;
       try {
         await run(store);
-      } finally {
+        closed = true;
         await store.close?.();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        check();
+      } finally {
+        if (!closed) await store.close?.();
       }
     },
   }));
@@ -129,12 +170,12 @@ export function scopeStoreConformance(make: () => Promise<ScopeStore> | ScopeSto
     }],
     ['a conflicting write in a group leaves the other writes committed, with outcomes in order', async (store) => {
       await store.commit([write('a'), write('b')]);
-      const before = await store.load('b');
-      const a = write('a', 1);
+      const before = await store.load('a');
+      const b = write('b', 1);
       const c = write('c');
-      assertEqual(await store.commit([a, write('b', 0, { appends: [append('conflict', 'b')] }), c]), ['ok', 'conflict', 'ok'], 'outcomes');
-      assertEqual((await store.load('a'))?.version, 2, 'a committed');
-      assertEqual(await store.load('b'), before, 'b unchanged');
+      assertEqual(await store.commit([b, write('a', 0, { appends: [append('conflict', 'a')] }), c]), ['ok', 'conflict', 'ok'], 'outcomes');
+      assertEqual((await store.load('b'))?.version, 2, 'b committed');
+      assertEqual(await store.load('a'), before, 'a unchanged');
       assertEqual(await store.load('c'), { version: 1, snapshot: null, tail: c.inputs }, 'c committed');
       assertEqual(await store.log.find('decision', 'conflict'), null, 'no conflicting append');
     }],
@@ -215,6 +256,52 @@ export function scopeStoreConformance(make: () => Promise<ScopeStore> | ScopeSto
       for (const [i, scope] of scopes.entries()) await store.commit([write(scope, 0, { due: (i + 1) * 1000 })]);
       for (const scope of scopes) assertEqual(await store.load(scope), { version: 1, snapshot: null, tail: [logged(`${scope}:0`)] }, scope);
       assertEqual((await store.due(10_000, 10)).map((key) => key.scope), scopes, 'separate due values');
+    }],
+    ['what a read returned is unchanged by later commits, trims and removes', async (store) => {
+      const kept: [unknown, unknown][] = [];
+      const keep = async <T>(pending: Promise<T>): Promise<T> => {
+        const value = await pending;
+        kept.push([value, structuredClone(value)]);
+        return value;
+      };
+      const first: Snapshot = { version: 2, record: record('s', 2), policy, reducer: 1 };
+      await store.commit([write('s', 0, { inputs: [logged('a'), logged('b')], snapshot: first, appends: [append('one')], due: 1000 }), write('t', 0), write('u', 0, { due: 1000 })]);
+      await keep(store.load('s'));
+      await keep(store.load('t'));
+      await store.commit([write('s', 2, { appends: [letter('two')] })]);
+      await keep(store.load('s'));
+      const bounds = await keep(store.log.bounds());
+      for (const query of [{}, { scope: 's' }, { scopePrefix: 's' }, { kinds: ['deadLetter' as const] }]) await keep(store.log.read({ after: null, limit: 10, ...query }));
+      await keep(store.log.read({ after: bounds.first, limit: 10 }));
+      await keep(store.log.read({ after: bounds.last, limit: 10 }));
+      await keep(store.log.read({ after: null, limit: 10, routes: ['interrupt'] }));
+      await keep(store.log.read({ after: null, limit: 10, sinceAt: 0 }));
+      await keep(store.log.read({ after: bounds.first, limit: 10, scope: 's' }));
+      const page = await keep(store.log.read({ after: null, limit: 1 }));
+      const [firstDue] = await keep(store.due(1000, 1));
+      const [secondDue] = await keep(store.due(1000, 1, firstDue));
+      await keep(store.due(1000, 1, secondDue));
+      await keep(store.log.find('decision', 'one'));
+      await keep(store.due(1000, 10));
+      assertEqual(await store.commit([write('s', 3, { inputs: [logged('c')], appends: [append('one', 's', 'queue', 2000), letter('two', 's', 'sink', 2000)], due: 1500 }), write('t', 1)]), ['ok', 'ok'], 'duplicate appends commit');
+      assertEqual(await store.commit([write('s', 4, { inputs: [logged('d')], appends: [append('three')], due: 2000 })]), ['ok'], 'later commit');
+      await keep(store.log.find('decision', 'three'));
+      await keep(store.log.read({ after: page.checked, limit: 1 }));
+      await keep(store.log.find('deadLetter', 'two'));
+      await keep(store.log.bounds());
+      await keep(store.due(2000, 10));
+      await store.log.trim({ maxRows: 1 });
+      assertEqual(await store.commit([write('s', 5, { snapshot: { version: 6, record: record('s', 6), policy, reducer: 1 }, appends: [append('four'), letter('five'), append('one', 's', 'note', 3000)], due: null })]), ['ok'], 'snapshot commit');
+      await keep(store.log.read({ after: null, limit: 10 }));
+      await keep(store.log.find('decision', 'one'));
+      await keep(store.log.bounds());
+      await keep(store.due(3000, 10));
+      await keep(store.load('s'));
+      await store.log.trim({ olderThanMs: 1 });
+      await store.remove('s');
+      assertEqual(await store.commit([write('s', 0, { snapshot: { version: 1, record: record('s', 1), policy, reducer: 2 }, appends: [append('six')] })]), ['ok'], 're-created');
+      await store.remove('t');
+      for (const [value, clone] of kept) assertEqual(value, clone, 'returned values unchanged');
     }],
   ]);
 }
@@ -332,6 +419,8 @@ export function decisionLogConformance(make: () => Promise<ScopeStore> | ScopeSt
     ['wait resolves on an append, at the timeout and on abort', async (store) => {
       await seed(store, [append('first')]);
       const first = (await store.log.bounds()).last;
+      await store.log.read({ after: null, limit: 10 });
+      await store.log.find('decision', 'first');
       const abort = new AbortController();
       try {
         const pending = store.log.wait(first, 5000, abort.signal);
@@ -388,11 +477,18 @@ export function decisionLogConformance(make: () => Promise<ScopeStore> | ScopeSt
     const together = (name: string, run: (a: ScopeStore, b: ScopeStore) => Promise<void>): ConformanceCase => ({
       name,
       async run() {
-        const [a, b] = await concurrent();
+        const [rawA, rawB] = await concurrent();
+        const [a, b] = [watched(rawA), watched(rawB)];
+        let closed = false;
         try {
-          await run(a, b);
+          await run(a.store, b.store);
+          closed = true;
+          await Promise.all([a.store.close?.(), b.store.close?.()]);
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          a.check();
+          b.check();
         } finally {
-          await Promise.all([a.close?.(), b.close?.()]);
+          if (!closed) await Promise.all([a.store.close?.(), b.store.close?.()]);
         }
       },
     });

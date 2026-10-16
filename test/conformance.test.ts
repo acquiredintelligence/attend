@@ -40,6 +40,7 @@ test('scope store case names match the contract', () => {
     'an omitted due keeps the stored value and a null due clears it',
     'remove forgets the scope, its due value and its version',
     'scopes that are prefixes of each other or hold punctuation stay separate',
+    'what a read returned is unchanged by later commits, trims and removes',
   ]);
 });
 
