@@ -71,8 +71,9 @@ async function rejects(run: () => Promise<unknown>): Promise<void> {
 type StoreCase = [string, (store: ScopeStore) => Promise<void>];
 
 /**
- * The store under test, with every value its reads return kept beside a structuredClone. Every case
- * checks on success that none of them changed, so each read shape any case uses also checks aliasing.
+ * The store under test, with every value its reads return, and every write it was given, kept beside a
+ * structuredClone. After a case closes the store and yields one macrotask, none of them may have changed,
+ * so each read shape any case uses also checks aliasing. A store must return plain, cloneable data.
  */
 function watched(inner: ScopeStore): { store: ScopeStore; check: () => void } {
   const kept: [unknown, unknown][] = [];
@@ -85,7 +86,10 @@ function watched(inner: ScopeStore): { store: ScopeStore; check: () => void } {
   const store: ScopeStore = {
     durable: inner.durable,
     load: (scope) => keep(inner.load(scope)),
-    commit: (writes) => keep(inner.commit(writes)),
+    commit: (writes) => {
+      kept.push([writes, structuredClone(writes)]);
+      return keep(inner.commit(writes));
+    },
     due: (now, limit, after) => keep(inner.due(now, limit, after)),
     remove: (scope) => inner.remove(scope),
     log: {
@@ -107,11 +111,15 @@ function casesFor(make: () => Promise<ScopeStore> | ScopeStore, cases: StoreCase
     name,
     async run() {
       const { store, check } = watched(await make());
+      let closed = false;
       try {
         await run(store);
+        closed = true;
+        await store.close?.();
+        await new Promise((resolve) => setTimeout(resolve, 0));
         check();
       } finally {
-        await store.close?.();
+        if (!closed) await store.close?.();
       }
     },
   }));
@@ -292,6 +300,7 @@ export function scopeStoreConformance(make: () => Promise<ScopeStore> | ScopeSto
       await store.log.trim({ olderThanMs: 1 });
       await store.remove('s');
       assertEqual(await store.commit([write('s', 0, { snapshot: { version: 1, record: record('s', 1), policy, reducer: 2 }, appends: [append('six')] })]), ['ok'], 're-created');
+      await store.remove('t');
       for (const [value, clone] of kept) assertEqual(value, clone, 'returned values unchanged');
     }],
   ]);
@@ -410,6 +419,8 @@ export function decisionLogConformance(make: () => Promise<ScopeStore> | ScopeSt
     ['wait resolves on an append, at the timeout and on abort', async (store) => {
       await seed(store, [append('first')]);
       const first = (await store.log.bounds()).last;
+      await store.log.read({ after: null, limit: 10 });
+      await store.log.find('decision', 'first');
       const abort = new AbortController();
       try {
         const pending = store.log.wait(first, 5000, abort.signal);
@@ -468,12 +479,16 @@ export function decisionLogConformance(make: () => Promise<ScopeStore> | ScopeSt
       async run() {
         const [rawA, rawB] = await concurrent();
         const [a, b] = [watched(rawA), watched(rawB)];
+        let closed = false;
         try {
           await run(a.store, b.store);
+          closed = true;
+          await Promise.all([a.store.close?.(), b.store.close?.()]);
+          await new Promise((resolve) => setTimeout(resolve, 0));
           a.check();
           b.check();
         } finally {
-          await Promise.all([a.store.close?.(), b.store.close?.()]);
+          if (!closed) await Promise.all([a.store.close?.(), b.store.close?.()]);
         }
       },
     });
