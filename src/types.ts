@@ -23,11 +23,12 @@ export interface Event {
 export const KINDS = ['closing', 'flush', 'continuous', 'passive', 'consequence', 'context'] as const;
 
 /**
- * The settle role of an event. The first four are acts: things that happen in the scope and
- * can call for the agent, whether the user did them or an outside party did, such as a deploy
- * that failed. The last two never settle a window on their own.
+ * The settle role of an event. `closing`, `continuous` and `passive` are acts: things that
+ * happen in the scope and can call for the agent, whether the user did them or an outside
+ * party did, such as a deploy that failed. A flush is not an act but a direct address. The
+ * last two never settle a window on their own.
  * - closing: ends an act; the window settles after a short grace so consequences land.
- * - flush: direct address; settles at once, with wait not offered.
+ * - flush: direct address; settles at once, with wait not offered, and is never shed.
  * - continuous: one step of an ongoing act; settles once no further step has arrived for a gap.
  * - passive: a dwell or look; settles after a quiet period.
  * - consequence: output that follows from an act; attaches to the act that caused it.
