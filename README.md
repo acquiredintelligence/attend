@@ -16,7 +16,9 @@
   <a href="skills/attend/SKILL.md">Agent skill</a>
 </p>
 
-Your app emits a firehose of events: log lines, messages, clicks, alerts. An agent that wakes on every one is noisy, and an agent behind a debounce misses the message that mattered. attend sits between the two. It collects each scope's events into a window, waits until the window means something, asks a judge what the agent should do about it, and hands your app one decision. Your app keeps the final say in how that decision runs.
+Picture an agent that watches your app. The app never stops talking: log lines, messages, clicks, alerts. Wake the agent on every event and it never finishes a thought. Put it behind a debounce and it sleeps through the one message that mattered.
+
+attend holds each scope's events until they add up to something, asks a judge what the agent should do, and hands your app one decision. Your app keeps the final say in how that decision runs. In the sample below, a failed build waits, and the user's question wakes the agent with both.
 
 ```ts
 ```ts
@@ -101,7 +103,7 @@ attend held the log lines until the failed test closed the window. The judge cho
 ## What you get
 
 - **6 routes.** The judge picks `interrupt`, `queue`, `note`, `ask`, `wait` or `skip`, and your app carries it out.
-- **Windows that settle when an act ends.** A finished build or a direct message settles the window, not a debounce timer. A log line never wakes the agent on its own.
+- **Windows that settle when an act ends.** A finished build or a message to the agent settles the window. A log line never wakes the agent on its own.
 - **Your choice of judge.** TypeSafe's Jev, the OpenAI Decisions API, any model through `llmJudge`, or a plain function.
 - **4 stores.** Memory, SQLite, Postgres and Redis, each crash-tested at every commit boundary in CI.
 - **At-least-once delivery.** A decision keeps its id across retries, so your sink can drop repeats.
@@ -123,7 +125,7 @@ attend held the log lines until the failed test closed the window. The judge cho
   |             interrupt | queue | note | ask | skip | wait |
   |   log       every step and decision is persisted         |
   +----------------------------------------------------------+
-        |  a few decisions, not thousands of events
+        |  a handful of decisions
         v
   decisions out
         |-- in-process: your sink's handler for the route
