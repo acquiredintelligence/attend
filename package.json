@@ -1,5 +1,5 @@
 {
-  "name": "attend",
+  "name": "@acquiredintelligence/attend",
   "version": "0.1.0",
   "description": "The attention layer for agents: decide when an event should wake your agent.",
   "license": "MIT",
@@ -22,7 +22,7 @@
     "node": ">=22.13"
   },
   "bin": {
-    "attend": "./dist/cli.js"
+    "attend": "dist/cli.js"
   },
   "packageManager": "pnpm@12.8.1",
   "sideEffects": false,
@@ -125,5 +125,8 @@
   "bugs": {
     "url": "https://github.com/acquiredintelligence/attend/issues"
   },
-  "author": "Zettel Labs, Inc."
+  "author": "Zettel Labs, Inc.",
+  "publishConfig": {
+    "access": "public"
+  }
 }

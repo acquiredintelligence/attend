@@ -8,7 +8,7 @@
  * a window is trimmed to it and halved once on a context-length rejection.
  *
  * ```ts
- * import { decisionsJudge } from 'attend/decisions';
+ * import { decisionsJudge } from '@acquiredintelligence/attend/decisions';
  *
  * export const judge = decisionsJudge({ apiKey: process.env.OPENAI_API_KEY ?? '', model: '<model id>' });
  * ```

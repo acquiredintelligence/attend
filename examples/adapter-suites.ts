@@ -3,8 +3,8 @@
  * adapter's factory. Run with `pnpm build && node --test examples/adapter-suites.ts`.
  */
 import { test } from 'node:test';
-import { memoryStore } from 'attend';
-import { crashSuite, multiScopeCrashSuite, scopeStoreConformance, decisionLogConformance } from 'attend/testing';
+import { memoryStore } from '@acquiredintelligence/attend';
+import { crashSuite, multiScopeCrashSuite, scopeStoreConformance, decisionLogConformance } from '@acquiredintelligence/attend/testing';
 
 for (const c of scopeStoreConformance(() => memoryStore())) test(c.name, c.run);
 for (const c of crashSuite(() => memoryStore())) test(c.name, c.run);

@@ -24,19 +24,19 @@ Return `{ route, probabilities?, predicates?, confidence? }`.
 - `probabilities` maps offered routes to numbers from 0 to 1. attend sets routes that were not offered to 0 and renormalises the rest. When they sum to 0, the chosen route gets 1.
 - `predicates` maps predicate names to numbers from 0 to 1. attend drops values outside that range.
 - `confidence` is a number from 0 to 1 when the judge has one, such as a classifier's confidence in the route. It reaches the sink as `decision.confidence`, null when absent.
-- Throw to retry with backoff from `retryBackoffMs`. Throw `PermanentError` from `attend` to dead-letter the window at once.
+- Throw to retry with backoff from `retryBackoffMs`. Throw `PermanentError` from `@acquiredintelligence/attend` to dead-letter the window at once.
 - Stop when `signal` aborts. attend aborts the call after `judgeTimeoutMs`.
 
 ## llmJudge
 
-`llmJudge({ complete })` from `attend/llm` writes the system prompt, renders the input as compact JSON, builds a strict JSON Schema for the answer, and validates the reply. `complete({ system, prompt, schema, signal })` makes one structured-output call and resolves with the parsed JSON.
+`llmJudge({ complete })` from `@acquiredintelligence/attend/llm` writes the system prompt, renders the input as compact JSON, builds a strict JSON Schema for the answer, and validates the reply. `complete({ system, prompt, schema, signal })` makes one structured-output call and resolves with the parsed JSON.
 
 Claude:
 
 ```ts
 import Anthropic from '@anthropic-ai/sdk';
-import { PermanentError } from 'attend';
-import { llmJudge } from 'attend/llm';
+import { PermanentError } from '@acquiredintelligence/attend';
+import { llmJudge } from '@acquiredintelligence/attend/llm';
 
 const anthropic = new Anthropic();
 
@@ -76,8 +76,8 @@ OpenAI Responses API:
 
 ```ts
 import OpenAI from 'openai';
-import { PermanentError } from 'attend';
-import { llmJudge } from 'attend/llm';
+import { PermanentError } from '@acquiredintelligence/attend';
+import { llmJudge } from '@acquiredintelligence/attend/llm';
 
 const openai = new OpenAI();
 
@@ -113,8 +113,8 @@ Gemini, through `@google/genai`. This snippet was written without the package in
 
 ```ts
 import { GoogleGenAI } from '@google/genai';
-import { PermanentError } from 'attend';
-import { llmJudge } from 'attend/llm';
+import { PermanentError } from '@acquiredintelligence/attend';
+import { llmJudge } from '@acquiredintelligence/attend/llm';
 
 const ai = new GoogleGenAI({});
 
@@ -141,7 +141,7 @@ Vercel AI SDK. This snippet was written without the `ai` package installed, so c
 ```ts
 import { openai } from '@ai-sdk/openai';
 import { generateObject, jsonSchema } from 'ai';
-import { llmJudge } from 'attend/llm';
+import { llmJudge } from '@acquiredintelligence/attend/llm';
 
 export const judge = llmJudge({
   complete: async ({ system, prompt, images, schema, signal }) => {
@@ -166,7 +166,7 @@ Options:
 ## jevJudge
 
 ```ts
-import { jevJudge } from 'attend/jev';
+import { jevJudge } from '@acquiredintelligence/attend/jev';
 
 export const judge = jevJudge({ apiKey: process.env.TYPESAFE_API_KEY ?? '' });
 ```
@@ -184,7 +184,7 @@ Options:
 ## decisionsJudge
 
 ```ts
-import { decisionsJudge } from 'attend/decisions';
+import { decisionsJudge } from '@acquiredintelligence/attend/decisions';
 
 export const judge = decisionsJudge({ apiKey: process.env.OPENAI_API_KEY ?? '', model: '<model id>' });
 ```
@@ -212,8 +212,8 @@ Before a call, a duplicate predicate name throws `PermanentError`, and so does a
 `createAttend({ capture })` adds images to every judge call:
 
 ```ts
-import { createAttend, memoryStore, routes } from 'attend';
-import type { JudgeImage } from 'attend';
+import { createAttend, memoryStore, routes } from '@acquiredintelligence/attend';
+import type { JudgeImage } from '@acquiredintelligence/attend';
 
 declare function screenshot(scope: string, signal: AbortSignal): Promise<JudgeImage>;
 
@@ -239,7 +239,7 @@ export const attend = createAttend({
 Write a plain function when a rule decides. Read `input.routes` before you answer `wait`:
 
 ```ts
-import type { Judge } from 'attend';
+import type { Judge } from '@acquiredintelligence/attend';
 
 export const judge: Judge = async ({ window, routes }) => {
   const has = (name: string) => window.events.some((e) => e.name === name);
@@ -252,7 +252,7 @@ export const judge: Judge = async ({ window, routes }) => {
 Judges compose as functions. Wrap a model judge so rules answer first:
 
 ```ts
-import type { Judge } from 'attend';
+import type { Judge } from '@acquiredintelligence/attend';
 
 export const withShortcut =
   (judge: Judge): Judge =>
@@ -265,7 +265,7 @@ A hosted classifier is a judge too: send `input` as JSON, map its answer to `{ r
 ## Configuring what the judge sees
 
 ```ts
-import { createAttend, memoryStore, routes } from 'attend';
+import { createAttend, memoryStore, routes } from '@acquiredintelligence/attend';
 
 export const attend = createAttend({
   store: memoryStore(),

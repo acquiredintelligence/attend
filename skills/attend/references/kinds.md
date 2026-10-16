@@ -1,6 +1,6 @@
 # Settle rules
 
-How a scope's open window settles, exactly. All times are on attend's clock at ingest (`entry.seenAt`), never the source's `event.at`. Defaults are in `DEFAULT_POLICY`, exported from `attend`.
+How a scope's open window settles, exactly. All times are on attend's clock at ingest (`entry.seenAt`), never the source's `event.at`. Defaults are in `DEFAULT_POLICY`, exported from `@acquiredintelligence/attend`.
 
 `closing`, `flush`, `continuous` and `passive` are acts: things that happen in the scope and can call for the agent, whether the user did them or an outside party did. `consequence` is output that followed from an act, and `context` is the agent's own earlier output.
 

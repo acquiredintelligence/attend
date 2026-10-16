@@ -4,8 +4,8 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createAttend, memoryStore, type DeadLetter, type Event, type Kind } from 'attend';
-import { fakeClock, recordingSink, scriptedJudge, type ScriptedAnswer } from 'attend/testing';
+import { createAttend, memoryStore, type DeadLetter, type Event, type Kind } from '@acquiredintelligence/attend';
+import { fakeClock, recordingSink, scriptedJudge, type ScriptedAnswer } from '@acquiredintelligence/attend/testing';
 
 const kind = (event: Event): Kind => {
   if (event.name === 'user.message') return 'flush';

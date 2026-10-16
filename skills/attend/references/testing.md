@@ -1,14 +1,14 @@
 # Testing
 
-`attend/testing` makes settling deterministic and runs with any test runner. These examples use `node:test`.
+`@acquiredintelligence/attend/testing` makes settling deterministic and runs with any test runner. These examples use `node:test`.
 
 ## Set up a scope on a fake clock
 
 ```ts
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createAttend, DEFAULT_POLICY, memoryStore, type DeadLetter, type Event, type Kind } from 'attend';
-import { fakeClock, recordingSink, scriptedJudge, type ScriptedAnswer } from 'attend/testing';
+import { createAttend, DEFAULT_POLICY, memoryStore, type DeadLetter, type Event, type Kind } from '@acquiredintelligence/attend';
+import { fakeClock, recordingSink, scriptedJudge, type ScriptedAnswer } from '@acquiredintelligence/attend/testing';
 
 const kind = (event: Event): Kind => {
   if (event.name === 'user.message') return 'flush';
@@ -77,8 +77,8 @@ Assert on `calls[i].window.events`, `calls[i].window.reason` and `calls[i].route
 ```ts
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { DEFAULT_POLICY, type Event, type Kind } from 'attend';
-import { CrashError, harness, recordingSink, scriptedJudge } from 'attend/testing';
+import { DEFAULT_POLICY, type Event, type Kind } from '@acquiredintelligence/attend';
+import { CrashError, harness, recordingSink, scriptedJudge } from '@acquiredintelligence/attend/testing';
 
 const kind = (event: Event): Kind => (event.name === 'build.finished' ? 'closing' : 'consequence');
 
@@ -108,8 +108,8 @@ To test your own `ScopeStore` or `EventLog`, register the suites with your runne
 
 ```ts
 import { test } from 'node:test';
-import { memoryStore } from 'attend';
-import { crashSuite, multiScopeCrashSuite, scopeStoreConformance, decisionLogConformance } from 'attend/testing';
+import { memoryStore } from '@acquiredintelligence/attend';
+import { crashSuite, multiScopeCrashSuite, scopeStoreConformance, decisionLogConformance } from '@acquiredintelligence/attend/testing';
 
 for (const c of scopeStoreConformance(() => memoryStore())) test(c.name, c.run);
 for (const c of crashSuite(() => memoryStore())) test(c.name, c.run);

@@ -15,7 +15,7 @@
  * fails as a retryable Error.
  *
  * ```ts
- * import { jevJudge } from 'attend/jev';
+ * import { jevJudge } from '@acquiredintelligence/attend/jev';
  *
  * export const judge = jevJudge({ apiKey: process.env.TYPESAFE_API_KEY ?? '' });
  * ```

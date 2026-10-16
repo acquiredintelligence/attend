@@ -5,8 +5,8 @@
  * the same store and calls `push`; it never needs `run`.
  */
 import pg from 'pg';
-import { createAttend, defaultNotice, routes, type Decision } from 'attend';
-import { migrate, postgresStore } from 'attend/postgres';
+import { createAttend, defaultNotice, routes, type Decision } from '@acquiredintelligence/attend';
+import { migrate, postgresStore } from '@acquiredintelligence/attend/postgres';
 
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 await migrate(pool);

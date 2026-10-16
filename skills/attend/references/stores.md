@@ -5,7 +5,7 @@ A store holds each scope's latest snapshot and the short tail of inputs committe
 ## Memory
 
 ```ts
-import { memoryStore } from 'attend';
+import { memoryStore } from '@acquiredintelligence/attend';
 
 export const store = memoryStore();
 ```
@@ -16,12 +16,12 @@ State lives in the process and is lost when it exits. Use it for tests, demos, b
 
 ```ts
 import { DatabaseSync } from 'node:sqlite';
-import { sqliteStore } from 'attend/sqlite';
+import { sqliteStore } from '@acquiredintelligence/attend/sqlite';
 
 export const store = sqliteStore(new DatabaseSync('attend.db'));
 ```
 
-- Takes a `node:sqlite` `DatabaseSync`, a `bun:sqlite` `Database`, or any object with the same `exec` and `prepare`, so importing `attend/sqlite` loads no driver. The conformance and crash suites pass under Bun 1.4 on `bun:sqlite`.
+- Takes a `node:sqlite` `DatabaseSync`, a `bun:sqlite` `Database`, or any object with the same `exec` and `prepare`, so importing `@acquiredintelligence/attend/sqlite` loads no driver. The conformance and crash suites pass under Bun 1.4 on `bun:sqlite`.
 - Creates its table and index on construction. A second store over the same file uses what the first created.
 - `prefix` (default `attend_`) sets the table names. Letters, digits and underscores only.
 - Calls are synchronous and block the event loop for their duration.
@@ -32,7 +32,7 @@ export const store = sqliteStore(new DatabaseSync('attend.db'));
 
 ```ts
 import pg from 'pg';
-import { migrate, postgresStore } from 'attend/postgres';
+import { migrate, postgresStore } from '@acquiredintelligence/attend/postgres';
 
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 await migrate(pool);
@@ -48,7 +48,7 @@ export const store = postgresStore(pool);
 
 ```ts
 import { createClient } from 'redis';
-import { redisStore } from 'attend/redis';
+import { redisStore } from '@acquiredintelligence/attend/redis';
 
 const client = createClient({ url: process.env.REDIS_URL ?? 'redis://localhost:6379' });
 await client.connect();
@@ -62,10 +62,10 @@ export const store = redisStore((args) => client.sendCommand(args));
 
 ## Shared logs
 
-Each store module also exports an `EventLog`: `memoryLog` from `attend`, `sqliteLog`, `postgresLog` and `redisLog`. Use one when producers live in other processes and you want a durable log in front of attend. Producers call `log.append(scope, events)`, and one process attaches the log:
+Each store module also exports an `EventLog`: `memoryLog` from `@acquiredintelligence/attend`, `sqliteLog`, `postgresLog` and `redisLog`. Use one when producers live in other processes and you want a durable log in front of attend. Producers call `log.append(scope, events)`, and one process attaches the log:
 
 ```ts
-import { createAttend, logSource, memoryLog, memoryStore, routes } from 'attend';
+import { createAttend, logSource, memoryLog, memoryStore, routes } from '@acquiredintelligence/attend';
 
 const log = memoryLog();
 const attend = createAttend({

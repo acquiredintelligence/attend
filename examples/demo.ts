@@ -7,8 +7,8 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import type { ServerCapabilities } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod/v4';
-import { createAttend, defaultNotice, memoryStore, routes, type Decision, type Event, type Judge, type Kind, type Trace } from 'attend';
-import { mcpEventsSource } from 'attend/mcp';
+import { createAttend, defaultNotice, memoryStore, routes, type Decision, type Event, type Judge, type Kind, type Trace } from '@acquiredintelligence/attend';
+import { mcpEventsSource } from '@acquiredintelligence/attend/mcp';
 
 const SCOPE = 'repo:acme/shop';
 const EVENT = 'repo.activity';
