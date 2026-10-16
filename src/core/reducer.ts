@@ -6,7 +6,7 @@ import type {
 import { ROUTES } from './types.js';
 import { fnvHex, fnvStart, foldId } from './ids.js';
 import { seenAdmit, seenRelease, seenTrim } from './seen.js';
-import { estimateRenderedBytes, openWindow, shedEntries, windowAppend, windowDeadline, windowPrune, windowShed } from './window.js';
+import { estimateRenderedBytes, openWindow, shedEntries, windowAppend, windowCompact, windowDeadline, windowPrune, windowShed, windowSize } from './window.js';
 
 /** Bumped whenever a release changes a transition. Stored with every snapshot. */
 export const REDUCER_VERSION = 1;
@@ -39,7 +39,7 @@ export function apply(config: ApplyConfig, state: ScopeState, logged: LoggedInpu
   switch (input.kind) {
     case 'events': ingest(ctx, state, input); break;
     case 'flush':
-      if (state.open.entries.length === 0 && state.batch === null) {
+      if (windowSize(state.open) === 0 && state.batch === null) {
         if (config.traces) out.effects.push({ kind: 'trace', trace: { kind: 'stale', scope: state.scope, input: 'flush', why: 'nothing to settle' } });
       } else if (!Object.is(state.open.forcedAt, logged.now)) {
         state.open.forcedAt = logged.now;
@@ -47,7 +47,7 @@ export function apply(config: ApplyConfig, state: ScopeState, logged: LoggedInpu
       }
       break;
     case 'end':
-      if (state.open.entries.length === 0) {
+      if (windowSize(state.open) === 0) {
         if (config.traces) out.effects.push({ kind: 'trace', trace: { kind: 'stale', scope: state.scope, input: 'end', why: 'nothing to settle' } });
       } else if (!Object.is(state.open.endedAt, logged.now)) {
         state.open.endedAt = logged.now;
@@ -118,7 +118,7 @@ function removed(ctx: Ctx, state: ScopeState, entries: Entry[] | null, why: 'age
 
 function prune(ctx: Ctx, state: ScopeState): void {
   removed(ctx, state, windowPrune(state.open, ctx.config.policy.maxWindowMs, ctx.now), 'age');
-  if (state.open.entries.length === 0) state.open.endedAt = null;
+  if (windowSize(state.open) === 0) state.open.endedAt = null;
 }
 
 function ingest(ctx: Ctx, state: ScopeState, input: EventsInput): void {
@@ -133,7 +133,7 @@ function ingest(ctx: Ctx, state: ScopeState, input: EventsInput): void {
   seenTrim(state, ctx.config.policy.seenCount);
   prune(ctx, state);
   removed(ctx, state, windowShed(state.open, ctx.config.policy.maxEvents), 'overflow');
-  if (state.open.entries.length === 0) state.open.endedAt = null;
+  if (windowSize(state.open) === 0) state.open.endedAt = null;
   const source = input.source ?? null;
   if (source !== null && input.cursor !== undefined
     && (!Object.hasOwn(state.cursors, source) || !Object.is(state.cursors[source], input.cursor))) {
@@ -180,7 +180,7 @@ function sweep(ctx: Ctx, state: ScopeState): void {
   if (!held) return;
   if (held.phase.phase === 'retrying' && held.phase.at <= ctx.now) beginJudging(ctx, state, held.window, held.phase, held.phase.offerWait, held.hash);
   else if (held.phase.phase === 'waiting' && held.phase.until <= ctx.now) {
-    if (state.open.entries.length === 0) beginJudging(ctx, state, held.window, held.phase, false, held.hash);
+    if (windowSize(state.open) === 0) beginJudging(ctx, state, held.window, held.phase, false, held.hash);
     else settleBuffer(ctx, state, held.window.reason, false);
   }
 }
@@ -193,13 +193,14 @@ function settleReason(events: Entry[], forced: boolean, fired: SettleReason): Se
 function settleBuffer(ctx: Ctx, state: ScopeState, fired: SettleReason, mayWait: boolean): void {
   const held = state.batch;
   const open = state.open;
+  const entries = windowCompact(open);
   let forced = open.forcedAt !== null;
-  if (open.entries.length === 0) {
+  if (entries.length === 0) {
     if (open.forcedAt !== null) { open.forcedAt = null; ctx.out.changed = true; }
     if (held) beginJudging(ctx, state, { ...held.window, reason: settleReason(held.window.events, forced, held.window.reason) }, held.phase, false, held.hash);
     return;
   }
-  const events = held ? [...held.window.events, ...open.entries] : open.entries;
+  const events = held ? [...held.window.events, ...entries] : entries;
   let dropped = open.dropped + (held?.window.dropped ?? 0);
   const gap = open.gap || (held?.window.gap ?? false);
   const waits = held?.window.waits ?? 0;
@@ -211,7 +212,7 @@ function settleBuffer(ctx: Ctx, state: ScopeState, fired: SettleReason, mayWait:
   if (!held && gone === null && open.hashValid) hash = open.hash;
   else if (held?.hash && gone === null) {
     hash = { ...held.hash };
-    for (const entry of open.entries) foldId(hash, entry.id);
+    for (const entry of entries) foldId(hash, entry.id);
   } else {
     hash = fnvStart(state.scope);
     for (const entry of events) foldId(hash, entry.id);

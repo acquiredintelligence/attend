@@ -1,7 +1,7 @@
 import type { Buffer, Entry, FnvState, ScopeRecord, ScopeState, SettlePolicy } from './types.js';
 import { fnvStart, foldId } from './ids.js';
 import { seenFrom, seenIds } from './seen.js';
-import { assertWindow, openWindow, windowFrom } from './window.js';
+import { assertWindow, openWindow, windowEntries, windowFrom, windowSize } from './window.js';
 import { nextDue } from './reducer.js';
 
 /** An empty, owned scope at version zero. */
@@ -36,7 +36,7 @@ function heldHash(scope: string, events: readonly Entry[]): FnvState {
 /** The state as a fresh `ScopeRecord`, deep-equal to the copying reducer's. Shares immutable parts. O(W + S + outbox). */
 export function toRecord(state: ScopeState): ScopeRecord {
   const open = state.open;
-  const buffer: Buffer = { entries: [...open.entries], dropped: open.dropped, gap: open.gap, forcedAt: open.forcedAt };
+  const buffer: Buffer = { entries: windowEntries(open), dropped: open.dropped, gap: open.gap, forcedAt: open.forcedAt };
   if (open.endedAt !== null) buffer.endedAt = open.endedAt;
   return {
     version: state.version, scope: state.scope, cursors: state.cursors, seen: seenIds(state.seen), buffer,
@@ -48,7 +48,7 @@ export function toRecord(state: ScopeState): ScopeRecord {
 
 /** True when the scope holds nothing: an empty window, no batch, empty lanes and `dueAt === null`. Such a scope may be evicted from the cache. */
 export function quiescent(state: ScopeState): boolean {
-  return state.open.entries.length === 0 && state.batch === null && state.outbox.decisions.length === 0
+  return windowSize(state.open) === 0 && state.batch === null && state.outbox.decisions.length === 0
     && state.outbox.deadLetters.length === 0 && state.dueAt === null;
 }
 
@@ -62,7 +62,7 @@ export function assertInvariants(state: ScopeState, policy: SettlePolicy): void 
   const expected = new Map<string, number>();
   for (const id of seenIds(ring)) expected.set(id, (expected.get(id) ?? 0) + 1);
   const windows = new Set<string>();
-  for (const entries of [state.open.entries, state.batch?.window.events ?? []]) {
+  for (const entries of [windowEntries(state.open), state.batch?.window.events ?? []]) {
     for (const entry of entries) {
       if (windows.has(entry.id)) throw new Error('I1: duplicate window id');
       windows.add(entry.id);
@@ -76,7 +76,7 @@ export function assertInvariants(state: ScopeState, policy: SettlePolicy): void 
     const hash = heldHash(state.scope, state.batch.window.events);
     if (hash.hi !== state.batch.hash.hi || hash.lo !== state.batch.hash.lo) throw new Error('I5: held hash');
   }
-  if (state.open.endedAt !== null && state.open.entries.length === 0) throw new Error('I3: endedAt on an empty window');
+  if (state.open.endedAt !== null && windowSize(state.open) === 0) throw new Error('I3: endedAt on an empty window');
   if (!Object.is(state.dueAt, nextDue(policy, state))) throw new Error('I6: dueAt');
   for (const lane of [state.outbox.decisions, state.outbox.deadLetters]) {
     for (let i = 1; i < lane.length; i += 1) if (lane[i]?.phase.phase === 'inFlight') throw new Error('outbox: more than one in flight in a lane');

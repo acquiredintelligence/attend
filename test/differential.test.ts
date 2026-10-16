@@ -33,7 +33,7 @@ function oracleAppends(driven: Driven): DecisionAppend[] {
 test('matches the oracle through chained, restored, JSON, trace-free and frozen wrapper paths', () => {
   const override = process.env.ATTEND_DIFFERENTIAL_RUNS;
   const numRuns = override === undefined ? 900 : Number(override);
-  const counts = { plans: 0, chainedInputs: 0, totalApplies: 0, inputs: {} as Record<string, number> };
+  const counts = { plans: 0, chainedInputs: 0, totalApplies: 0, offsetApplies: 0, inputs: {} as Record<string, number> };
   fc.assert(fc.property(planArbitrary(), fc.nat(), fc.nat(), (plan, restoreAt, jsonAt) => {
     const driven = drive(plan);
     const config: ApplyConfig = { policy: plan.policy, decisions: 'lane', deadLetters: 'lane', traces: true };
@@ -46,6 +46,7 @@ test('matches the oracle through chained, restored, JSON, trace-free and frozen 
       const logged = deepFreeze({ input: item.input, now: item.now });
       apply({ ...config, traces }, current, logged, out);
       counts.totalApplies += 1;
+      if (current.open.start > 0) counts.offsetApplies += 1;
       assertInvariants(current, plan.policy);
       const record = toRecord(current);
       assert.deepStrictEqual(record, item.after.record);
@@ -76,6 +77,7 @@ test('matches the oracle through chained, restored, JSON, trace-free and frozen 
     }
   }), { seed: 0x4a774, numRuns });
   console.log(JSON.stringify({ differential: counts }));
+  assert.ok(counts.offsetApplies > 0);
   if (override === undefined) assert.ok(counts.chainedInputs >= 100_000);
   else assert.equal(counts.plans, numRuns);
 }, 300_000);

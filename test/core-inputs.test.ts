@@ -5,7 +5,7 @@ import { apply, newOutput, nextDue, REDUCER_VERSION } from '../src/core/reducer.
 import { assertInvariants, fromRecord, initialState, quiescent, toRecord } from '../src/core/state.js';
 import { DEFAULT_POLICY } from '../src/core/types.js';
 import type { ApplyConfig, Decision, Input, Kind, ScopeRecord, ScopeState, SettlePolicy, Window } from '../src/core/types.js';
-import { estimateRenderedBytes, windowDeadline } from '../src/core/window.js';
+import { estimateRenderedBytes, windowDeadline, windowEntries, windowSize } from '../src/core/window.js';
 import { drive, planArbitrary } from './support/arbitraries.js';
 import type { Plan } from './support/arbitraries.js';
 import { deepFreeze } from './support/deep-freeze.js';
@@ -320,6 +320,35 @@ test('quiescent requires no open entries, batch, lane deliveries or deadline', (
   assert.equal(quiescent(empty), false);
 });
 
+test('snapshots, end and settle use only live entries after shedding', () => {
+  const cfg = { ...config, policy: { ...policy, maxEvents: 3 } };
+  const state = fresh(cfg.policy);
+  for (const id of ['a', 'b', 'c', 'd']) run(state, event(id, 'consequence'), 0, cfg);
+  assert.ok(state.open.start > 0);
+  assert.equal(windowSize(state.open), 3);
+  assert.deepStrictEqual(toRecord(state).buffer.entries.map((e) => e.id), ['b', 'c', 'd']);
+  assert.equal(quiescent(state), false);
+  assert.deepStrictEqual(run(state, { kind: 'end' }, 1, cfg), { effects: [], appends: [], changed: true });
+  assert.equal(state.open.endedAt, 1);
+  assert.equal(state.dueAt, 1);
+  const entries = state.open.entries;
+  run(state, { kind: 'flush' }, 1, cfg);
+  const out = run(state, { kind: 'tick' }, 1, cfg);
+  const judge = out.effects.find((e) => e.kind === 'judge');
+  assert.ok(judge);
+  assert.deepStrictEqual(judge.window.events.map((e) => e.id), ['b', 'c', 'd']);
+  assert.equal(judge.window.events, entries);
+  assert.equal(judge.window.dropped, 1);
+  assert.equal(state.open.start, 0);
+  assert.equal(windowSize(state.open), 0);
+  assert.deepStrictEqual(windowEntries(state.open), []);
+  assert.equal(quiescent(state), false);
+  run(state, { kind: 'judged', batchId: judge.batchId, attempt: 1, judgment: { route: 'skip' } }, 1, cfg);
+  assert.equal(quiescent(state), true);
+  assert.deepStrictEqual(run(state, { kind: 'end' }, 1, cfg), { effects: [{ kind: 'trace', trace: {
+    kind: 'stale', scope: 's', input: 'end', why: 'nothing to settle' } }], appends: [], changed: false });
+});
+
 test('assertInvariants identifies corrupt counts, rings, summaries, sizes, hashes, deadlines and lanes', () => {
   const corruptions: [string, (state: ScopeState) => void][] = [
     ['I1:', (s) => s.known.set('a', 99)],
@@ -370,7 +399,7 @@ test('end and flush settle the same reachable events with their own wait rules',
   let compared = 0;
   let skipped = 0;
   fc.assert(fc.property(planArbitrary({ maxSteps: 80 }), fc.nat(), (plan, index) => {
-    const candidates = snapshots(plan, (s) => s.open.entries.length > 0 && s.batch?.phase.phase !== 'judging');
+    const candidates = snapshots(plan, (s) => windowSize(s.open) > 0 && s.batch?.phase.phase !== 'judging');
     if (candidates.length === 0) return;
     const record = candidates[index % candidates.length]!;
     const now = record.buffer.entries.at(-1)!.seenAt;
@@ -445,7 +474,7 @@ test('size settles at the byte deadline or inherits a held reason, and absent or
     assertInvariants(absent, plan.policy);
     for (const item of drive(plan)) {
       const held = sized.batch;
-      const open = new Set(sized.open.entries.map((e) => e.id));
+      const open = new Set(windowEntries(sized.open).map((e) => e.id));
       const out = run(sized, item.input, item.now, { ...config, policy: p });
       for (const effect of out.effects) if (effect.kind === 'judge' && effect.window.reason === 'size'
         && out.effects.some((e) => e.kind === 'trace' && e.trace.kind === 'settled' && e.trace.reason === 'size')) {
@@ -458,8 +487,8 @@ test('size settles at the byte deadline or inherits a held reason, and absent or
         }
         sizes += 1;
       }
-      if (sized.batch?.phase.phase !== 'judging' && sized.open.entries.length > 0 && sized.open.bytes >= budget) {
-        assert.ok(sized.dueAt !== null && sized.dueAt <= sized.open.entries.at(-1)!.seenAt);
+      if (sized.batch?.phase.phase !== 'judging' && windowSize(sized.open) > 0 && sized.open.bytes >= budget) {
+        assert.ok(sized.dueAt !== null && sized.dueAt <= windowEntries(sized.open).at(-1)!.seenAt);
       }
       for (const [state, p2] of [[absent, plan.policy], [infinite, { ...plan.policy, maxWindowBytes: Infinity }]] as const) {
         const regular = run(state, item.input, item.now, { ...config, policy: p2 });
