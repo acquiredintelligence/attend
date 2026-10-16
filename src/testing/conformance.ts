@@ -217,32 +217,40 @@ export function scopeStoreConformance(make: () => Promise<ScopeStore> | ScopeSto
       assertEqual((await store.due(10_000, 10)).map((key) => key.scope), scopes, 'separate due values');
     }],
     ['what a read returned is unchanged by later commits, trims and removes', async (store) => {
-      const first: Snapshot = { version: 2, record: record('s', 2), policy, reducer: 1 };
-      await store.commit([write('s', 0, { inputs: [logged('a'), logged('b')], snapshot: first, appends: [append('one')], due: 1000 })]);
-      await store.commit([write('s', 2, { appends: [letter('two')] })]);
-      const returned = {
-        loaded: await store.load('s'),
-        page: await store.log.read({ after: null, limit: 10 }),
-        found: await store.log.find('decision', 'one'),
-        bounds: await store.log.bounds(),
-        due: await store.due(1000, 10),
+      const kept: [unknown, unknown][] = [];
+      const keep = async <T>(pending: Promise<T>): Promise<T> => {
+        const value = await pending;
+        kept.push([value, structuredClone(value)]);
+        return value;
       };
-      const before = structuredClone(returned);
-      assertEqual(await store.commit([write('s', 3, { inputs: [logged('c')], appends: [append('one', 's', 'queue', 2000), letter('two', 's', 'sink', 2000)], due: 1000 })]), ['ok'], 'duplicate appends commit');
+      const first: Snapshot = { version: 2, record: record('s', 2), policy, reducer: 1 };
+      await store.commit([write('s', 0, { inputs: [logged('a'), logged('b')], snapshot: first, appends: [append('one')], due: 1000 }), write('t', 0)]);
+      await keep(store.load('s'));
+      await keep(store.load('t'));
+      await store.commit([write('s', 2, { appends: [letter('two')] })]);
+      await keep(store.load('s'));
+      const bounds = await keep(store.log.bounds());
+      for (const query of [{}, { scope: 's' }, { scopePrefix: 's' }, { kinds: ['deadLetter' as const] }]) await keep(store.log.read({ after: null, limit: 10, ...query }));
+      await keep(store.log.read({ after: bounds.first, limit: 10 }));
+      await keep(store.log.read({ after: bounds.last, limit: 10 }));
+      await keep(store.log.find('decision', 'one'));
+      await keep(store.due(1000, 10));
+      assertEqual(await store.commit([write('s', 3, { inputs: [logged('c')], appends: [append('one', 's', 'queue', 2000), letter('two', 's', 'sink', 2000)], due: 1000 }), write('t', 1)]), ['ok', 'ok'], 'duplicate appends commit');
       assertEqual(await store.commit([write('s', 4, { inputs: [logged('d')], appends: [append('three')], due: 2000 })]), ['ok'], 'later commit');
-      await store.log.find('decision', 'three');
-      await store.log.find('deadLetter', 'two');
-      await store.log.bounds();
-      await store.due(2000, 10);
+      await keep(store.log.find('decision', 'three'));
+      await keep(store.log.find('deadLetter', 'two'));
+      await keep(store.log.bounds());
+      await keep(store.due(2000, 10));
       await store.log.trim({ maxRows: 1 });
-      assertEqual(await store.commit([write('s', 5, { snapshot: { version: 6, record: record('s', 6), policy, reducer: 1 }, appends: [append('four'), letter('five')], due: null })]), ['ok'], 'snapshot commit');
-      await store.log.read({ after: null, limit: 10 });
-      await store.log.find('decision', 'one');
-      await store.log.bounds();
-      await store.due(3000, 10);
-      await store.load('s');
+      assertEqual(await store.commit([write('s', 5, { snapshot: { version: 6, record: record('s', 6), policy, reducer: 1 }, appends: [append('four'), letter('five'), append('one', 's', 'note', 3000)], due: null })]), ['ok'], 'snapshot commit');
+      await keep(store.log.read({ after: null, limit: 10 }));
+      await keep(store.log.find('decision', 'one'));
+      await keep(store.log.bounds());
+      await keep(store.due(3000, 10));
+      await keep(store.load('s'));
       await store.remove('s');
-      assertEqual(returned, before, 'returned values unchanged');
+      assertEqual(await store.commit([write('s', 0, { snapshot: { version: 1, record: record('s', 1), policy, reducer: 2 }, appends: [append('six')] })]), ['ok'], 're-created');
+      for (const [value, clone] of kept) assertEqual(value, clone, 'returned values unchanged');
     }],
   ]);
 }
