@@ -1,6 +1,8 @@
 /**
  * `attend/llm`: a judge over any model that can reply in JSON matching a schema. There is no SDK
- * dependency: you pass the one structured-output call as `complete`.
+ * dependency: you pass the one structured-output call as `complete`. When the judge input carries
+ * images, `complete` receives them as `images` to place after the prompt in the model's own block
+ * format.
  *
  * Anthropic:
  *
@@ -12,13 +14,21 @@
  * const anthropic = new Anthropic();
  *
  * export const judge = llmJudge({
- *   complete: async ({ system, prompt, schema, signal }) => {
+ *   complete: async ({ system, prompt, images, schema, signal }) => {
  *     const res = await anthropic.messages.create(
  *       {
  *         model: 'claude-opus-5-5',
  *         max_tokens: 1024,
  *         system,
- *         messages: [{ role: 'user', content: prompt }],
+ *         messages: [
+ *           {
+ *             role: 'user',
+ *             content: [
+ *               { type: 'text', text: prompt },
+ *               ...images.map((image) => ({ type: 'image' as const, source: { type: 'base64' as const, media_type: image.mimeType, data: image.data } })),
+ *             ],
+ *           },
+ *         ],
  *         output_config: { effort: 'low', format: { type: 'json_schema', schema } },
  *       },
  *       { signal },
@@ -34,22 +44,56 @@
  *
  * ```ts
  * import OpenAI from 'openai';
+ * import { PermanentError } from 'attend';
  * import { llmJudge } from 'attend/llm';
  *
  * const openai = new OpenAI();
  *
  * export const judge = llmJudge({
- *   complete: async ({ system, prompt, schema, signal }) => {
+ *   complete: async ({ system, prompt, images, schema, signal }) => {
  *     const res = await openai.responses.create(
  *       {
  *         model: '<model id>',
  *         instructions: system,
- *         input: prompt,
+ *         input: [
+ *           {
+ *             role: 'user',
+ *             content: [
+ *               { type: 'input_text', text: prompt },
+ *               ...images.map((image) => ({ type: 'input_image' as const, image_url: `data:${image.mimeType};base64,${image.data}`, detail: 'auto' as const })),
+ *             ],
+ *           },
+ *         ],
  *         text: { format: { type: 'json_schema', name: 'judgment', schema, strict: true } },
  *       },
  *       { signal },
  *     );
+ *     if (res.output.some((item) => item.type === 'message' && item.content.some((part) => part.type === 'refusal'))) throw new PermanentError('judge refused');
  *     return JSON.parse(res.output_text);
+ *   },
+ * });
+ * ```
+ *
+ * Gemini, through `@google/genai`. Unverified: written without the package installed, so check
+ * `generateContent` and the config fields against the version you use.
+ *
+ * ```ts
+ * import { GoogleGenAI } from '@google/genai';
+ * import { PermanentError } from 'attend';
+ * import { llmJudge } from 'attend/llm';
+ *
+ * const ai = new GoogleGenAI({});
+ *
+ * export const judge = llmJudge({
+ *   complete: async ({ system, prompt, images, schema, signal }) => {
+ *     const res = await ai.models.generateContent({
+ *       model: '<model id>',
+ *       contents: [{ role: 'user', parts: [{ text: prompt }, ...images.map((image) => ({ inlineData: { mimeType: image.mimeType, data: image.data } }))] }],
+ *       config: { systemInstruction: system, responseMimeType: 'application/json', responseJsonSchema: schema, abortSignal: signal },
+ *     });
+ *     const finish = res.candidates?.[0]?.finishReason;
+ *     if (res.promptFeedback?.blockReason !== undefined || (finish !== undefined && finish !== 'STOP' && finish !== 'MAX_TOKENS')) throw new PermanentError('judge refused');
+ *     return JSON.parse(res.text ?? 'null');
  *   },
  * });
  * ```
@@ -63,11 +107,11 @@
  * import { llmJudge } from 'attend/llm';
  *
  * export const judge = llmJudge({
- *   complete: async ({ system, prompt, schema, signal }) => {
+ *   complete: async ({ system, prompt, images, schema, signal }) => {
  *     const { object } = await generateObject({
  *       model: openai('<model id>'),
  *       system,
- *       prompt,
+ *       messages: [{ role: 'user', content: [{ type: 'text', text: prompt }, ...images.map((image) => ({ type: 'image' as const, image: image.data, mediaType: image.mimeType }))] }],
  *       schema: jsonSchema(schema),
  *       abortSignal: signal,
  *     });
@@ -78,13 +122,15 @@
  */
 import { DEFAULT_SYSTEM, renderState, resolveCriteria } from './internal/prompt.js';
 import { isRecord } from './internal/shared.js';
-import type { JsonObject, Judge, JudgeInput, Judgment, OfferedRoute, Route } from './types.js';
+import type { JsonObject, Judge, JudgeImage, JudgeInput, Judgment, OfferedRoute, Route } from './types.js';
 
 export { DEFAULT_CRITERIA, DEFAULT_SYSTEM } from './internal/prompt.js';
 
 export interface CompleteRequest {
   system: string;
   prompt: string;
+  /** From the judge input; empty when it carries none. Place them after the prompt. */
+  images: JudgeImage[];
   /**
    * JSON Schema for `{ route, probabilities, predicates }`. Strict-mode safe: every object sets
    * `additionalProperties: false` and requires all of its properties. `predicates` is left out
@@ -116,6 +162,7 @@ export function llmJudge(options: LlmJudgeOptions): Judge {
     const reply = await complete({
       system: systemPrompt(system, routes, asked.length > 0),
       prompt: render(input),
+      images: input.images ?? [],
       schema: judgmentSchema(offered, asked),
       signal,
     });

@@ -9,12 +9,18 @@ import { fileURLToPath } from 'node:url';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-const UNINSTALLED = [/from 'openai'/, /from 'ai'/, /from '@ai-sdk\//, /from 'ioredis'/];
+const UNINSTALLED = [/from 'openai'/, /from 'ai'/, /from '@ai-sdk\//, /from '@google\/genai'/, /from 'ioredis'/];
 const ANTHROPIC_STUB = `declare module '@anthropic-ai/sdk' {
   export default class Anthropic {
     messages: {
       create(
-        body: { model: string; max_tokens: number; system: string; messages: { role: 'user'; content: string }[]; output_config: { effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max'; format: { type: 'json_schema'; schema: Record<string, unknown> } } },
+        body: {
+          model: string;
+          max_tokens: number;
+          system: string;
+          messages: { role: 'user'; content: ({ type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } })[] }[];
+          output_config: { effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max'; format: { type: 'json_schema'; schema: Record<string, unknown> } };
+        },
         options: { signal: AbortSignal },
       ): Promise<{ stop_reason: string | null; content: ({ type: 'text'; text: string } | { type: 'thinking'; thinking: string })[] }>;
     };
