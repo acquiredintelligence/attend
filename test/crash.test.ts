@@ -99,6 +99,27 @@ for (const [name, make] of stores) describe(`crash and aliasing through ${name}`
   }, 300000);
 });
 
+/** Reports the first attempt at every multi-scope group as a conflict for all but its last scope, as a racing writer would. */
+function conflictingFirstAttempts(inner: ScopeStore): ScopeStore {
+  const seen = new Set<string>();
+  return {
+    ...inner,
+    async commit(writes) {
+      const key = writes.map((write) => `${write.scope}@${write.expectedVersion}`).join('|');
+      if (writes.length < 2 || seen.has(key)) return inner.commit(writes);
+      seen.add(key);
+      const last = writes.reduce((a, b) => (a.scope > b.scope ? a : b));
+      const [outcome] = await inner.commit([last]);
+      return writes.map((write) => (write === last ? outcome! : 'conflict'));
+    },
+  };
+}
+
+test('the multi-scope session settles every act while groups conflict on their first attempt', async () => {
+  const [clean] = multiScopeCrashSuite(() => conflictingFirstAttempts(memoryStore()));
+  await clean!.run();
+}, 60000);
+
 test('crash-suite pinned ids equal the frozen reducer ids', () => {
   expect(windowId('scope', ['a'])).toBe(ID_A);
   expect(windowId('scope', ['a', 'b'])).toBe(ID_AB);
