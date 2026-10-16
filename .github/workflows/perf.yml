@@ -1,0 +1,83 @@
+name: perf
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline:
+        description: Baseline revision
+        default: 1a05f39
+        type: string
+  schedule:
+    - cron: '23 4 * * *'
+
+concurrency:
+  group: perf
+  cancel-in-progress: false
+
+jobs:
+  perf:
+    if: vars.ATTEND_PERF_RUNS_ON != ''
+    runs-on: ${{ fromJSON(vars.ATTEND_PERF_RUNS_ON || '"ubuntu-latest"') }}
+    timeout-minutes: 240
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: attend
+          POSTGRES_DB: attend
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 2s --health-retries 15
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: --health-cmd "redis-cli ping" --health-interval 2s --health-timeout 2s --health-retries 15
+    env:
+      ATTEND_POSTGRES_URL: postgres://postgres:attend@localhost:5432/attend
+      ATTEND_REDIS_URL: redis://localhost:6379
+      ATTEND_BENCH_TARGET_CPUS: ${{ vars.ATTEND_BENCH_TARGET_CPUS }}
+      ATTEND_BENCH_GENERATOR_CPUS: ${{ vars.ATTEND_BENCH_GENERATOR_CPUS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Build baseline
+        env:
+          BASELINE: ${{ inputs.baseline || '1a05f39' }}
+        run: |
+          rm -rf ../attend-baseline
+          git worktree prune
+          git worktree add --detach ../attend-baseline "$BASELINE"
+          cd ../attend-baseline
+          pnpm install --frozen-lockfile
+          pnpm build
+      - run: docker exec ${{ job.services.redis.id }} redis-cli CONFIG SET appendonly yes
+      - run: pnpm bench:selfcheck
+      - name: Run suite
+        id: suite
+        shell: bash
+        run: |
+          command=(node bench/suite.mjs --dist dist --dist ../attend-baseline/dist --out-dir bench/reports --runs 3)
+          if [[ -n "$ATTEND_BENCH_TARGET_CPUS" ]]; then
+            command+=(--target-cpus "$ATTEND_BENCH_TARGET_CPUS")
+          fi
+          if [[ -n "$ATTEND_BENCH_GENERATOR_CPUS" ]]; then
+            taskset -c "$ATTEND_BENCH_GENERATOR_CPUS" "${command[@]}"
+          else
+            "${command[@]}"
+          fi
+      - run: pnpm bench:validate bench/reports/*.jsonl
+      - run: pnpm bench:gates "$HEAD_REPORT"
+        env:
+          HEAD_REPORT: ${{ steps.suite.outputs.head_report }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: perf-reports
+          path: bench/reports
