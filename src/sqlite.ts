@@ -1,63 +1,19 @@
 /**
- * `attend/sqlite`: a `StateStore` and an `EventLog` over one SQLite database. Takes any
- * object shaped like `node:sqlite`'s `DatabaseSync` (Bun's `Database` and better-sqlite3
- * fit too), so importing this module loads no driver. Each adapter creates its table and
- * index on construction if they are absent, so a second instance over the same file adopts
- * what the first wrote.
+ * `attend/sqlite`: a ScopeStore and an EventLog over SQLite, without loading a driver.
+ * The store supports a synchronous database handle or a file owned by a worker thread.
+ * Both adapters create their tables and indexes when needed.
  */
 import { boundary } from './internal/adapter.js';
-import type { EventLog, LogEntry, StateStore } from './types.js';
+import type { EventLog, LogEntry } from './types.js';
+import type { SqliteDatabase } from './store/sqlite.js';
 
-const { column, formatPosition, parseEvent, parsePosition, parseRecord, tablePrefix, text } = boundary('attend/sqlite');
+export { sqliteStore } from './store/sqlite.js';
+export type { SqliteStoreOptions, SqliteDatabase, SqliteStatement, SqliteValue } from './store/sqlite.js';
 
-export type SqliteValue = string | number | bigint | null;
-
-export interface SqliteStatement {
-  run(...params: SqliteValue[]): { changes: number | bigint };
-  get(...params: SqliteValue[]): unknown;
-  all(...params: SqliteValue[]): unknown[];
-}
-
-export interface SqliteDatabase {
-  exec(sql: string): void;
-  prepare(sql: string): SqliteStatement;
-}
+const { column, formatPosition, parseEvent, parsePosition, tablePrefix } = boundary('attend/sqlite');
 
 export interface SqliteOptions {
-  /** Prepended to the table names. Letters, digits and underscores. Default 'attend_'. */
   prefix?: string;
-}
-
-export function sqliteStore(db: SqliteDatabase, options?: SqliteOptions): StateStore {
-  const table = `${tablePrefix(options?.prefix)}records`;
-  db.exec(`CREATE TABLE IF NOT EXISTS ${table} (scope TEXT PRIMARY KEY, version INTEGER NOT NULL, due_at REAL, record TEXT NOT NULL);
-    CREATE INDEX IF NOT EXISTS ${table}_due ON ${table} (due_at) WHERE due_at IS NOT NULL;`);
-  const select = db.prepare(`SELECT record FROM ${table} WHERE scope = ?`);
-  const insert = db.prepare(`INSERT INTO ${table} (scope, version, due_at, record) VALUES (?, ?, ?, ?) ON CONFLICT (scope) DO NOTHING`);
-  const update = db.prepare(`UPDATE ${table} SET version = ?, due_at = ?, record = ? WHERE scope = ? AND version = ?`);
-  const due = db.prepare(`SELECT scope FROM ${table} WHERE due_at <= ? ORDER BY due_at LIMIT ?`);
-  const remove = db.prepare(`DELETE FROM ${table} WHERE scope = ?`);
-  return {
-    async get(scope) {
-      // No row is `undefined` from node:sqlite and `null` from bun:sqlite.
-      const row = select.get(scope);
-      return row === undefined || row === null ? null : parseRecord(column(row, 'record'), scope);
-    },
-    async put(record, expectedVersion) {
-      const json = JSON.stringify(record);
-      const { changes } =
-        expectedVersion === 0
-          ? insert.run(record.scope, record.version, record.dueAt, json)
-          : update.run(record.version, record.dueAt, json, record.scope, expectedVersion);
-      return Number(changes) === 1 ? 'ok' : 'conflict';
-    },
-    async due(now, limit) {
-      return due.all(now, limit).map((row) => text(column(row, 'scope')));
-    },
-    async remove(scope) {
-      remove.run(scope);
-    },
-  };
 }
 
 /**

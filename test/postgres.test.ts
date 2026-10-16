@@ -2,27 +2,28 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, describe, expect, test } from 'vitest';
 import { migrate, postgresLog, postgresStore } from '../src/postgres.js';
-import { initialRecord } from '../src/step.js';
-import { logConformance, storeConformance } from '../src/testing.js';
-import type { Event, ScopeRecord } from '../src/types.js';
+import { createAttend } from '../src/index.js';
+import { crashSuite, multiScopeCrashSuite, fakeClock, recordingSink, scriptedJudge, logConformance } from '../src/testing.js';
 
 const url = process.env.ATTEND_POSTGRES_URL ?? 'postgres://postgres:attend@127.0.0.1:15432/attend';
-const schema = `attend_test_${randomUUID().replaceAll('-', '').slice(0, 12)}`;
+const schema = `attend_p6b_${randomUUID().replaceAll('-', '').slice(0, 12)}`;
 const config = { connectionString: url, options: `-c search_path=${schema}`, connectionTimeoutMillis: 5000 };
 const clients: pg.Client[] = [];
+const stores: ReturnType<typeof postgresStore>[] = [];
 
-/** Set up on first use, inside a test, so an unreachable database fails every test rather than skipping them. */
 let ready: Promise<pg.Pool> | undefined;
 const pool = () =>
   (ready ??= (async () => {
     const admin = new pg.Client({ connectionString: url, connectionTimeoutMillis: 5000 });
-    await admin.connect();
-    await admin.query(`CREATE SCHEMA ${schema}`);
-    await admin.end();
-    return new pg.Pool({ ...config, max: 20 });
+    try {
+      await admin.connect();
+      await admin.query(`CREATE SCHEMA ${schema}`);
+    } finally { await admin.end(); }
+    return new pg.Pool({ ...config, max: 4 });
   })());
 
 afterAll(async () => {
+  for (const store of stores) await store.close?.();
   await Promise.all(clients.map((c) => c.end()));
   const opened = await ready?.catch(() => undefined);
   await opened?.query(`DROP SCHEMA ${schema} CASCADE`);
@@ -39,78 +40,89 @@ const connect = async () => {
 
 let tables = 0;
 const fresh = async () => {
-  const prefix = `t${tables++}_`;
+  // NOTIFY channels are shared across schemas.
+  const prefix = `${schema}_${tables++}_`;
   await migrate(await pool(), { prefix });
   return prefix;
 };
 
-describe('postgresStore conformance', () => {
-  const make = async () => postgresStore(await pool(), { prefix: await fresh() });
-  for (const c of storeConformance(make)) test(c.name, c.run);
+const instance = async (prefix: string) => {
+  const store = postgresStore(await pool(), { prefix });
+  stores.push(store);
+  return store;
+};
+const make = async () => instance(await fresh());
+
+describe('public postgresStore', () => {
+  for (const c of [...crashSuite(make), ...multiScopeCrashSuite(make)]) test(c.name, c.run, 300000);
+
+  test('public store exposes load instead of the removed StateStore API', async () => {
+    const store = await make();
+    expect(typeof store.load).toBe('function');
+    expect('get' in store).toBe(false);
+    expect('put' in store).toBe(false);
+    expect(await store.load('missing')).toBeNull();
+  });
+
+  test('createAttend delivers and recovers without deciding the same event again', async () => {
+    const prefix = await fresh();
+    const clock = fakeClock(1000);
+    const judge = scriptedJudge([{ route: 'queue' }]);
+    const sink = recordingSink();
+    const config = { clock, judge, sink, kind: () => 'closing' as const, deadLetter: 'log' as const };
+    const event = { id: 'a', at: 0, name: 'close', data: {} };
+    const expected = [{
+      id: 'cf8923dfae84f930', scope: 'scope', route: 'queue',
+      probabilities: { interrupt: 0, queue: 1, note: 0, ask: 0, skip: 0, wait: 0 },
+      predicates: {}, confidence: null,
+      window: {
+        id: 'cf8923dfae84f930', events: [{ ...event, kind: 'closing', seenAt: 1000 }],
+        reason: 'forced', waits: 0, dropped: 0, gap: false, settledAt: 1000,
+      },
+      at: 1000,
+    }];
+    const first = createAttend({ ...config, store: await instance(prefix) });
+    const controller = new AbortController();
+    const done = first.run({ signal: controller.signal });
+    try {
+      await first.push('scope', [event]);
+      await first.flush('scope');
+      await clock.advance(0);
+      await expect.poll(() => first.inspect('scope')).toMatchObject({
+        batch: null, outbox: { decisions: [], deadLetters: [] },
+        recent: [{ id: 'cf8923dfae84f930', route: 'queue', at: 1000 }],
+      });
+      expect(sink.delivered).toEqual(expected);
+    } finally {
+      controller.abort();
+      await done;
+    }
+    const second = createAttend({ ...config, store: await instance(prefix) });
+    const restart = new AbortController();
+    const recovered = second.run({ signal: restart.signal });
+    try {
+      expect(await second.inspect('scope')).toEqual(await first.inspect('scope'));
+      expect(await second.inspect('scope')).toMatchObject({
+        seen: ['a'], batch: null, dueAt: null,
+        recent: [{ id: 'cf8923dfae84f930', route: 'queue', at: 1000 }],
+      });
+      await second.push('scope', [event]);
+      await second.flush('scope');
+      await clock.advance(0);
+      await expect.poll(() => second.inspect('scope')).toMatchObject({
+        batch: null, buffer: { entries: [] }, outbox: { decisions: [], deadLetters: [] },
+      });
+      expect(judge.calls.map((call) => call.window.id)).toEqual(['cf8923dfae84f930']);
+      expect(sink.delivered).toEqual(expected);
+    } finally {
+      restart.abort();
+      await recovered;
+    }
+  }, 30000);
 });
 
 describe('postgresLog conformance', () => {
   for (const c of logConformance(async () => postgresLog(await pool(), { prefix: await fresh(), pollMs: 10 }), { canBlock: true })) test(c.name, c.run, 10_000);
-});
-
-const record = (scope: string, version: number, dueAt: number | null): ScopeRecord => ({ ...initialRecord(scope), version, dueAt });
-const event = (id: string): Event => ({ id, at: 0, name: 'n', data: { id } });
-
-describe('postgresStore across connections', () => {
-  test('sixteen puts at one version from separate connections give exactly one ok', async () => {
-    const prefix = await fresh();
-    const stores = await Promise.all(Array.from({ length: 16 }, async () => postgresStore(await connect(), { prefix })));
-    expect(await stores[0]?.put(record('s', 1, null), 0)).toBe('ok');
-    const results = await Promise.all(stores.map((store, i) => store.put(record('s', 2, i), 1)));
-    expect(results.filter((r) => r === 'ok')).toEqual(['ok']);
-    expect(await stores[15]?.get('s')).toEqual(record('s', 2, results.indexOf('ok')));
-  });
-
-  test('sixteen creates of one scope from separate connections give exactly one ok', async () => {
-    const prefix = await fresh();
-    const stores = await Promise.all(Array.from({ length: 16 }, async () => postgresStore(await connect(), { prefix })));
-    const results = await Promise.all(stores.map((store, i) => store.put(record('s', 1, i), 0)));
-    expect(results.filter((r) => r === 'ok')).toEqual(['ok']);
-    expect(await stores[0]?.get('s')).toEqual(record('s', 1, results.indexOf('ok')));
-  });
-
-  test('a record survives a new store instance on a new connection, and migrate again keeps it', async () => {
-    const prefix = await fresh();
-    const first = await connect();
-    const r: ScopeRecord = { ...record('s', 3, 50), cursors: { 'log:s': 'c9' }, seen: ['a'] };
-    await postgresStore(first, { prefix }).put(r, 0);
-    await first.end();
-    const second = await connect();
-    await migrate(second, { prefix });
-    const store = postgresStore(second, { prefix });
-    expect(await store.get('s')).toEqual(r);
-    expect(await store.due(50, 10)).toEqual(['s']);
-    expect(await store.put(record('s', 4, null), 3)).toBe('ok');
-  });
-
-  test('a record whose event text holds a NUL round-trips', async () => {
-    const store = postgresStore(await pool(), { prefix: await fresh() });
-    const r: ScopeRecord = {
-      ...record('s', 1, null),
-      buffer: { entries: [{ id: 'a', at: 0, name: 'out', data: { raw: 'x\u0000y' }, text: 'nul \u0000 here', kind: 'consequence', seenAt: 0 }], dropped: 0, gap: false, forcedAt: null },
-    };
-    expect(await store.put(r, 0)).toBe('ok');
-    expect(await store.get('s')).toEqual(r);
-  });
-
-  test('a fractional dueAt is due exactly when now reaches it', async () => {
-    const store = postgresStore(await pool(), { prefix: await fresh() });
-    expect(await store.put(record('s', 1, 100.5), 0)).toBe('ok');
-    expect(await store.due(100.4, 10)).toEqual([]);
-    expect(await store.due(100.5, 10)).toEqual(['s']);
-  });
-
-  test('eight concurrent migrations of one prefix all succeed', async () => {
-    const prefix = `t${tables++}_`;
-    const connections = await Promise.all(Array.from({ length: 8 }, () => connect()));
-    await Promise.all(connections.map((c) => migrate(c, { prefix })));
-    expect(await postgresStore(await pool(), { prefix }).put(record('s', 1, null), 0)).toBe('ok');
-  });
 
   test('a prefix that is not a lowercase identifier is refused', async () => {
     await expect(migrate(await pool(), { prefix: 'x; DROP TABLE y; --' })).rejects.toThrow('attend/postgres: prefix must be lowercase letters, digits and underscores');
@@ -119,7 +131,32 @@ describe('postgresStore across connections', () => {
   });
 });
 
+const event = (id: string) => ({ id, at: 0, name: 'n', data: { id } });
+
 describe('postgresLog across connections', () => {
+  test('concurrent migrate creates the new store tables and preserves EventLog entries', async () => {
+    const prefix = await fresh();
+    const client = await pool();
+    const log = postgresLog(client, { prefix });
+    await log.append('s', [event('a')]);
+    await Promise.all(Array.from({ length: 8 }, () => migrate(client, { prefix })));
+    const { rows } = await client.query(
+      'SELECT tablename FROM pg_tables WHERE schemaname = $1 AND left(tablename, length($2)) = $2 ORDER BY tablename',
+      [schema, prefix],
+    );
+    expect(rows).toEqual([
+      { tablename: `${prefix}decisions` },
+      { tablename: `${prefix}inputs` },
+      { tablename: `${prefix}log` },
+      { tablename: `${prefix}meta` },
+      { tablename: `${prefix}scopes` },
+      { tablename: `${prefix}snapshots` },
+    ]);
+    expect(await log.read('s', null, { limit: 10 })).toEqual([
+      { position: '00000000000000000001', event: event('a') },
+    ]);
+  });
+
   test('eight concurrent appenders lose nothing and duplicate nothing for a tailing reader', async () => {
     const prefix = await fresh();
     const appenders = await Promise.all(Array.from({ length: 8 }, async () => postgresLog(await connect(), { prefix })));
@@ -151,7 +188,7 @@ describe('postgresLog across connections', () => {
 
   test('an event whose text holds a NUL round-trips', async () => {
     const log = postgresLog(await pool(), { prefix: await fresh() });
-    const e: Event = { id: 'a', at: 1, name: 'out', data: { raw: 'x\u0000y' }, text: 'nul \u0000 here' };
+    const e = { id: 'a', at: 1, name: 'out', data: { raw: 'x\u0000y' }, text: 'nul \u0000 here' };
     await log.append('s', [e]);
     expect(await log.read('s', null, { limit: 10 })).toEqual([{ position: expect.stringMatching(/^\d{20}$/), event: e }]);
   });

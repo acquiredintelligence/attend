@@ -1,16 +1,17 @@
 /**
- * `attend/postgres`: a `StateStore` and an `EventLog` over Postgres. Takes any client with
- * `query(text, values)`, such as a `pg` `Pool` or `Client`, so importing this module loads no
- * driver. Run `migrate()` once before using either adapter; neither runs DDL itself.
+ * `attend/postgres`: a ScopeStore and an EventLog over a client with `query(text, values)`.
+ * Run `migrate()` before either adapter. It calls the store migration, then creates the
+ * separate EventLog table and index that `postgresLog` still needs.
  */
 import { boundary } from './internal/adapter.js';
-import type { EventLog, LogEntry, StateStore } from './types.js';
+import type { EventLog, LogEntry } from './types.js';
+import { migrate as migrateStore } from './store/postgres.js';
+import type { PostgresClient } from './store/postgres.js';
 
-const { column, formatPosition, parseEvent, parsePosition, parseRecord, tablePrefix, text } = boundary('attend/postgres');
+export { postgresStore } from './store/postgres.js';
+export type { PostgresClient, PostgresListener, PostgresStoreOptions } from './store/postgres.js';
 
-export interface PostgresClient {
-  query(text: string, values?: unknown[]): Promise<{ rows: unknown[]; rowCount: number | null }>;
-}
+const { column, formatPosition, parseEvent, parsePosition, tablePrefix } = boundary('attend/postgres');
 
 export interface PostgresOptions {
   /**
@@ -21,48 +22,12 @@ export interface PostgresOptions {
   prefix?: string;
 }
 
-/**
- * Creates the record and log tables and their indexes if they are absent. Idempotent and safe
- * to run from several processes at once. Run it at deploy or startup with a role that may
- * create tables; the adapters need only SELECT, INSERT, UPDATE and DELETE.
- *
- * Records and events are `json`, not `jsonb`: jsonb rejects the escape `\u0000`, so one event
- * whose text held a NUL would make every later put for its scope fail. `due_at` is a double so
- * a fractional `dueAt` is stored exactly.
- */
 export async function migrate(client: PostgresClient, options?: PostgresOptions): Promise<void> {
-  const { records, log } = tables(options);
-  // One simple query runs as one transaction, so the lock serialises concurrent migrations; IF NOT EXISTS alone races on the catalog.
+  await migrateStore(client, options);
+  const log = `${tablePrefix(options?.prefix, { lowercase: true })}log`;
   await client.query(`SELECT pg_advisory_xact_lock(hashtext('attend.migrate'));
-    CREATE TABLE IF NOT EXISTS ${records} (scope text PRIMARY KEY, version bigint NOT NULL, due_at double precision, record json NOT NULL);
-    CREATE INDEX IF NOT EXISTS ${records}_due ON ${records} (due_at) WHERE due_at IS NOT NULL;
     CREATE TABLE IF NOT EXISTS ${log} (position bigserial PRIMARY KEY, scope text NOT NULL, event json NOT NULL);
     CREATE INDEX IF NOT EXISTS ${log}_scope ON ${log} (scope, position);`);
-}
-
-export function postgresStore(client: PostgresClient, options?: PostgresOptions): StateStore {
-  const { records } = tables(options);
-  return {
-    async get(scope) {
-      const { rows } = await client.query(`SELECT record FROM ${records} WHERE scope = $1`, [scope]);
-      return rows.length === 0 ? null : parseRecord(column(rows[0], 'record'), scope);
-    },
-    async put(record, expectedVersion) {
-      const json = JSON.stringify(record);
-      const { rowCount } =
-        expectedVersion === 0
-          ? await client.query(`INSERT INTO ${records} (scope, version, due_at, record) VALUES ($1, $2, $3, $4) ON CONFLICT (scope) DO NOTHING`, [record.scope, record.version, record.dueAt, json])
-          : await client.query(`UPDATE ${records} SET version = $2, due_at = $3, record = $4 WHERE scope = $1 AND version = $5`, [record.scope, record.version, record.dueAt, json, expectedVersion]);
-      return rowCount === 1 ? 'ok' : 'conflict';
-    },
-    async due(now, limit) {
-      const { rows } = await client.query(`SELECT scope FROM ${records} WHERE due_at <= $1 ORDER BY due_at LIMIT $2`, [now, limit]);
-      return rows.map((row) => text(column(row, 'scope')));
-    },
-    async remove(scope) {
-      await client.query(`DELETE FROM ${records} WHERE scope = $1`, [scope]);
-    },
-  };
 }
 
 /**
@@ -74,7 +39,7 @@ export function postgresStore(client: PostgresClient, options?: PostgresOptions)
  * `read` with `blockMs` polls every `pollMs` (default 100) until an entry arrives or the time is up.
  */
 export function postgresLog(client: PostgresClient, options?: PostgresOptions & { pollMs?: number }): EventLog {
-  const { log } = tables(options);
+  const log = `${tablePrefix(options?.prefix, { lowercase: true })}log`;
   const pollMs = options?.pollMs ?? 100;
   const page = async (scope: string, after: string | null, limit: number): Promise<LogEntry[]> => {
     const { rows } = await client.query(`SELECT position, event FROM ${log} WHERE scope = $1 AND position > $2 ORDER BY position LIMIT $3`, [
@@ -104,9 +69,4 @@ export function postgresLog(client: PostgresClient, options?: PostgresOptions & 
       }
     },
   };
-}
-
-function tables(options: PostgresOptions | undefined): { records: string; log: string } {
-  const prefix = tablePrefix(options?.prefix, { lowercase: true });
-  return { records: `${prefix}records`, log: `${prefix}log` };
 }

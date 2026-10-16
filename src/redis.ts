@@ -1,5 +1,5 @@
 /**
- * `attend/redis`: a `StateStore` and an `EventLog` over Redis 6.2 or later. Takes a function
+ * `attend/redis`: a ScopeStore and an EventLog over Redis 6.2 or later. Takes a function
  * that sends one command and resolves with its reply, so importing this module loads no client:
  *
  *   node-redis: (args) => client.sendCommand(args)
@@ -10,62 +10,23 @@
  * script touches lands in one slot.
  */
 import { boundary } from './internal/adapter.js';
-import type { EventLog, LogEntry, StateStore } from './types.js';
+import type { EventLog, LogEntry } from './types.js';
+import type { RedisSend } from './store/redis.js';
 
-const { parseEvent, parseRecord, text } = boundary('attend/redis');
+export { redisStore } from './store/redis.js';
+export type { RedisSend, RedisStoreOptions } from './store/redis.js';
 
-export type RedisSend = (args: string[]) => Promise<unknown>;
+const { parseEvent, text } = boundary('attend/redis');
 
 export interface RedisOptions {
   /** Prepended to every key. Default 'attend:'. */
   prefix?: string;
 }
 
-/** KEYS: record hash, due set. ARGV: expected version, new version, record JSON, dueAt or '', scope. */
-const PUT = `
-local current = redis.call('HGET', KEYS[1], 'version')
-if (current and tonumber(current) or 0) ~= tonumber(ARGV[1]) then return 0 end
-redis.call('HSET', KEYS[1], 'version', ARGV[2], 'record', ARGV[3])
-if ARGV[4] == '' then redis.call('ZREM', KEYS[2], ARGV[5]) else redis.call('ZADD', KEYS[2], ARGV[4], ARGV[5]) end
-return 1`;
-
-/** KEYS: record hash, due set. ARGV: scope. */
-const REMOVE = `
-redis.call('DEL', KEYS[1])
-redis.call('ZREM', KEYS[2], ARGV[1])
-return 1`;
-
 /** KEYS: stream. ARGV: event JSON, in order. */
 const APPEND = `
 for i = 1, #ARGV do redis.call('XADD', KEYS[1], '*', 'event', ARGV[i]) end
 return #ARGV`;
-
-/**
- * Each record is a hash holding its version beside its JSON, so the CAS script compares a
- * field instead of decoding the document. A sorted set scored by `dueAt` indexes due scopes.
- */
-export function redisStore(send: RedisSend, options?: RedisOptions): StateStore {
-  const prefix = options?.prefix ?? 'attend:';
-  const key = (scope: string) => `${prefix}record:${scope}`;
-  const due = `${prefix}due`;
-  return {
-    async get(scope) {
-      const reply = await send(['HGET', key(scope), 'record']);
-      return reply === null || reply === undefined ? null : parseRecord(reply, scope);
-    },
-    async put(record, expectedVersion) {
-      const dueAt = record.dueAt === null ? '' : String(record.dueAt);
-      const reply = await send(['EVAL', PUT, '2', key(record.scope), due, String(expectedVersion), String(record.version), JSON.stringify(record), dueAt, record.scope]);
-      return integer(reply) === 1 ? 'ok' : 'conflict';
-    },
-    async due(now, limit) {
-      return list(await send(['ZRANGEBYSCORE', due, '-inf', String(now), 'LIMIT', '0', String(limit)])).map(text);
-    },
-    async remove(scope) {
-      await send(['EVAL', REMOVE, '2', key(scope), due, scope]);
-    },
-  };
-}
 
 /**
  * One stream per scope. Positions are stream ids with both parts padded to twenty digits, so
@@ -92,12 +53,6 @@ export function redisLog(send: RedisSend, options?: RedisOptions & { blockingSen
       return reply === null || reply === undefined ? [] : parseEntries(onlyStream(reply));
     },
   };
-}
-
-function integer(reply: unknown): number {
-  if (typeof reply === 'number') return reply;
-  if (typeof reply === 'bigint') return Number(reply);
-  return Number(text(reply));
 }
 
 function list(reply: unknown): unknown[] {

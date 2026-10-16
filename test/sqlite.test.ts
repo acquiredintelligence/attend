@@ -3,22 +3,24 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterAll, describe, expect, test } from 'vitest';
+import { createAttend } from '../src/index.js';
 import { sqliteLog, sqliteStore } from '../src/sqlite.js';
-import { initialRecord } from '../src/step.js';
-import { logConformance, storeConformance } from '../src/testing.js';
-import type { Event, ScopeRecord } from '../src/types.js';
+import { crashSuite, multiScopeCrashSuite, fakeClock, recordingSink, scriptedJudge, logConformance } from '../src/testing.js';
 
-const dir = mkdtempSync(join(tmpdir(), 'attend-sqlite-'));
+const dir = mkdtempSync(join(tmpdir(), 'attend-p6b-'));
 const opened: DatabaseSync[] = [];
+const stores: ReturnType<typeof sqliteStore>[] = [];
 const open = (path: string) => {
   const db = new DatabaseSync(path);
+  db.exec('PRAGMA journal_mode=WAL');
   opened.push(db);
   return db;
 };
-afterAll(() => {
+afterAll(async () => {
+  for (const store of stores) await store.close?.();
   for (const db of opened) if (db.isOpen) db.close();
   rmSync(dir, { recursive: true, force: true });
-});
+}, 120000);
 
 let tables = 0;
 const targets: [string, () => { db: DatabaseSync; prefix: string }][] = [
@@ -27,14 +29,6 @@ const targets: [string, () => { db: DatabaseSync; prefix: string }][] = [
 ];
 
 for (const [where, make] of targets) {
-  describe(`sqliteStore in ${where}`, () => {
-    const store = () => {
-      const { db, prefix } = make();
-      return sqliteStore(db, { prefix });
-    };
-    for (const c of storeConformance(store)) test(c.name, c.run);
-  });
-
   describe(`sqliteLog in ${where}`, () => {
     for (const c of logConformance(() => {
       const { db, prefix } = make();
@@ -43,42 +37,82 @@ for (const [where, make] of targets) {
   });
 }
 
-const record = (scope: string, version: number, dueAt: number | null): ScopeRecord => ({ ...initialRecord(scope), version, dueAt });
-const event = (id: string): Event => ({ id, at: 0, name: 'n', data: { id } });
+let files = 0;
+for (const mode of ['in-thread WAL', 'worker WAL']) describe(`public sqliteStore ${mode}`, () => {
+  const instance = (path: string) => {
+    const store = mode === 'worker WAL' ? sqliteStore({ file: path, worker: true }) : sqliteStore(open(path));
+    stores.push(store);
+    return store;
+  };
+  const make = () => instance(join(dir, `store${files++}.db`));
+  for (const c of [...crashSuite(make), ...multiScopeCrashSuite(make)]) test(c.name, c.run, 300000);
 
-describe('sqliteStore over one file', () => {
-  test('sixteen puts at one version from separate connections give exactly one ok', async () => {
-    const path = join(dir, 'race.db');
-    const stores = Array.from({ length: 16 }, () => sqliteStore(open(path)));
-    expect(await stores[0]?.put(record('s', 1, null), 0)).toBe('ok');
-    const results = await Promise.all(stores.map((store, i) => store.put(record('s', 2, i), 1)));
-    expect(results.filter((r) => r === 'ok')).toEqual(['ok']);
-    expect(await stores[15]?.get('s')).toEqual(record('s', 2, results.indexOf('ok')));
+  test('public store exposes load instead of the removed StateStore API', async () => {
+    const store = make();
+    expect(typeof store.load).toBe('function');
+    expect('get' in store).toBe(false);
+    expect('put' in store).toBe(false);
+    expect(await store.load('missing')).toBeNull();
   });
 
-  test('a record survives a new store instance over the same file', async () => {
-    const path = join(dir, 'reopen.db');
-    const first = open(path);
-    const r: ScopeRecord = { ...record('s', 3, 50), cursors: { 'log:s': 'c9' }, seen: ['a'] };
-    await sqliteStore(first).put(r, 0);
-    first.close();
-    const store = sqliteStore(open(path));
-    expect(await store.get('s')).toEqual(r);
-    expect(await store.due(50, 10)).toEqual(['s']);
-    expect(await store.put(record('s', 4, null), 3)).toBe('ok');
-  });
-
-  test('a fractional dueAt is due exactly when now reaches it', async () => {
-    const store = sqliteStore(open(':memory:'));
-    await store.put(record('s', 1, 100.5), 0);
-    expect(await store.due(100.4, 10)).toEqual([]);
-    expect(await store.due(100.5, 10)).toEqual(['s']);
-  });
-
-  test('a prefix that is not a plain identifier is refused', () => {
-    expect(() => sqliteStore(open(':memory:'), { prefix: 'x; DROP TABLE y; --' })).toThrow('attend/sqlite: prefix must be letters, digits and underscores');
-  });
+  test('createAttend delivers and recovers without deciding the same event again', async () => {
+    const path = join(dir, `smoke${files++}.db`);
+    const clock = fakeClock(1000);
+    const judge = scriptedJudge([{ route: 'queue' }]);
+    const sink = recordingSink();
+    const config = { clock, judge, sink, kind: () => 'closing' as const, deadLetter: 'log' as const };
+    const event = { id: 'a', at: 0, name: 'close', data: {} };
+    const expected = [{
+      id: 'cf8923dfae84f930', scope: 'scope', route: 'queue',
+      probabilities: { interrupt: 0, queue: 1, note: 0, ask: 0, skip: 0, wait: 0 },
+      predicates: {}, confidence: null,
+      window: {
+        id: 'cf8923dfae84f930', events: [{ ...event, kind: 'closing', seenAt: 1000 }],
+        reason: 'forced', waits: 0, dropped: 0, gap: false, settledAt: 1000,
+      },
+      at: 1000,
+    }];
+    const first = createAttend({ ...config, store: instance(path) });
+    const controller = new AbortController();
+    const done = first.run({ signal: controller.signal });
+    try {
+      await first.push('scope', [event]);
+      await first.flush('scope');
+      await clock.advance(0);
+      await expect.poll(() => first.inspect('scope')).toMatchObject({
+        batch: null, outbox: { decisions: [], deadLetters: [] },
+        recent: [{ id: 'cf8923dfae84f930', route: 'queue', at: 1000 }],
+      });
+      expect(sink.delivered).toEqual(expected);
+    } finally {
+      controller.abort();
+      await done;
+    }
+    const second = createAttend({ ...config, store: instance(path) });
+    const restart = new AbortController();
+    const recovered = second.run({ signal: restart.signal });
+    try {
+      expect(await second.inspect('scope')).toEqual(await first.inspect('scope'));
+      expect(await second.inspect('scope')).toMatchObject({
+        seen: ['a'], batch: null, dueAt: null,
+        recent: [{ id: 'cf8923dfae84f930', route: 'queue', at: 1000 }],
+      });
+      await second.push('scope', [event]);
+      await second.flush('scope');
+      await clock.advance(0);
+      await expect.poll(() => second.inspect('scope')).toMatchObject({
+        batch: null, buffer: { entries: [] }, outbox: { decisions: [], deadLetters: [] },
+      });
+      expect(judge.calls.map((call) => call.window.id)).toEqual(['cf8923dfae84f930']);
+      expect(sink.delivered).toEqual(expected);
+    } finally {
+      restart.abort();
+      await recovered;
+    }
+  }, 30000);
 });
+
+const event = (id: string) => ({ id, at: 0, name: 'n', data: { id } });
 
 describe('sqliteLog over one file', () => {
   test('entries survive a new log instance and positions keep increasing', async () => {
