@@ -173,7 +173,7 @@ export function postgresStore(client: PostgresClient, options?: PostgresStoreOpt
         while (!closed && !signal.aborted) {
           notified = false;
           const { rows } = await client.query(`WITH ${horizon} SELECT (${head}) AS head,
-            EXISTS (SELECT 1 FROM ${p}decisions, h WHERE txid >= h.xid) AS pending`);
+            COALESCE((SELECT txid FROM ${p}decisions ORDER BY txid DESC, n DESC LIMIT 1) >= (SELECT xid FROM h), false) AS pending`);
           const last = nullableText(column(rows[0], 'head'));
           if (last !== null && (after === null || compare(last, after) > 0)) return;
           const left = deadline - Date.now();

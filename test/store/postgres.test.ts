@@ -194,6 +194,29 @@ test('read your own writes waits for the horizon', async () => {
   }
 }, 30_000);
 
+test('a waiter wakes soon after the horizon passes a committed decision, with no new notification', async () => {
+  const blocker = await connect();
+  const store = await make();
+  try {
+    await blocker.query('BEGIN');
+    await blocker.query('SELECT pg_current_xact_id()');
+    expect(await store.commit([write('s', 0, { appends: [append('hidden')] })])).toEqual(['ok']);
+    const started = Date.now();
+    const woke = store.log.wait(null, 25_000, new AbortController().signal).then(() => Date.now() - started);
+    await sleep(300);
+    await blocker.query('COMMIT');
+    const released = Date.now() - started;
+    const elapsed = await woke;
+    expect(elapsed).toBeGreaterThanOrEqual(released);
+    expect(elapsed - released).toBeLessThan(3_000);
+    expect((await store.log.read({ after: null, limit: 10 })).rows.map((row) => row.id)).toEqual(['hidden']);
+  } finally {
+    await blocker.query('ROLLBACK');
+    await blocker.end();
+    await store.close?.();
+  }
+}, 30_000);
+
 test('a read waits only for the commits made before it started', async () => {
   const db = await pool();
   let gate: Promise<void> | undefined;
