@@ -501,7 +501,7 @@ export type KnownIds = Map<string, number>;
 /**
  * Everything `deadline()` reads, kept O(1). Acts and flushes are never shed or pruned, so their
  * fields only move forward. NaN means none for the `*At` fields; `minFlushAt` and
- * `prefixMinSheddableAt` use Infinity for none. Equal to what a scan of the entries derives.
+ * `prefixMinSheddableAt` use Infinity for none. Equal to what a scan of the live entries derives.
  */
 export interface TriggerSummary {
   minFlushAt: number;
@@ -509,7 +509,7 @@ export interface TriggerSummary {
   lastStreamAt: number;
   lastPassiveAt: number;
   firstActAt: number;
-  /** Index of the first act in `entries`, or -1. Adjusted when entries before it are removed. */
+  /** Index of the first act relative to `start`, or -1. Adjusted on removal, unchanged by compaction. */
   firstActIndex: number;
   /** Smallest `seenAt` among sheddable entries before the first act: the O(1) prune test. */
   prefixMinSheddableAt: number;
@@ -518,19 +518,21 @@ export interface TriggerSummary {
   lastSeenAt: number;
 }
 
-/** The open window, appended in place by its single writer. */
+/** The open window, appended in place by its single writer. Live entries are `entries[start..]`. */
 export interface OpenWindow {
   entries: Entry[];
-  /** Estimated rendered bytes per entry, parallel to `entries`. Recomputed by `fromRecord`; never stored. */
+  /** Index in `entries` and `sizes` of the first live slot. Slots before it are removed entries, at most half the live count. */
+  start: number;
+  /** Estimated rendered bytes per entry; `sizes[start..]` parallels the live entries. Recomputed by `fromRecord`; never stored. */
   sizes: number[];
-  /** The sum of `sizes`. Compared with `SettlePolicy.maxWindowBytes`. */
+  /** The sum of the live sizes. Compared with `SettlePolicy.maxWindowBytes`. */
   bytes: number;
   dropped: number;
   gap: boolean;
   forcedAt: number | null;
   endedAt: number | null;
   summary: TriggerSummary;
-  /** FNV state over `len:scope` then each entry's `len:id`, when `hashValid`. */
+  /** FNV state over `len:scope` then each live entry's `len:id`, when `hashValid`. */
   hash: FnvState;
   /** False after a prune or shed inside the window; the settle then refolds the final list. */
   hashValid: boolean;

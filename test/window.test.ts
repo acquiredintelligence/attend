@@ -5,7 +5,7 @@ import { fnvHex } from '../src/core/ids.js';
 import type { Buffer, Entry, Kind, SettlePolicy } from '../src/core/types.js';
 import {
   assertWindow, deadline, estimateRenderedBytes, isAct, openWindow, shedEntries,
-  windowAppend, windowDeadline, windowFrom, windowPrune, windowShed,
+  windowAppend, windowCompact, windowDeadline, windowEntries, windowFrom, windowPrune, windowShed, windowSize,
 } from '../src/core/window.js';
 import { deadline as oracleDeadline, initialRecord, step, windowId as oracleWindowId } from './oracle/step.js';
 import { DEFAULT_POLICY, KINDS } from './oracle/types.js';
@@ -71,7 +71,7 @@ describe('open window', () => {
   }, 60_000);
 
   test('matches oracle prune and shed through operation sequences', () => {
-    const removals = { monotone: 0, scanned: 0, shed: 0 };
+    const removals = { monotone: 0, scanned: 0, shed: 0, offsetRemovals: 0, compactions: 0 };
     fc.assert(fc.property(
       fc.string({ maxLength: 10 }), policyArbitrary, fc.array(operation, { maxLength: 120, size: 'max' }),
       (scope, policy, operations) => {
@@ -79,6 +79,9 @@ describe('open window', () => {
         let model: OracleBuffer = initialRecord(scope).buffer;
         let clock = 1000;
         for (const op of operations) {
+          const start = open.start;
+          const length = open.entries.length;
+          let read = 0;
           let actual: Entry[] | null = null;
           let expected: Entry[] | null = null;
           switch (op.kind) {
@@ -91,7 +94,10 @@ describe('open window', () => {
             }
             case 'prune': {
               const monotone = open.monotone;
+              const end = open.summary.firstActIndex === -1 ? windowSize(open) : open.summary.firstActIndex;
               actual = windowPrune(open, op.maxWindowMs, clock + op.ahead);
+              read = monotone ? model.entries.findIndex((e, i) => i < end && e.seenAt + op.maxWindowMs > clock + op.ahead) : -1;
+              if (read === -1) read = end;
               const result = isolate(model, { ...DEFAULT_POLICY, maxEvents: Infinity, maxWindowMs: op.maxWindowMs }, clock + op.ahead);
               model = result.buffer;
               expected = result.gone;
@@ -100,6 +106,7 @@ describe('open window', () => {
             }
             case 'shed': {
               actual = windowShed(open, op.maxEvents);
+              if (actual !== null) read = model.entries.lastIndexOf(actual[actual.length - 1]!) + 1;
               const result = isolate(model, { ...DEFAULT_POLICY, maxEvents: op.maxEvents, maxWindowMs: Infinity });
               model = result.buffer;
               expected = result.gone;
@@ -109,17 +116,24 @@ describe('open window', () => {
             case 'force': open.forcedAt = op.at; model = { ...model, forcedAt: op.at }; break;
             case 'reset': open = openWindow(scope); model = initialRecord(scope).buffer; break;
           }
+          if (actual !== null) {
+            if (start > 0) removals.offsetRemovals += 1;
+            const movedPrefix = read - actual.length <= length - start - read;
+            if (open.start === 0 && (start > 0 || movedPrefix)) removals.compactions += 1;
+          }
           assertWindow(scope, open);
-          assert.deepEqual({ entries: open.entries, dropped: open.dropped, gone: actual, due: windowDeadline(policy, open) }, {
+          assert.deepEqual({ entries: windowEntries(open), dropped: open.dropped, gone: actual, due: windowDeadline(policy, open) }, {
             entries: model.entries, dropped: model.dropped, gone: expected, due: oracleDeadline(policy, model),
           });
           if (open.hashValid) assert.equal(fnvHex(open.hash), oracleWindowId(scope, model.entries.map((value) => value.id)));
         }
-        assert.deepEqual(open.entries, model.entries);
+        assert.deepEqual(windowEntries(open), model.entries);
       },
     ), { numRuns: 1000, seed: 3002 });
     console.log(JSON.stringify({ removals }));
     expect(Math.min(removals.monotone, removals.scanned, removals.shed)).toBeGreaterThanOrEqual(500);
+    expect(removals.offsetRemovals).toBeGreaterThanOrEqual(110);
+    expect(removals.compactions).toBeGreaterThanOrEqual(1000);
   }, 60_000);
 
   test('sheds plain lists like the oracle without touching lists that fit', () => {
@@ -139,6 +153,7 @@ describe('open window', () => {
       deepFreeze(buffer);
       const open = windowFrom('scope', buffer);
       assertWindow('scope', open);
+      expect(open.start).toBe(0);
       expect(open.entries).toEqual(buffer.entries);
       expect(open.entries).not.toBe(buffer.entries);
       for (let i = 0; i < buffer.entries.length; i += 1) expect(open.entries[i]).toBe(buffer.entries[i]);
@@ -165,7 +180,7 @@ describe('open window', () => {
     windowAppend(open, entry('a', 'closing', 100), 44);
     open.endedAt = 150;
     expect(windowDeadline(DEFAULT_POLICY, open)).toEqual({ at: 150, reason: 'closing' });
-    expect(deadline(DEFAULT_POLICY, { entries: open.entries, dropped: 0, gap: false, forcedAt: null, endedAt: 150 }))
+    expect(deadline(DEFAULT_POLICY, { entries: windowEntries(open), dropped: 0, gap: false, forcedAt: null, endedAt: 150 }))
       .toEqual({ at: 150, reason: 'closing' });
   });
 
@@ -176,7 +191,7 @@ describe('open window', () => {
     expect(windowDeadline(policy, open)).toBeNull();
     windowAppend(open, entry('b', 'context', 200), 1);
     expect(windowDeadline(policy, open)).toEqual({ at: 200, reason: 'size' });
-    expect(windowDeadline(DEFAULT_POLICY, open)).toEqual(oracleDeadline(DEFAULT_POLICY, { entries: open.entries, dropped: 0, gap: false, forcedAt: null }));
+    expect(windowDeadline(DEFAULT_POLICY, open)).toEqual(oracleDeadline(DEFAULT_POLICY, { entries: windowEntries(open), dropped: 0, gap: false, forcedAt: null }));
     const buffer = { entries: [entry('c', 'context', 300)], dropped: 0, gap: false, forcedAt: null };
     expect(deadline({ ...DEFAULT_POLICY, maxWindowBytes: 46 }, deepFreeze(buffer))).toEqual({ at: 300, reason: 'size' });
   });
@@ -229,7 +244,7 @@ describe('open window', () => {
     windowAppend(open, entry('c', 'closing', 600), 47);
     expect(open.monotone).toBe(false);
     expect(windowPrune(open, 1000, 1100)).toEqual([entry('b', 'consequence', 100)]);
-    expect(open.entries).toEqual([entry('a', 'consequence', 500), entry('c', 'closing', 600)]);
+    expect(windowEntries(open)).toEqual([entry('a', 'consequence', 500), entry('c', 'closing', 600)]);
     expect(open.monotone).toBe(false);
     expect(open.bytes).toBe(92);
     assertWindow('scope', open);
@@ -240,7 +255,7 @@ describe('open window', () => {
     const entries = [entry('a', 'context', 10), entry('f', 'flush', 20), entry('b', 'consequence', 30), entry('c', 'closing', 40), entry('d', 'context', 50)];
     for (const value of entries) windowAppend(open, deepFreeze(value), 10);
     expect(windowPrune(open, 10, 100)).toEqual([entries[0], entries[2]]);
-    expect(open.entries).toEqual([entries[1], entries[3], entries[4]]);
+    expect(windowEntries(open)).toEqual([entries[1], entries[3], entries[4]]);
     expect(open.summary.firstActIndex).toBe(1);
     expect(open.bytes).toBe(30);
     expect(open.dropped).toBe(2);
@@ -277,11 +292,57 @@ describe('open window', () => {
     const values = [entry('a', 'context', 10), entry('b', 'closing', 20), entry('c', 'flush', 30), entry('d', 'consequence', 40)];
     for (const value of values) windowAppend(open, value, 10);
     expect(windowShed(open, 0)).toEqual([values[0], values[3]]);
-    expect(open.entries).toEqual([values[1], values[2]]);
+    expect(windowEntries(open)).toEqual([values[1], values[2]]);
     expect(open.summary.firstActIndex).toBe(0);
     expect(open.summary.lastSeenAt).toBe(30);
     expect(open.bytes).toBe(20);
     expect(windowShed(open, 0)).toBeNull();
+    assertWindow('scope', open);
+  });
+
+  test('advances the prune offset and compacts once the dead prefix passes half the live entries', () => {
+    const open = openWindow('scope');
+    const values = ['a', 'b', 'c', 'd', 'e', 'f'].map((id, i) => entry(id, 'consequence', 10 + i * 10));
+    for (const value of values) windowAppend(open, value, 10);
+    const layout = [{ start: 1, length: 6 }, { start: 2, length: 6 }, { start: 0, length: 3 }, { start: 1, length: 3 }, { start: 0, length: 1 }, { start: 0, length: 0 }];
+    for (let i = 0; i < values.length; i += 1) {
+      assert.deepEqual(windowPrune(open, 10, 20 + i * 10), [values[i]]);
+      assert.deepEqual({ start: open.start, length: open.entries.length, entries: windowEntries(open), size: windowSize(open),
+        bytes: open.bytes, lastSeenAt: open.summary.lastSeenAt, dropped: open.dropped },
+      { ...layout[i], entries: values.slice(i + 1), size: 5 - i, bytes: 10 * (5 - i), lastSeenAt: i === 5 ? NaN : 60, dropped: i + 1 });
+      assertWindow('scope', open);
+    }
+  });
+
+  test('sheds after an act with an offset and compacts the owned arrays in place', () => {
+    const open = openWindow('scope');
+    const act = entry('act', 'closing', 10);
+    const c1 = entry('c1', 'consequence', 20);
+    const c2 = entry('c2', 'consequence', 30);
+    const c3 = entry('c3', 'consequence', 40);
+    const c4 = entry('c4', 'consequence', 50);
+    const c5 = entry('c5', 'consequence', 60);
+    for (const value of [act, c1, c2, c3]) windowAppend(open, value, 10);
+    const entries = open.entries;
+    const sizes = open.sizes;
+    assert.deepEqual(windowShed(open, 3), [c1]);
+    assert.deepEqual({ start: open.start, length: entries.length, live: windowEntries(open), firstActIndex: open.summary.firstActIndex },
+      { start: 1, length: 4, live: [act, c2, c3], firstActIndex: 0 });
+    assertWindow('scope', open);
+    assert.equal(windowCompact(open), entries);
+    assert.deepEqual({ start: open.start, entries, sizes }, { start: 0, entries: [act, c2, c3], sizes: [10, 10, 10] });
+    assert.equal(windowCompact(open), entries);
+    assert.deepEqual({ start: open.start, entries, sizes }, { start: 0, entries: [act, c2, c3], sizes: [10, 10, 10] });
+    assertWindow('scope', open);
+    windowAppend(open, c4, 10);
+    assert.deepEqual(windowShed(open, 3), [c2]);
+    assert.deepEqual({ start: open.start, length: entries.length, live: windowEntries(open) }, { start: 1, length: 4, live: [act, c3, c4] });
+    assertWindow('scope', open);
+    windowAppend(open, c5, 10);
+    assert.deepEqual(windowShed(open, 3), [c3]);
+    assert.deepEqual({ start: open.start, entries, sizes, firstActIndex: open.summary.firstActIndex, bytes: open.bytes },
+      { start: 0, entries: [act, c4, c5], sizes: [10, 10, 10], firstActIndex: 0, bytes: 30 });
+    assert.equal(open.entries, entries);
     assertWindow('scope', open);
   });
 
@@ -298,6 +359,13 @@ describe('open window', () => {
     open.bytes = 0;
     open.sizes.push(0);
     expect(() => assertWindow('scope', open)).toThrow('I4');
+  });
+
+  test.each([-1, 0.5, 2])('reports I4: start for an invalid offset %s', (start) => {
+    const open = openWindow('scope');
+    for (const id of ['a', 'b', 'c', 'd']) windowAppend(open, entry(id), 10);
+    open.start = start;
+    assert.throws(() => assertWindow('scope', open), /^Error: I4: start/);
   });
 
   test('reports I5 when a valid hash is corrupted', () => {
