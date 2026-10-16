@@ -188,7 +188,7 @@ describe('jevJudge', () => {
       [async () => new Response(null, { status: 503 }), ['Error', 'jevJudge: HTTP 503', false]],
       [async () => new Response(null, { status: 408 }), ['Error', 'jevJudge: HTTP 408', false]],
       [json({ error: 'Unknown model: no-such-model' }, 400), ['PermanentError', 'jevJudge: HTTP 400: Unknown model: no-such-model', true]],
-      [json({ message: 'max_tokens_exceeded' }, 400), ['PermanentError', 'jevJudge: HTTP 400: max_tokens_exceeded', true]],
+      [json({ message: 'max_tokens_exceeded' }, 400), ['Error', 'jevJudge: HTTP 400: max_tokens_exceeded; the window cannot be halved', false]],
       [async () => new Response(null, { status: 401 }), ['PermanentError', 'jevJudge: HTTP 401', true]],
       [async () => new Response('<html>too large</html>', { status: 413 }), ['PermanentError', 'jevJudge: HTTP 413: <html>too large</html>', true]],
       [
@@ -347,5 +347,88 @@ describe('jevJudge images', () => {
     const fake = fakeFetch(async () => new Response(null, { status: 503 }));
     expect(await outcome(jevJudge({ apiKey: 'k', fetch: fake.fetch })({ ...input, images }, signal))).toEqual(['Error', 'jevJudge: HTTP 503', false]);
     expect(fake.calls).toHaveLength(1);
+  });
+});
+
+const HIDDEN_CONTEXT = { error: { message: 'Request too long', type: 'invalid_request_error' }, reason: 'max_tokens_exceeded' };
+const TWO_EVENTS: JudgeInput = { ...input, window: { ...input.window, events: [...input.window.events, { id: 'b', name: 'newest', kind: 'closing', data: { env: 'prod' }, at: 0, seenAt: 9000 }] } };
+const HALVED_WINDOW = { reason: 'closing', waits: 0, dropped: 1, gap: false, events: [{ kind: 'closing', name: 'newest', data: { env: 'prod' }, ago: '1.0s' }] };
+
+describe('jevJudge budgets', () => {
+  test('declares 32k or 262k and measures the complete route question', () => {
+    expect(jevJudge({ apiKey: 'k' }).budget).toEqual({ contextTokens: 32_000, bytesPerToken: 2, reservedTokens: 1594 });
+    expect(jevJudge({ apiKey: 'k', longContext: true }).budget).toEqual({ contextTokens: 262_000, bytesPerToken: 2, reservedTokens: 1594 });
+    expect(jevJudge({ apiKey: 'k', instructions: 'Be quiet.', criteria: { skip: 'Ignore it.' } }).budget).toEqual({ contextTokens: 32_000, bytesPerToken: 2, reservedTokens: 404 });
+  });
+  test('recognizes a context code in an unparsed field and halves once', async () => {
+    const fake = fakeFetch(async (_, call) => (call === 1 ? json(HIDDEN_CONTEXT, 400)(undefined, call) : json({ answers: { route: ROUTE_ANSWER } })(undefined, call)));
+    expect(await jevJudge({ apiKey: 'k', fetch: fake.fetch })(TWO_EVENTS, signal)).toEqual({ route: 'note', probabilities: { note: 1 }, predicates: {}, confidence: 1 });
+    expect(fake.calls).toHaveLength(2);
+    expect(bodyOf(fake.calls[1]).state).toEqual({ ...STATE, window: HALVED_WINDOW });
+  });
+  test("TypeSafe's own max_tokens_exceeded body is retried once halved, then fails retryable", async () => {
+    const fake = fakeFetch(json({ detail: { error_type: 'max_tokens_exceeded' } }, 400));
+    expect(await outcome(jevJudge({ apiKey: 'k', fetch: fake.fetch })(TWO_EVENTS, signal))).toEqual([
+      'Error',
+      'jevJudge: HTTP 400: {"detail":{"error_type":"max_tokens_exceeded"}}; rejected again with the window halved',
+      false,
+    ]);
+    expect(fake.calls.map((call) => (bodyOf(call).state as { window: { dropped: number } }).window.dropped)).toEqual([0, 1]);
+  });
+  test('second context rejection is retryable and preserves provider metadata', async () => {
+    const fake = fakeFetch(json(HIDDEN_CONTEXT, 400, { 'x-typesafe-request-id': 'req-jev', 'retry-after-ms': '1200' }));
+    const error: unknown = await jevJudge({ apiKey: 'k', fetch: fake.fetch })(TWO_EVENTS, signal).catch((e: unknown) => e);
+    expect(fake.calls).toHaveLength(2);
+    expect(Object.getPrototypeOf(error)).toBe(Error.prototype);
+    expect(isPermanent(error)).toBe(false);
+    expect(error).toMatchObject({ message: 'jevJudge: HTTP 400: Request too long (request req-jev); rejected again with the window halved', status: 400, requestId: 'req-jev', retryAfterMs: 1200 });
+  });
+  test('halving with images preserves body order, image references and assets', async () => {
+    const fake = fakeFetch(async (_, call) => (call === 1 ? json(HIDDEN_CONTEXT, 400)(undefined, call) : json({ answers: { route: ROUTE_ANSWER } })(undefined, call)));
+    const errors: Error[] = [];
+    expect(
+      await jevJudge({ apiKey: 'k', fetch: fake.fetch, onImageError: (error) => errors.push(error) })({ ...TWO_EVENTS, images: [{ data: png(280, 280), mimeType: 'image/png' }] }, signal),
+    ).toEqual({ route: 'note', probabilities: { note: 1 }, predicates: {}, confidence: 1 });
+    expect(fake.calls).toHaveLength(2);
+    const states = fake.calls.map((call) => {
+      const body = bodyOf(call);
+      expect(Object.keys(body)).toEqual(['model', 'state', 'questions', 'assets']);
+      const state = typeof call.init?.body === 'string' ? JSON.parse(call.init.body).state : null;
+      expect(Object.keys(state)).toEqual(['window', 'facts', 'recent', 'predicates', 'images']);
+      expect(state.images).toHaveLength(1);
+      expect(state.images[0]).toMatch(UUID);
+      expect(Object.keys(body.assets ?? {})).toEqual(state.images);
+      return state;
+    });
+    expect(states[1]).toEqual({ ...STATE, window: HALVED_WINDOW, images: states[0].images });
+    expect(bodyOf(fake.calls[1]).assets).toEqual(bodyOf(fake.calls[0]).assets);
+    expect(errors).toEqual([]);
+  });
+  test('rendering yields every 64 events before posting', async () => {
+    const turns: number[] = [];
+    for (const length of [64, 65, 129]) {
+      let count = 0;
+      let timer: NodeJS.Immediate;
+      const tick = () => {
+        count += 1;
+        timer = setImmediate(tick);
+      };
+      timer = setImmediate(tick);
+      const fake = fakeFetch(async () => {
+        turns.push(count);
+        return json({ answers: { route: ROUTE_ANSWER } })(undefined, 1);
+      });
+      try {
+        expect(
+          await jevJudge({ apiKey: 'k', fetch: fake.fetch })(
+            { ...input, window: { ...input.window, events: Array.from({ length }, (_, i) => ({ id: String(i), name: 'event', kind: 'closing', data: {}, at: 0, seenAt: 0 })) } },
+            signal,
+          ),
+        ).toEqual({ route: 'note', probabilities: { note: 1 }, predicates: {}, confidence: 1 });
+      } finally {
+        clearImmediate(timer);
+      }
+    }
+    expect(turns).toEqual([0, 1, 2]);
   });
 });

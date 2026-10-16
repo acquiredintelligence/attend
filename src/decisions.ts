@@ -4,7 +4,8 @@
  * `predicate` question answers each ride-along predicate. Predicate questions are named by
  * position (`predicate_0`, `predicate_1`, …) so no predicate name can collide with `route`, and
  * the answers come back under the predicates' own names. The rendered state is the `input`.
- * Runs anywhere `fetch` does.
+ * Runs anywhere `fetch` does. With `contextTokens` it declares a budget; see `jevJudge` for how
+ * a window is trimmed to it and halved once on a context-length rejection.
  *
  * ```ts
  * import { decisionsJudge } from 'attend/decisions';
@@ -16,16 +17,19 @@
  * The API documents no format or size limits, so a request it rejects over its images (400, 413,
  * 415 or 422) is retried once without them, and that is reported through `onImageError`.
  */
+import type { JudgeBudget } from './core/types.js';
 import { PermanentError } from './errors.js';
-import { isImageRejection, postJson, type ProviderFailure } from './internal/http.js';
-import { DEFAULT_SYSTEM, renderState, resolveCriteria } from './internal/prompt.js';
+import { isContextLengthRejection, isImageRejection, postJson, type ProviderFailure } from './internal/http.js';
+import { DEFAULT_SYSTEM, renderBytes, renderWithin, resolveCriteria, sendHalving, stateText, tokensOf, type Rendered } from './internal/prompt.js';
 import { isRecord } from './internal/shared.js';
-import type { Judge, JudgeImage, Judgment, Route } from './types.js';
+import { ROUTES, type Judge, type JudgeImage, type Judgment, type Route } from './types.js';
 
 export type { ProviderFailure } from './internal/http.js';
 
 export interface DecisionsJudgeOptions {
   apiKey: string;
+  /** The model's context window in tokens. Set it to declare a budget. */
+  contextTokens?: number;
   /** Required: attend does not choose a model for you. */
   model: string;
   /** Default `https://api.openai.com/v1/decisions`. */
@@ -47,45 +51,71 @@ const MAX_QUESTIONS = 200;
 const MAX_IMAGES = 128;
 
 /**
- * Throws a plain Error, which the core retries, on a network failure, a 408, a 429, a 5xx or a
- * reply without an offered route. Throws a `PermanentError` on any other 4xx, on a 429 whose code
- * is a billing or quota code, and when the model refuses the route question. Both carry
+ * With `contextTokens`, `budget.reservedTokens` is measured from the route question with every
+ * route on offer. Throws a plain Error, which the core retries, on a network failure, a 408, a
+ * 429, a 5xx, a reply without an offered route, or a context-length rejection that halving the
+ * window did not clear. Throws a `PermanentError` on any other 4xx, on a 429 whose code is a
+ * billing or quota code, and when the model refuses the route question. Both carry
  * `ProviderFailure` when a response caused them. On abort it rethrows the signal's reason.
  */
-export function decisionsJudge(options: DecisionsJudgeOptions): Judge {
-  const { apiKey, model, endpoint = 'https://api.openai.com/v1/decisions', criteria, instructions = DEFAULT_SYSTEM, onImageError } = options;
+export function decisionsJudge(options: DecisionsJudgeOptions): Judge & { budget?: JudgeBudget } {
+  const { apiKey, model, endpoint = 'https://api.openai.com/v1/decisions', criteria, instructions = DEFAULT_SYSTEM, onImageError, contextTokens } = options;
   // Held unbound: calling the global fetch as a method of `options` throws in browsers and workers.
   const send = options.fetch ?? fetch;
-  return async (input, signal) => {
+  const reservedTokens = tokensOf(
+    JSON.stringify({
+      type: 'choice',
+      name: 'route',
+      instructions,
+      choices: resolveCriteria(
+        ROUTES.map((route) => ({ route })),
+        criteria,
+      ).map((r) => ({ value: r.route, description: r.criterion })),
+    }),
+  );
+  if (contextTokens !== undefined && !(contextTokens > reservedTokens))
+    throw new RangeError(`decisionsJudge: contextTokens must be more than the ${reservedTokens} tokens its own prompt takes, got ${contextTokens}`);
+  const budget = contextTokens === undefined ? undefined : { contextTokens, reservedTokens };
+  const judge: Judge & { budget?: JudgeBudget } = async (input, signal) => {
     const names = input.predicates.map((p) => p.name);
     if (new Set(names).size !== names.length) throw new PermanentError(`decisionsJudge: predicate names must be unique, got ${names.join(', ')}`);
     if (names.length + 1 > MAX_QUESTIONS) throw new PermanentError(`decisionsJudge: ${names.length} predicates plus the route is over the ${MAX_QUESTIONS} questions the API takes`);
     const routes = resolveCriteria(input.routes, criteria);
-    const text = renderState(input);
+    const rendered = await renderWithin(input, renderBytes(budget), signal);
     const images = options.images === false ? [] : keep(input.images ?? [], onImageError);
     const questions = [
       { type: 'choice', name: 'route', instructions, choices: routes.map((r) => ({ value: r.route, description: r.criterion })) },
       ...input.predicates.map((p, index) => ({ type: 'predicate', name: predicateQuestion(index), instructions: p.question })),
     ];
-    const post = (withImages: boolean) => {
+    let withImages = images.length > 0;
+    const post = (r: Rendered) => {
+      const text = stateText(r);
       const parts = images.map((image) => ({ type: 'input_image', image_url: `data:${image.mimeType};base64,${image.data}` }));
-      const body = { model, input: withImages && parts.length > 0 ? [{ role: 'user', content: [{ type: 'input_text', text }, ...parts] }] : text, questions };
-      return postJson(PROVIDER, send, endpoint, { authorization: `Bearer ${apiKey}` }, body, signal);
+      const body = { model, input: withImages ? [{ role: 'user', content: [{ type: 'input_text', text }, ...parts] }] : text, questions };
+      return postJson(PROVIDER, send, endpoint, { authorization: `Bearer ${apiKey}` }, JSON.stringify(body), signal);
     };
-    let reply: unknown;
-    try {
-      reply = await post(true);
-    } catch (error) {
-      if (images.length === 0 || !isImageRejection(error)) throw error;
-      onImageError?.(new Error(`decisionsJudge: the provider rejected the request with its ${images.length} images, retrying without them: ${error instanceof Error ? error.message : String(error)}`, { cause: error }));
-      reply = await post(false);
-    }
+    const reply = await sendHalving(rendered, async (r) => {
+      try {
+        return await post(r);
+      } catch (error) {
+        if (!withImages || !isImageRejection(error) || isContextLengthRejection(error)) throw error;
+        withImages = false;
+        onImageError?.(
+          new Error(`decisionsJudge: the provider rejected the request with its ${images.length} images, retrying without them: ${error instanceof Error ? error.message : String(error)}`, {
+            cause: error,
+          }),
+        );
+        return post(r);
+      }
+    });
     return parseAnswers(
       reply,
       routes.map((r) => r.route),
       names,
     );
   };
+  if (budget !== undefined) judge.budget = budget;
+  return judge;
 }
 
 /** The first 128 images; the rest are dropped and reported. */

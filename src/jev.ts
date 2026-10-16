@@ -6,6 +6,14 @@
  * come back under the predicates' own names. The rendered state is sent as JSON `state`. Runs
  * anywhere `fetch` does. Bring your own TypeSafe key.
  *
+ * The judge declares a budget of 32k tokens, or 262k with `longContext`: TypeSafe takes 64k per
+ * request, but the state plus any one question must fit 32k. It counts 2 characters per token,
+ * since Jev read attend's JSON state at about 2.4. A rendered window over the budget
+ * loses its oldest consequence and context events first; acts and flushes always stay. A 400
+ * that names `max_tokens_exceeded` is retried once with the window halved, cutting consequence
+ * and context events and then the oldest acts, never a flush. If that is rejected too, the call
+ * fails as a retryable Error.
+ *
  * ```ts
  * import { jevJudge } from 'attend/jev';
  *
@@ -22,12 +30,13 @@
  * before the call and reported through `onImageError`; a request the provider still rejects over its
  * images is retried once without them, and that is reported the same way.
  */
+import type { JudgeBudget } from './core/types.js';
 import { PermanentError } from './errors.js';
-import { isImageRejection, postJson, type ProviderFailure } from './internal/http.js';
+import { isContextLengthRejection, isImageRejection, postJson, type ProviderFailure } from './internal/http.js';
 import { decodedLength, imageHeader, isStandardBase64, type ImageHeader } from './internal/images.js';
-import { DEFAULT_SYSTEM, resolveCriteria, stateObject } from './internal/prompt.js';
+import { DEFAULT_SYSTEM, renderBytes, renderWithin, resolveCriteria, sendHalving, stateText, tokensOf, type Rendered } from './internal/prompt.js';
 import { isRecord } from './internal/shared.js';
-import type { Judge, JudgeImage, Judgment, JsonObject, Route } from './types.js';
+import { ROUTES, type Judge, type JudgeImage, type Judgment, type JsonObject, type Route } from './types.js';
 
 export type { ProviderFailure } from './internal/http.js';
 
@@ -43,7 +52,7 @@ export interface JevJudgeOptions {
   criteria?: Partial<Record<Route, string>>;
   /** Instructions for the route question. Default `DEFAULT_SYSTEM` from `attend/llm`. */
   instructions?: string;
-  /** Sends `TypeSafe-Danger-Zone-Long-Context: true`: 262k tokens of context instead of 64k, slower and less accurate. */
+  /** Sends `TypeSafe-Danger-Zone-Long-Context: true`: 262k tokens of context instead of 64k per request and 32k per question, slower and less accurate. */
   longContext?: boolean;
   /** Default true. False never sends images, whatever the input carries. */
   images?: boolean;
@@ -52,6 +61,8 @@ export interface JevJudgeOptions {
 }
 
 const PROVIDER = { name: 'jevJudge', requestIdHeader: 'x-typesafe-request-id' };
+// Measured: a 42,024-character request with a 300-event state cost 17,423 input tokens.
+const BYTES_PER_JEV_TOKEN = 2;
 
 /** The provider's documented image limits. Every bound is inclusive. */
 export const JEV_IMAGE_LIMITS = {
@@ -64,15 +75,34 @@ export const JEV_IMAGE_LIMITS = {
 } as const;
 
 /**
- * Throws a plain Error, which the core retries, on a network failure, a 408, a 429, a 5xx or a
- * reply without an offered route. Throws a `PermanentError` on any other 4xx. Both carry
- * `ProviderFailure`. On abort it rethrows the signal's reason.
+ * `budget.reservedTokens` is measured from the route question with every route on offer. Throws a
+ * plain Error, which the core retries, on a network failure, a 408, a 429, a 5xx, a reply without
+ * an offered route, or a context-length rejection that halving the window did not clear. Throws a
+ * `PermanentError` on any other 4xx. Both carry `ProviderFailure`. On abort it rethrows the
+ * signal's reason.
  */
-export function jevJudge(options: JevJudgeOptions): Judge {
+export function jevJudge(options: JevJudgeOptions): Judge & { budget: JudgeBudget } {
   const { apiKey, model = 'jev-latest', endpoint = 'https://api.typesafe.ai/v1/systemone', criteria, instructions = DEFAULT_SYSTEM, longContext = false, onImageError } = options;
   // Held unbound: calling the global fetch as a method of `options` throws in browsers and workers.
   const send = options.fetch ?? fetch;
-  return async (input, signal) => {
+  const budget: JudgeBudget = {
+    contextTokens: longContext ? 262_000 : 32_000,
+    bytesPerToken: BYTES_PER_JEV_TOKEN,
+    reservedTokens: tokensOf(
+      JSON.stringify({
+        type: 'choice',
+        instructions,
+        criteria: Object.fromEntries(
+          resolveCriteria(
+            ROUTES.map((route) => ({ route })),
+            criteria,
+          ).map((r) => [r.route, r.criterion]),
+        ),
+      }),
+      BYTES_PER_JEV_TOKEN,
+    ),
+  };
+  const judge: Judge = async (input, signal) => {
     const names = input.predicates.map((p) => p.name);
     if (new Set(names).size !== names.length) throw new PermanentError(`jevJudge: predicate names must be unique, got ${names.join(', ')}`);
     const routes = resolveCriteria(input.routes, criteria);
@@ -80,31 +110,41 @@ export function jevJudge(options: JevJudgeOptions): Judge {
       route: { type: 'choice', instructions, criteria: Object.fromEntries(routes.map((r) => [r.route, r.criterion])) },
       ...Object.fromEntries(input.predicates.map((p, index) => [`predicate_${index}`, { type: 'noul', instructions: p.question }])),
     };
-    const state = stateObject(input);
+    const rendered = await renderWithin(input, renderBytes(budget), signal);
     const assets = options.images === false ? [] : jevAssets(input.images ?? [], onImageError);
 
-    const post = (withImages: boolean) => {
+    const questionText = JSON.stringify(questions);
+    const refsText = JSON.stringify(assets.map((a) => a.ref));
+    const assetsText = JSON.stringify(Object.fromEntries(assets.map((a) => [a.ref, a.asset])));
+    const modelText = JSON.stringify(model);
+    let withImages = assets.length > 0;
+    const post = (r: Rendered) => {
       const headers: Record<string, string> = { authorization: `Bearer ${apiKey}` };
       if (longContext) headers['TypeSafe-Danger-Zone-Long-Context'] = 'true';
-      const body: JsonObject = { model, state, questions };
-      if (withImages && assets.length > 0) {
+      let state = stateText(r);
+      if (withImages) {
         headers['TypeSafe-Danger-Zone-Images'] = 'true';
-        body.state = { ...state, images: assets.map((a) => a.ref) };
-        body.assets = Object.fromEntries(assets.map((a) => [a.ref, a.asset]));
+        state = `${state.slice(0, -1)},"images":${refsText}}`;
       }
+      const body = `{"model":${modelText},"state":${state},"questions":${questionText}${withImages ? `,"assets":${assetsText}` : ''}}`;
       return postJson(PROVIDER, send, endpoint, headers, body, signal);
     };
 
-    let reply: unknown;
-    try {
-      reply = await post(true);
-    } catch (error) {
-      if (assets.length === 0 || !isImageRejection(error)) throw error;
-      onImageError?.(new Error(`jevJudge: the provider rejected the request with its ${assets.length} images, retrying without them: ${error instanceof Error ? error.message : String(error)}`, { cause: error }));
-      reply = await post(false);
-    }
+    const reply = await sendHalving(rendered, async (r) => {
+      try {
+        return await post(r);
+      } catch (error) {
+        if (!withImages || !isImageRejection(error) || isContextLengthRejection(error)) throw error;
+        withImages = false;
+        onImageError?.(
+          new Error(`jevJudge: the provider rejected the request with its ${assets.length} images, retrying without them: ${error instanceof Error ? error.message : String(error)}`, { cause: error }),
+        );
+        return post(r);
+      }
+    });
     return parseAnswers(reply, routes.map((r) => r.route), names);
   };
+  return Object.assign(judge, { budget });
 }
 
 interface JevAsset {
