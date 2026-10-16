@@ -556,10 +556,13 @@ function pumpLane(ctx: Ctx, r: ScopeRecord, lane: OutboxLane): ScopeRecord {
 
 // ─── flush ───────────────────────────────────────────────────────────────────
 
-/** Marks the buffer forced; the runner's next tick settles it, so a flush without a runner strands no effect. */
+/**
+ * Marks the buffer forced; the runner's next tick settles it, so a flush without a runner
+ * strands no effect. A window already in front of the judge is forced too: the force outlives
+ * its verdict, so a `wait` is judged again at once with `wait` withheld.
+ */
 function onFlush(ctx: Ctx, r: ScopeRecord): ScopeRecord {
-  const held = r.batch !== null && r.batch.phase.phase !== 'judging';
-  if (r.buffer.entries.length === 0 && !held) {
+  if (r.buffer.entries.length === 0 && r.batch === null) {
     trace(ctx, { kind: 'stale', scope: r.scope, input: 'flush', why: 'nothing to settle' });
     return r;
   }

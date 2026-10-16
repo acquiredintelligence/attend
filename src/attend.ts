@@ -94,9 +94,10 @@ export interface Attend {
    */
   attach(scope: string, source: Source, options?: { signal?: AbortSignal }): Promise<void>;
   /**
-   * Settle the open window at the runner's next tick, reason `forced`. Persists the request
-   * and resolves at once, like `push`; rejects with `ConflictError` after eight lost
-   * compare-and-swaps.
+   * Settle the open window at the runner's next tick, reason `forced`. A window already in
+   * front of the judge is forced too: a `wait` verdict is judged again at once with `wait`
+   * withheld. Persists the request and resolves at once, like `push`; rejects with
+   * `ConflictError` after eight lost compare-and-swaps.
    */
   flush(scope: string): Promise<void>;
   /** The record as stored, for operators and tests. */

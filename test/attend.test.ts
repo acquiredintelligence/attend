@@ -193,6 +193,22 @@ describe('createAttend', () => {
     await h.stop();
   });
 
+  test('attend.flush() while the judge holds the only window forbids its wait: a wait verdict is judged again at once as forced', async () => {
+    const held = heldJudge();
+    const h = setup([], { judge: held.judge });
+    await h.attend.push('s', [ev('a')]);
+    await h.clock.advance(500);
+    expect(held.calls[0]?.routes.some((r) => r.route === 'wait')).toBe(true);
+    await h.attend.flush('s');
+    held.release({ route: 'wait' });
+    await h.clock.advance(0);
+    expect(held.calls[1]).toMatchObject({ window: { id: ID_A, reason: 'forced', waits: 1, events: [{ id: 'a' }] } });
+    expect(held.calls[1]?.routes.map((r) => r.route)).toEqual(NO_WAIT);
+    expect(h.sink.delivered.map((d) => [d.id, d.route, d.at])).toEqual([[ID_A, 'interrupt', 1500]]);
+    expect(await h.attend.inspect('s')).toMatchObject({ batch: null, buffer: { forcedAt: null }, dueAt: null });
+    await h.stop();
+  });
+
   test('a direct address merged into a waiting window is judged at once with no wait', async () => {
     const held = heldJudge();
     const h = setup([], { judge: held.judge });

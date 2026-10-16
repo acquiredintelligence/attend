@@ -620,6 +620,33 @@ describe('flush', () => {
     expect(judged.record.batch).toMatchObject({ window: { reason: 'forced' }, phase: { phase: 'judging' } });
   });
 
+  test('while judging with nothing buffered it is recorded, and a wait verdict is judged again at once as forced with wait withheld', () => {
+    const flushed = step(cfg, judgingA(), { kind: 'flush' }, 200);
+    expect(flushed.record).toEqual({ ...judgingA(), buffer: { entries: [], dropped: 0, gap: false, forcedAt: 200 } });
+    expect(flushed.effects).toEqual([]);
+    const forced: Window = { ...windowA, reason: 'forced', waits: 1 };
+    const { record, effects } = step(cfg, flushed.record, { kind: 'judged', batchId: ID_A, attempt: 1, judgment: { route: 'wait' } }, 300);
+    expect(record).toEqual({
+      ...base(),
+      seen: ['a'],
+      batch: { window: forced, phase: { phase: 'judging', attempt: 2, failures: 0, leaseUntil: 30_300, offerWait: false } },
+      dueAt: 30_300,
+    });
+    expect(effects).toEqual([
+      { kind: 'trace', trace: { kind: 'waiting', scope, batchId: ID_A, waits: 1, until: 10_300 } },
+      { kind: 'judge', scope, batchId: ID_A, attempt: 2, window: forced, offered: NO_WAIT, recent: [], leaseUntil: 30_300 },
+      { kind: 'trace', trace: { kind: 'judging', scope, batchId: ID_A, attempt: 2, offerWait: false } },
+    ]);
+  });
+
+  test('while judging with nothing buffered, a verdict that routes spends the force', () => {
+    const flushed = step(cfg, judgingA(), { kind: 'flush' }, 200);
+    const { record } = step(cfg, flushed.record, { kind: 'judged', batchId: ID_A, attempt: 1, judgment: { route: 'queue' } }, 300);
+    expect(record.buffer).toEqual({ entries: [], dropped: 0, gap: false, forcedAt: null });
+    expect(record.batch).toBeNull();
+    expect(record.outbox.decisions.map((d) => d.item.id)).toEqual([ID_A]);
+  });
+
   test('judges a retrying batch at the next tick, keeping its attempts and failures', () => {
     const before: ScopeRecord = { ...base(), batch: { window: windowA, phase: { phase: 'retrying', attempt: 2, failures: 2, at: 4700, offerWait: true } } };
     const flushed = step(cfg, before, { kind: 'flush' }, 800);

@@ -117,7 +117,10 @@ export interface Buffer {
   dropped: number;
   /** The source reported lost events while this window was open, or before it opened. */
   gap: boolean;
-  /** Set by `flush`; the window settles at the next tick whatever its deadline says. */
+  /**
+   * Set by `flush`; the window settles at the next tick whatever its deadline says. Set while a
+   * judge call is in flight, it forbids that call's verdict to hold the window.
+   */
   forcedAt: number | null;
 }
 
