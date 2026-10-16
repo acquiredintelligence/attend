@@ -11,8 +11,9 @@ export interface PostgresClient {
 
 export interface PostgresOptions {
   /**
-   * Prepended to the table names. Letters, digits and underscores. Default 'attend_'. To put
-   * the tables in another schema, set the connection's `search_path`.
+   * Prepended to the table names. Lowercase letters, digits and underscores, since Postgres
+   * folds unquoted names to lowercase and the append lock is keyed by the name as written.
+   * Default 'attend_'. To put the tables in another schema, set the connection's `search_path`.
    */
   prefix?: string;
 }
@@ -36,7 +37,6 @@ export async function migrate(client: PostgresClient, options?: PostgresOptions)
     CREATE INDEX IF NOT EXISTS ${log}_scope ON ${log} (scope, position);`);
 }
 
-/** CAS is `UPDATE … WHERE version = $n` checked by `rowCount`; version 0 is an insert that does nothing if the scope exists. */
 export function postgresStore(client: PostgresClient, options?: PostgresOptions): StateStore {
   const { records } = tables(options);
   return {
@@ -105,7 +105,7 @@ export function postgresLog(client: PostgresClient, options?: PostgresOptions & 
 
 function tables(options: PostgresOptions | undefined): { records: string; log: string } {
   const prefix = options?.prefix ?? 'attend_';
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(prefix)) throw new Error(`attend/postgres: prefix must be letters, digits and underscores, got "${prefix}"`);
+  if (!/^[a-z_][a-z0-9_]*$/.test(prefix)) throw new Error(`attend/postgres: prefix must be lowercase letters, digits and underscores, got "${prefix}"`);
   return { records: `${prefix}records`, log: `${prefix}log` };
 }
 

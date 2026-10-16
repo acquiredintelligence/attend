@@ -25,7 +25,6 @@ export interface SqliteOptions {
   prefix?: string;
 }
 
-/** CAS is `UPDATE … WHERE version = ?` checked by `changes`; version 0 is an insert that does nothing if the scope exists. */
 export function sqliteStore(db: SqliteDatabase, options?: SqliteOptions): StateStore {
   const table = `${prefix(options)}records`;
   db.exec(`CREATE TABLE IF NOT EXISTS ${table} (scope TEXT PRIMARY KEY, version INTEGER NOT NULL, due_at REAL, record TEXT NOT NULL);

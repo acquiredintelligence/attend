@@ -113,8 +113,10 @@ describe('postgresStore across connections', () => {
     expect(await postgresStore(await pool(), { prefix }).put(record('s', 1, null), 0)).toBe('ok');
   });
 
-  test('a prefix that is not a plain identifier is refused', async () => {
-    await expect(migrate(await pool(), { prefix: 'x; DROP TABLE y; --' })).rejects.toThrow('attend/postgres: prefix must be letters, digits and underscores');
+  test('a prefix that is not a lowercase identifier is refused', async () => {
+    await expect(migrate(await pool(), { prefix: 'x; DROP TABLE y; --' })).rejects.toThrow('attend/postgres: prefix must be lowercase letters, digits and underscores');
+    const client = await pool();
+    expect(() => postgresLog(client, { prefix: 'Attend_' })).toThrow('attend/postgres: prefix must be lowercase letters, digits and underscores, got "Attend_"');
   });
 });
 
