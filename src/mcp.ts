@@ -291,6 +291,7 @@ export function mcpEventsSource(client: Client, options: McpEventsOptions): Sour
   async function listedDelivery(signal: AbortSignal): Promise<Delivery | null> {
     let cursor: string | undefined;
     do {
+      if (!client.transport) throw closedClient(undefined);
       let page: z.output<typeof ListResult>;
       try {
         page = await client.request({ method: 'events/list', params: cursor === undefined ? {} : { cursor } }, ListResult, { signal });
@@ -309,6 +310,7 @@ export function mcpEventsSource(client: Client, options: McpEventsOptions): Sour
     while (!signal.aborted) {
       const params: typeof base & { cursor: string | null; maxEvents?: number } = { ...base, cursor: position.cursor };
       if (options.maxEvents !== undefined) params.maxEvents = options.maxEvents;
+      if (!client.transport) throw closedClient(undefined);
       let result: z.output<typeof PollResult>;
       try {
         result = await client.request({ method: 'events/poll', params }, PollResult, { signal });
@@ -329,7 +331,7 @@ export function mcpEventsSource(client: Client, options: McpEventsOptions): Sour
   }
 
   async function runStream(cursor: string | null, deliver: (batch: SourceBatch) => Promise<void>, signal: AbortSignal): Promise<Outcome> {
-    if (!client.transport) throw new PermanentError('attend/mcp: the Client is not connected; connect it and attach again');
+    if (!client.transport) throw closedClient(undefined);
     const demux = demuxFor(client);
     const controller = new AbortController();
     const items = inbox(maxBuffered, () => controller.abort(new Error('attend: stream inbox overflowed')));
@@ -473,8 +475,13 @@ function classify(error: unknown): Error {
     case 'retry':
       return error instanceof Error ? error : new Error(messageOf(error));
     case 'closed':
-      return new PermanentError('attend/mcp: the Client closed; reconnect it and attach again', { cause: error });
+      return closedClient(error);
     default:
       return new PermanentError(`attend/mcp: ${messageOf(error)}`, { cause: error });
   }
+}
+
+/** The SDK fails an in-flight request with -32000 on close, but a later one with a bare, code-less "Not connected"; both get this. */
+function closedClient(cause: unknown): PermanentError {
+  return new PermanentError('attend/mcp: the Client closed; reconnect it and attach again', cause === undefined ? undefined : { cause });
 }
