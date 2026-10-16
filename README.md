@@ -53,11 +53,12 @@ Raw events never cross MCP, so the MCP hop carries a few decisions a minute and 
 ### attend serve
 
 ```sh
+npm install attend @modelcontextprotocol/server zod
 npx attend serve --store sqlite:attend.db --judge jev --kinds kinds.json
 # attend serving http://127.0.0.1:8787  (ingest POST http://127.0.0.1:8787/v1/ingest, MCP http://127.0.0.1:8787/mcp)
 ```
 
-One command, no image. Every flag has an environment variable, and a flag wins.
+One command, no image. The MCP server package is an optional peer of `attend`, so the embedded engine stays dependency-free; `attend serve` exits with an error naming it when it is missing. Every flag has an environment variable, and a flag wins.
 
 | Flag | Env | Default | |
 |---|---|---|---|

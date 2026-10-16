@@ -125,6 +125,7 @@ With `exactOptionalPropertyTypes` on, SDK 1.32's `StreamableHTTPClientTransport`
 `npx attend serve` runs attend as a sidecar. Events go in as NDJSON on `POST /v1/ingest`, and judged decisions come out on `/mcp` as MCP Events. Raw events never cross MCP.
 
 ```sh
+npm install attend @modelcontextprotocol/server zod
 npx attend serve --store sqlite:attend.db --judge jev --kinds kinds.json --act-threshold 0.4
 ```
 
