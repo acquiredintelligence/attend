@@ -3,8 +3,9 @@
  * `events/stream`) over `InMemoryTransport`, scriptable from tests: append occurrences,
  * force `truncated`, hold and release a stream's activation, terminate a stream, send an
  * error notification, send a heartbeat, and answer the next request with an error code.
- * Cursors are the count of occurrences before the position, as strings. Errors go out as a
- * plain `Error` with a `code`, so the wire message is exactly what the test scripted.
+ * Cursors are the count of occurrences before the position, as strings. An event with
+ * `replay: false` streams without cursors, so every stream of it starts from now. Errors go
+ * out as a plain `Error` with a `code`, so the wire message is exactly what the test scripted.
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -20,6 +21,7 @@ type Occurrence = Record<string, unknown>;
 export interface EventSpec {
   name: string;
   delivery: ('poll' | 'push' | 'webhook')[];
+  replay?: false;
 }
 
 export interface McpEventsTestServer {
@@ -61,6 +63,7 @@ interface LiveStream {
   id: RequestId;
   /** Index of the next occurrence to send. */
   next: number;
+  replay: boolean;
   pumping: boolean;
   send(kind: string, params: Record<string, unknown>): Promise<void>;
   end(): void;
@@ -111,7 +114,7 @@ export function mcpEventsTestServer(events: EventSpec[]): McpEventsTestServer {
       while (stream.next < log.length) {
         const occurrence = log[stream.next];
         stream.next += 1;
-        await stream.send('event', { ...occurrence, cursor: String(stream.next) });
+        await stream.send('event', stream.replay ? { ...occurrence, cursor: String(stream.next) } : { ...occurrence });
       }
     } finally {
       stream.pumping = false;
@@ -140,12 +143,14 @@ export function mcpEventsTestServer(events: EventSpec[]): McpEventsTestServer {
   server.setRequestHandler(StreamRequest, async (request, extra) => {
     admit('events/stream', request.params);
     const name = request.params.name;
-    logOf(name);
+    const log = logOf(name);
+    const replay = events.find((e) => e.name === name)?.replay !== false;
     const meta = { [SUBSCRIPTION_KEY]: extra.requestId };
     const stream: LiveStream = {
       name,
       id: extra.requestId,
-      next: index(request.params.cursor),
+      next: replay ? index(request.params.cursor) : log.length,
+      replay,
       pumping: false,
       send: (kind, params) => extra.sendNotification({ method: `notifications/events/${kind}`, params: { ...params, _meta: meta } }),
       end: () => undefined,
@@ -157,7 +162,7 @@ export function mcpEventsTestServer(events: EventSpec[]): McpEventsTestServer {
     const gate = held.get(name);
     if (gate) await new Promise<void>((resolve) => gate.push(resolve));
     streams.add(stream);
-    await stream.send('active', { cursor: String(stream.next), truncated: takeTruncated() });
+    await stream.send('active', replay ? { cursor: String(stream.next), truncated: takeTruncated() } : { truncated: takeTruncated() });
     await pump(stream);
     await done;
     streams.delete(stream);

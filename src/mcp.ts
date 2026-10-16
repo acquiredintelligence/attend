@@ -24,8 +24,15 @@ export interface McpEventsOptions {
   maxEvents?: number;
   /** Poll interval when the server sends no `nextPollMs`. Default 10000. */
   pollMs?: number;
+  /**
+   * How many stream notifications may wait while `emit` persists an earlier one. Past that, the
+   * source drops what it holds, reports `overflow`, and reopens the stream from the last
+   * committed cursor, so the server sends them again. Dropped events are lost only for an event
+   * type the server cannot replay from a cursor. Default 1000.
+   */
+  maxBuffered?: number;
   clock?: Clock;
-  /** Everything the source survives: a server error notification, a skipped payload, a retry. */
+  /** Everything the source survives: a server error notification, a skipped payload, a retry, an overflow. */
   onError?: (error: McpEventsError) => void;
 }
 
@@ -35,7 +42,9 @@ export type McpEventsError =
   /** A payload that failed validation and was skipped, with its cursor kept. */
   | { kind: 'malformed'; method: string; message: string; payload: unknown }
   /** A request failed with a retryable error; the source retries after `delayMs`. */
-  | { kind: 'retry'; message: string; code: number | null; delayMs: number };
+  | { kind: 'retry'; message: string; code: number | null; delayMs: number }
+  /** `buffered` notifications were waiting on `emit`; the stream reopens from the committed cursor. */
+  | { kind: 'overflow'; buffered: number };
 
 type Delivery = 'stream' | 'poll';
 type Policy = 'permanent' | 'retry' | 'fallback';
@@ -85,11 +94,12 @@ const envelope = <M extends string>(method: M) => z.object({ method: z.literal(m
 
 // ─── the per-Client demux ────────────────────────────────────────────────────
 
-type Item = { kind: StreamMethod; params: unknown } | { kind: 'done' } | { kind: 'failed'; error: unknown };
+type Note = { kind: StreamMethod; params: unknown };
+type Item = Note | { kind: 'done' } | { kind: 'failed'; error: unknown } | { kind: 'overflow'; buffered: number };
 
 interface Subscription {
   id: string | null;
-  push(item: Item): void;
+  push(note: Note): void;
 }
 
 interface Demux {
@@ -145,15 +155,34 @@ function isStreamRequest(message: JSONRPCMessage): message is JSONRPCMessage & {
   return 'id' in message && 'method' in message && message.method === 'events/stream' && typeof message.params === 'object' && message.params !== null;
 }
 
-function inbox<T>(): { push(item: T): void; next(): Promise<T> } {
-  const items: T[] = [];
+/**
+ * The queue between the SDK's notification handlers and the stream loop, which takes the next
+ * item only once `emit` resolves. A notification past `max` empties it, drops every later one,
+ * calls `onOverflow`, and leaves `overflow` as the next item. The request's outcome always queues.
+ */
+function inbox(max: number, onOverflow: () => void): { push(note: Note): void; close(item: Item): void; next(): Promise<Item> } {
+  let items: Item[] = [];
+  let overflowed = false;
   let wake: (() => void) | null = null;
+  const enqueue = (item: Item) => {
+    items.push(item);
+    wake?.();
+    wake = null;
+  };
   return {
-    push(item) {
-      items.push(item);
-      wake?.();
-      wake = null;
+    push(note) {
+      if (overflowed) return;
+      if (items.length < max) {
+        enqueue(note);
+        return;
+      }
+      overflowed = true;
+      const buffered = items.length;
+      items = [];
+      enqueue({ kind: 'overflow', buffered });
+      onOverflow();
     },
+    close: enqueue,
     async next() {
       for (;;) {
         const item = items.shift();
@@ -174,13 +203,15 @@ type Outcome = { kind: 'ended' } | { kind: 'failed'; error: unknown };
  * committed one. `eventId` becomes `Event.id`, so the record's seen ring dedups redelivery.
  * `truncated` becomes the batch's `truncated`, which marks the window as a gap.
  *
- * The subscription runs until `signal` aborts. A terminated stream reopens from the last
- * committed cursor; a retryable error backs off through the core's retry ladder; a
- * permanent one rejects, and `attach` rejects with it.
+ * The subscription runs until `signal` aborts. A terminated or overflowed stream reopens
+ * from the last committed cursor; a retryable error backs off through the core's retry
+ * ladder; a permanent one rejects, and `attach` rejects with it.
  */
 export function mcpEventsSource(client: Client, options: McpEventsOptions): Source {
   const mode = options.mode ?? 'auto';
   const pollMs = options.pollMs ?? 10_000;
+  const maxBuffered = options.maxBuffered ?? 1000;
+  if (!Number.isInteger(maxBuffered) || maxBuffered < 1) throw new RangeError(`attend/mcp: maxBuffered must be a positive integer, got ${maxBuffered}`);
   const clock = options.clock ?? systemClock();
   const report = options.onError ?? (() => undefined);
   const backoff = DEFAULT_POLICY.retryBackoffMs;
@@ -269,10 +300,10 @@ export function mcpEventsSource(client: Client, options: McpEventsOptions): Sour
 
   async function runStream(cursor: string | null, deliver: (batch: SourceBatch) => Promise<void>, signal: AbortSignal): Promise<Outcome> {
     const demux = demuxFor(client);
-    const items = inbox<Item>();
+    const controller = new AbortController();
+    const items = inbox(maxBuffered, () => controller.abort(new Error('attend: stream inbox overflowed')));
     const subscription: Subscription = { id: null, push: items.push };
     const params = { ...base, cursor };
-    const controller = new AbortController();
     const onAbort = () => controller.abort(signal.reason);
     signal.addEventListener('abort', onAbort, { once: true });
     let settled = false;
@@ -280,11 +311,11 @@ export function mcpEventsSource(client: Client, options: McpEventsOptions): Sour
     client.request({ method: 'events/stream', params }, StreamResult, { signal: controller.signal, timeout: STREAM_TIMEOUT_MS }).then(
       () => {
         settled = true;
-        items.push({ kind: 'done' });
+        items.close({ kind: 'done' });
       },
       (error: unknown) => {
         settled = true;
-        items.push({ kind: 'failed', error });
+        items.close({ kind: 'failed', error });
       },
     );
     try {
@@ -296,6 +327,9 @@ export function mcpEventsSource(client: Client, options: McpEventsOptions): Sour
             return { kind: 'ended' };
           case 'failed':
             return signal.aborted ? { kind: 'ended' } : { kind: 'failed', error: item.error };
+          case 'overflow':
+            report({ kind: 'overflow', buffered: item.buffered });
+            return { kind: 'ended' };
           case 'active': {
             const active = parsePayload(Active, item.params, 'notifications/events/active');
             if (active) await deliver(batch([], active.cursor, active.truncated));

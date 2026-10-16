@@ -57,6 +57,35 @@ function setup(script: ScriptedAnswer[] = [{ route: 'queue' }], store: StateStor
 
 const ALPHA: EventSpec[] = [{ name: 'alpha', delivery: ['poll', 'push'] }];
 
+/** A store whose puts wait while held, the way a slow database stalls the source's emit. */
+function heldStore(): { store: StateStore; hold(): void; release(): void } {
+  const inner = memoryStore();
+  let gate: Promise<void> | null = null;
+  let open: () => void = () => undefined;
+  return {
+    store: {
+      get: (scope) => inner.get(scope),
+      async put(record, expectedVersion) {
+        if (gate) await gate;
+        return inner.put(record, expectedVersion);
+      },
+      due: (now, limit) => inner.due(now, limit),
+      remove: (scope) => inner.remove(scope),
+    },
+    hold() {
+      gate = new Promise((resolve) => {
+        open = () => resolve();
+      });
+    },
+    release() {
+      gate = null;
+      open();
+    },
+  };
+}
+
+const deliveredIds = (h: ReturnType<typeof setup>) => h.delivered().flatMap((d) => d.ids);
+
 describe('mcpEventsSource over a real Client and Server', () => {
   test('poll mode: events reach the sink as decisions and the cursor goes back to the server', async () => {
     const server = mcpEventsTestServer(ALPHA);
@@ -347,5 +376,66 @@ describe('mcpEventsSource over a real Client and Server', () => {
     await h.clock.advance(500);
     expect(h.delivered()).toEqual([{ scope: 's', ids: ['e1', 'e3'], gap: false }]);
     await h.stop();
+  });
+
+  test('past maxBuffered the stream closes, reopens from the committed cursor, and every event reaches the sink once', async () => {
+    const server = mcpEventsTestServer(ALPHA);
+    const client = await server.connect();
+    const slow = heldStore();
+    const h = setup([{ route: 'queue' }], slow.store);
+    void h.attach('s', client, { mode: 'stream', maxBuffered: 2 });
+    await settle();
+    slow.hold();
+    await server.append('alpha', occ('e1'), occ('e2'), occ('e3'), occ('e4'), occ('e5'), occ('e6'));
+    await settle();
+    expect(server.liveStreams('alpha')).toEqual([]);
+
+    slow.release();
+    await settle();
+    expect(h.errors).toEqual([{ kind: 'overflow', buffered: 2 }]);
+    expect((await h.store.get('s'))?.cursor).toBe('1');
+    await h.clock.advance(1000);
+    expect(server.requests.filter((r) => r.method === 'events/stream').map((r) => r.params)).toEqual([
+      { name: 'alpha', cursor: null },
+      { name: 'alpha', cursor: '1' },
+    ]);
+
+    for (let round = 0; round < 10 && deliveredIds(h).length < 6; round += 1) await h.clock.advance(1000);
+    expect(deliveredIds(h)).toEqual(['e1', 'e2', 'e3', 'e4', 'e5', 'e6']);
+    expect(h.errors.filter((e) => !(e.kind === 'overflow' && e.buffered === 2))).toEqual([]);
+    const ingested = h.traces.flatMap((t) => (t.kind === 'ingested' ? [t] : []));
+    expect({ count: ingested.reduce((n, t) => n + t.count, 0), duplicates: ingested.reduce((n, t) => n + t.duplicates, 0) }).toEqual({ count: 6, duplicates: 0 });
+    await h.stop();
+  });
+
+  test('without cursors an overflow still reports and reopens, and only the dropped events are lost', async () => {
+    const server = mcpEventsTestServer([{ name: 'alpha', delivery: ['push'], replay: false }]);
+    const client = await server.connect();
+    const slow = heldStore();
+    const h = setup([{ route: 'queue' }], slow.store);
+    void h.attach('s', client, { mode: 'stream', maxBuffered: 2 });
+    await settle();
+    slow.hold();
+    await server.append('alpha', occ('e1'), occ('e2'), occ('e3'), occ('e4'));
+    await settle();
+    slow.release();
+    await settle();
+    expect(h.errors).toEqual([{ kind: 'overflow', buffered: 2 }]);
+    await h.clock.advance(1000);
+    expect(server.requests.filter((r) => r.method === 'events/stream').map((r) => r.params)).toEqual([
+      { name: 'alpha', cursor: null },
+      { name: 'alpha', cursor: null },
+    ]);
+    await server.append('alpha', occ('e5'));
+    await h.clock.advance(1000);
+    expect(deliveredIds(h)).toEqual(['e1', 'e5']);
+    await h.stop();
+  });
+
+  test('maxBuffered below one is rejected when the source is made', async () => {
+    const server = mcpEventsTestServer(ALPHA);
+    const client = await server.connect();
+    expect(() => mcpEventsSource(client, { name: 'alpha', maxBuffered: 0 })).toThrow('attend/mcp: maxBuffered must be a positive integer, got 0');
+    expect(mcpEventsSource(client, { name: 'alpha', maxBuffered: 1 })).toEqual({ subscribe: expect.any(Function) });
   });
 });
