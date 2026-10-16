@@ -1,0 +1,45 @@
+name: conformance
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # modelcontextprotocol/conformance pull request 521 (MCP Events suite), head at the time of writing.
+  CONFORMANCE_REV: 4a73fc65fcdc49cafddf6b33a8449fc23635e8e4
+
+jobs:
+  events:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: attend
+          POSTGRES_DB: attend
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 2s --health-retries 15
+    env:
+      ATTEND_POSTGRES_URL: postgres://postgres:attend@localhost:5432/attend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - uses: actions/checkout@v4
+        with:
+          repository: modelcontextprotocol/conformance
+          ref: ${{ env.CONFORMANCE_REV }}
+          path: conformance
+      - run: npm ci && npm run build
+        working-directory: conformance
+      - name: MCP Events conformance suite against attend serve
+        run: node test/interop/conformance.mjs conformance
+      - name: Independent client resuming from a cursor
+        run: pnpm exec vitest run -c test/interop/vitest.config.ts
