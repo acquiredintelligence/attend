@@ -21,23 +21,71 @@
   "engines": {
     "node": ">=22.5"
   },
+  "packageManager": "pnpm@12.8.1",
+  "sideEffects": false,
   "files": [
     "dist",
     "skills",
     "README.md",
     "LICENSE"
   ],
-  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./sqlite": {
+      "types": "./dist/sqlite.d.ts",
+      "default": "./dist/sqlite.js"
+    },
+    "./postgres": {
+      "types": "./dist/postgres.d.ts",
+      "default": "./dist/postgres.js"
+    },
+    "./redis": {
+      "types": "./dist/redis.d.ts",
+      "default": "./dist/redis.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp.d.ts",
+      "default": "./dist/mcp.js"
+    },
+    "./llm": {
+      "types": "./dist/llm.d.ts",
+      "default": "./dist/llm.js"
+    },
+    "./decisions": {
+      "types": "./dist/decisions.d.ts",
+      "default": "./dist/decisions.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "default": "./dist/testing.js"
+    },
+    "./package.json": "./package.json"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "check": "pnpm typecheck && pnpm test && pnpm build"
   },
-  "devDependencies": {
-    "@types/node": "^22.20.5",
-    "typescript": "7.0.2",
-    "vitest": "5.0.5"
+  "peerDependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0"
   },
-  "packageManager": "pnpm@12.8.1"
+  "peerDependenciesMeta": {
+    "@modelcontextprotocol/sdk": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "@types/node": "^22.20.5",
+    "@types/pg": "8.23.1",
+    "pg": "8.23.1",
+    "redis": "6.3.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5",
+    "zod": "^4.6.7"
+  }
 }
