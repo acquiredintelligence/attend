@@ -15,6 +15,7 @@ import type {
   Effect,
   Event,
   EventLog,
+  EventsInput,
   Input,
   Judge,
   JudgeEffect,
@@ -87,6 +88,11 @@ export interface Attend {
    * once persisted; never judges or delivers (the runner does, via `dueAt`). Safe from any
    * replica; idempotent on event ids. Rejects with `OutboxFullError` when either outbox lane
    * is at its cap, and with `ConflictError` after eight lost compare-and-swaps.
+   *
+   * Pushes that queue while the scope's write is in flight are ingested together in one write,
+   * and each resolves once that write has landed. `memoryStore` resolves without leaving the
+   * microtask queue, so a loop that awaits only `push` never lets the runner's timers fire and
+   * the open window grows until the loop yields to the event loop.
    */
   push(scope: string, events: Event[]): Promise<void>;
   /**
@@ -139,15 +145,41 @@ export function createAttend(config: AttendConfig): Attend {
     }
   }
 
-  /** Per-scope inputs are serialized in this process, so one process never races itself. */
+  /** The `events` input at the tail of each lane that has not started: later events from the same source join it. */
+  const ingests = new Map<string, { input: EventsInput; done: Promise<void> }>();
+
+  /**
+   * Per-scope inputs are serialized in this process, so one process never races itself.
+   * Events that queue behind a write in flight merge into one step and one write, and every
+   * caller's promise is that write's. Any other input closes the merge, so the lane stays in
+   * arrival order.
+   */
   function apply(scope: string, input: Input): Promise<void> {
+    const open = ingests.get(scope);
+    if (open && input.kind === 'events' && input.source === open.input.source) {
+      merge(open.input, input);
+      return open.done;
+    }
+    ingests.delete(scope);
+    const queued: Input = input.kind === 'events' ? { ...input, events: [...input.events] } : input;
     const previous = lanes.get(scope) ?? Promise.resolve();
-    const next = previous.then(() => applyNow(scope, input));
+    const next = previous.then(() => {
+      if (ingests.get(scope)?.input === queued) ingests.delete(scope);
+      return applyNow(scope, queued);
+    });
+    if (queued.kind === 'events') ingests.set(scope, { input: queued, done: next });
     const settled = next.catch(() => undefined).finally(() => {
       if (lanes.get(scope) === settled) lanes.delete(scope);
     });
     lanes.set(scope, settled);
     return next;
+  }
+
+  /** Later events after earlier ones, the last cursor, and a gap if any batch reported one. */
+  function merge(open: EventsInput, input: EventsInput): void {
+    for (const event of input.events) open.events.push(event);
+    if (input.cursor !== undefined) open.cursor = input.cursor;
+    if (input.truncated) open.truncated = true;
   }
 
   async function applyNow(scope: string, input: Input): Promise<void> {

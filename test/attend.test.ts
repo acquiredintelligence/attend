@@ -762,6 +762,71 @@ describe('createAttend', () => {
     await done;
   });
 
+  test('pushes that queue behind a write in flight land in one write, in order', async () => {
+    const held = heldStore();
+    let puts = 0;
+    const store: StateStore = { ...held.store, put: (r, v) => (puts += 1, held.store.put(r, v)) };
+    const { attend, traces, stop } = setup([{ route: 'skip' }], { store });
+    held.hold();
+    const first = attend.push('s', [ev('a')]);
+    await drain();
+    const queued = Promise.all([attend.push('s', [ev('b'), ev('c')]), attend.push('s', [ev('d')])]);
+    await drain();
+    expect(puts).toBe(1);
+    held.release();
+    await first;
+    await queued;
+    expect(puts).toBe(2);
+    expect((await store.get('s'))?.buffer.entries.map((e) => e.id)).toEqual(['a', 'b', 'c', 'd']);
+    expect(traces.filter((t) => t.kind === 'ingested')).toEqual([
+      { kind: 'ingested', scope: 's', count: 1, duplicates: 0 },
+      { kind: 'ingested', scope: 's', count: 3, duplicates: 0 },
+    ]);
+    await stop();
+  });
+
+  test('a flush between two pushes keeps them in separate writes, in arrival order', async () => {
+    const inner = memoryStore();
+    let puts = 0;
+    const store: StateStore = { ...inner, put: (r, v) => (puts += 1, inner.put(r, v)) };
+    const { attend, traces, stop } = setup([{ route: 'skip' }], { store });
+    await Promise.all([attend.push('s', [ev('a')]), attend.flush('s'), attend.push('s', [ev('b')])]);
+    expect(puts).toBe(3);
+    expect(traces.map((t) => t.kind)).toEqual(['ingested', 'ingested']);
+    expect((await store.get('s'))?.buffer).toMatchObject({ forcedAt: 1000, entries: [{ id: 'a' }, { id: 'b' }] });
+    await stop();
+  });
+
+  test('a merged write that fails rejects every push it carried', async () => {
+    const inner = memoryStore();
+    const store: StateStore = { ...inner, put: () => Promise.reject(new Error('disk full')) };
+    const { attend, stop } = setup([{ route: 'skip' }], { store });
+    const first = attend.push('s', [ev('a')]);
+    const second = attend.push('s', [ev('b')]);
+    await expect(first).rejects.toThrow('disk full');
+    await expect(second).rejects.toThrow('disk full');
+    expect(await inner.get('s')).toBeNull();
+    await stop();
+  });
+
+  test('batches a source emits without awaiting merge into one write with the last cursor and the gap kept', async () => {
+    const inner = memoryStore();
+    let puts = 0;
+    const store: StateStore = { ...inner, put: (r, v) => (puts += 1, inner.put(r, v)) };
+    const { attend, traces, stop } = setup([{ route: 'skip' }], { store });
+    const source: Source = {
+      key: 'src',
+      async subscribe(_cursor, emit) {
+        await Promise.all([emit({ events: [ev('a')], cursor: '1', truncated: true }), emit({ events: [ev('b')], cursor: '2' }), emit({ events: [ev('c')], cursor: '3' })]);
+      },
+    };
+    await attend.attach('s', source);
+    expect(puts).toBe(1);
+    expect(await store.get('s')).toMatchObject({ cursors: { src: '3' }, buffer: { gap: true, entries: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] } });
+    expect(traces.filter((t) => t.kind === 'gap')).toEqual([{ kind: 'gap', scope: 's', source: 'src', cursor: '3' }]);
+    await stop();
+  });
+
   test('a due tick fires under a steady stream of writes faster than its timer', async () => {
     const judge = scriptedJudge([{ route: 'skip' }]);
     const attend = createAttend({ store: memoryStore(), judge, sink: recordingSink(), kind: () => 'continuous', deadLetter: () => undefined, settle: { maxEvents: 10 } });
