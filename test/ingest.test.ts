@@ -339,7 +339,7 @@ test.each([
 const cycle: Record<string, unknown> = {};
 cycle.self = cycle;
 test.each([
-  ['missing data', [{ id: 'a', at: 0, name: 'close' }]],
+  ['missing name', [{ id: 'a', at: 0, data: {} }]],
   ['null event', [null]],
   ['sparse events', Array(1)],
   ['non-array events', {}],

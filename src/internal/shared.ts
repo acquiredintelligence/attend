@@ -112,21 +112,23 @@ function isPlainField(value: unknown): boolean {
  * An event the caller cannot reach: a plain JSON value, the same on every store. Each property is
  * read once, so a getter or Proxy cannot hand the stores a value the checks never saw.
  */
-export function copyEvent(event: Event): Event {
+export function copyEvent(event: Event, defaultData = false): Event {
   if (typeof event === 'object' && event !== null && getPrototypeOf(event) === objectPrototype && typeof (event as { toJSON?: unknown }).toJSON !== 'function') {
     const fields: Record<string, unknown> = { ...event };
+    if (defaultData && fields.data === undefined) fields.data = {};
     if (hasOwn(fields, 'data') && getOwnPropertySymbols(fields).length === 0 && plainFields(fields)) {
       const data = toJson(fields.data, 'data', 1);
       if (!isRecord(data)) throw new TypeError('attend: event data must be a JSON object');
       fields.data = data;
       return fields as unknown as Event;
     }
-    return checkedEvent(toJson(fields, '', 0));
+    return checkedEvent(toJson(fields, '', 0), defaultData);
   }
-  return checkedEvent(toJson(event, '', 0));
+  return checkedEvent(toJson(event, '', 0), defaultData);
 }
 
-function checkedEvent(copied: JsonValue | undefined): Event {
+function checkedEvent(copied: JsonValue | undefined, defaultData: boolean): Event {
+  if (defaultData && isRecord(copied) && copied.data === undefined) copied.data = {};
   if (!isRecord(copied) || !isRecord(copied.data)) throw new TypeError('attend: event data must be a JSON object');
   return copied as unknown as Event;
 }

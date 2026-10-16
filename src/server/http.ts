@@ -172,7 +172,7 @@ export function httpHandler(context: ServerContext, install: EventsServer['insta
       if (!legacy) {
         const owner = principal;
         const handler = sdk.createMcpHandler(() => {
-          const server = options.newServer?.() ?? new sdk.Server({ name: context.options.name ?? 'attend', version: context.options.version ?? '0.1.0' }, { capabilities: {} });
+          const server = options.newServer?.() ?? new sdk.Server({ name: context.options.name ?? 'attend', version: context.options.version ?? '0.2.0' }, { capabilities: {} });
           install(server, { principal: owner });
           // The public seam omits SDK methods that its factory also requires.
           return server as InstanceType<Sdk['Server']> | InstanceType<Sdk['McpServer']>;
@@ -186,7 +186,7 @@ export function httpHandler(context: ServerContext, install: EventsServer['insta
         const newId = sessions.open();
         if (!newId) { json(res, 503, { jsonrpc: '2.0', id, error: eventsError('ResourceExhausted', 'Session quota exceeded', { limit: 'sessions', max: options.sessions?.max ?? 10_000 }).toJSON() }); return; }
         try {
-          const server = options.newServer?.() ?? new sdk.Server({ name: context.options.name ?? 'attend', version: context.options.version ?? '0.1.0' }, { capabilities: {} });
+          const server = options.newServer?.() ?? new sdk.Server({ name: context.options.name ?? 'attend', version: context.options.version ?? '0.2.0' }, { capabilities: {} });
           const transport = new sdk.WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: () => newId, onsessionclosed: () => sessions.close(newId) });
           install(server, { principal });
           session = { principal, transport, abort: new AbortController(), async close() { await transport.close(); if ('close' in server && typeof server.close === 'function') await server.close(); } };

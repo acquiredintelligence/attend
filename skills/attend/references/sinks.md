@@ -70,4 +70,4 @@ Each `Host` method records `key` and returns early when it has seen the key befo
 
 ## Dead letters
 
-`deadLetter(letter, signal)` is required. A `DeadLetter` has `stage` (`judge` or `sink`), `window`, `decision` (null when the judge gave up), `message`, `permanent` and `attempts`. attend retries the handler with capped backoff until it succeeds and never drops a letter. Write the letter to durable storage, keyed on its `id`, and alert on it from there.
+`deadLetter(letter, signal)` is optional. Without it, each dead letter becomes a final row in the decision log, readable with `attend.decisions({ kinds: ['deadLetter'] }, …)` and as `attention.deadLetter` over MCP. Pass a handler when the app has a place to put them. A `DeadLetter` has `stage` (`judge` or `sink`), `window`, `decision` (null when the judge gave up), `message`, `permanent` and `attempts`. attend retries the handler with capped backoff until it succeeds and never drops a letter. Write the letter to durable storage, keyed on its `id`, and alert on it from there.

@@ -1,17 +1,12 @@
-import { createAttend, defaultNotice, memoryStore, routes, type Decision } from '@acquiredintelligence/attend';
-
-const tell = (decision: Decision) => console.log(`[${decision.route}]\n${defaultNotice(decision)}`);
+import { createAttend, defaultNotice } from '@acquiredintelligence/attend';
 
 const attend = createAttend({
-  store: memoryStore(),
-  kind: (event) => (event.name === 'user.message' ? 'flush' : 'consequence'),
+  kind: { 'user.message': 'flush', 'build.failed': 'closing' },
   judge: async ({ window }) => ({ route: window.reason === 'flush' ? 'interrupt' : 'note' }),
-  sink: routes({ interrupt: tell, queue: tell, note: tell, ask: tell }),
-  deadLetter: (letter) => console.error('dead letter', letter.id, letter.message),
+  sink: (decision) => console.log(`[${decision.route}]\n${defaultNotice(decision)}`),
 });
 
-void attend.run({ signal: AbortSignal.timeout(1000) });
-await attend.push('session-1', [
-  { id: 'e1', at: Date.now(), name: 'build.failed', data: {}, text: 'Build 4521 failed: 1 test' },
-  { id: 'e2', at: Date.now(), name: 'user.message', data: {}, text: 'can you look?' },
-]);
+void attend.run();
+await attend.push('session-1', { name: 'build.failed', text: 'Build 4521 failed: 1 test' });
+await attend.push('session-1', { name: 'user.message', text: 'can you look?' });
+setTimeout(() => void attend.stop(), 1000);
