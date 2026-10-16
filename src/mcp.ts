@@ -10,7 +10,8 @@
  *
  * When the Client's transport closes, the SDK fails every open request with
  * `ConnectionClosed` (-32000). The source turns that into a `PermanentError`, so `attach`
- * rejects: the app must reconnect the Client (or make a new one) and attach again.
+ * rejects: the app must reconnect the Client (or make a new one) and attach again. A source
+ * waiting between polls or before a reopen is woken by the close and rejects the same way.
  */
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
@@ -58,8 +59,13 @@ export type McpEventsError =
   | { kind: 'stream'; code: number; message: string; data: unknown }
   /** A payload that failed validation and was skipped, with its cursor kept. */
   | { kind: 'malformed'; method: string; message: string; payload: unknown }
-  /** `buffered` notifications were waiting on `emit`; they are persisted, then the stream reopens from the committed cursor. */
-  | { kind: 'overflow'; buffered: number }
+  /**
+   * `buffered` notifications were waiting on `emit`; they are persisted, then the stream reopens
+   * from the committed cursor after `reopenMs`: at once when the overflowed stream moved that
+   * cursor, else after the reopen pause, since a server that cannot resume from a cursor would
+   * send the same backlog again.
+   */
+  | { kind: 'overflow'; buffered: number; reopenMs: number }
   /** Nothing arrived for `idleTimeoutMs`; the stream reopens from the committed cursor. */
   | { kind: 'idle' }
   /** A notification on this Client named a subscription that no live stream here opened. */
@@ -81,7 +87,13 @@ const ERROR_POLICY: Readonly<Record<number, Policy>> = {
 
 /** The longest delay `setTimeout` honours; past it the SDK's timeout fires at once. */
 const STREAM_TIMEOUT_MS = 2 ** 31 - 1;
-/** Pause before reopening a stream the server ended or the source closed, so a server that ends every stream at once never spins. */
+/**
+ * Pause before reopening a stream the server ended or the source found idle, so a server that
+ * ends every stream at once never spins. An overflow that moved the committed cursor reopens at
+ * once: the source closed that stream itself, and the backlog behind it is real. One that did
+ * not pauses too, or a server that sends no cursors would flood the reopened stream with the
+ * same backlog at once.
+ */
 const REOPEN_MS = 1000;
 /** Events already waiting in the inbox fold into one `emit`, so a slow store costs one write per batch rather than per event. */
 const EMIT_BATCH = 500;
@@ -140,6 +152,29 @@ interface Demux {
 
 const demuxes = new WeakMap<Client, Demux>();
 const wrappedTransports = new WeakSet<Transport>();
+const closings = new WeakMap<Transport, AbortSignal>();
+
+/**
+ * Aborts when the connection `transport` carries right now closes. The SDK sets
+ * `transport.onclose` at connect and clears `client.transport` inside it, so a wrapper
+ * installed after connect fires once the Client already reads as closed. A signal that has
+ * fired belongs to a connection that is gone; a live transport that still maps to one has been
+ * reconnected since, and gets a fresh signal around the new connection's `onclose`.
+ */
+function closingOf(transport: Transport): AbortSignal {
+  let signal = closings.get(transport);
+  if (!signal || signal.aborted) {
+    const controller = new AbortController();
+    const onclose = transport.onclose;
+    transport.onclose = () => {
+      onclose?.();
+      controller.abort();
+    };
+    signal = controller.signal;
+    closings.set(transport, signal);
+  }
+  return signal;
+}
 
 /**
  * The SDK never returns a request's JSON-RPC id, so the demux wraps `transport.send` and
@@ -232,7 +267,7 @@ function inbox(max: number, onOverflow: () => void): { push(note: Note): void; c
 
 // ─── the source ──────────────────────────────────────────────────────────────
 
-type Outcome = { kind: 'ended' } | { kind: 'failed'; error: unknown };
+type Outcome = { kind: 'ended' } | { kind: 'overflowed' } | { kind: 'failed'; error: unknown };
 
 /**
  * One subscription (name + arguments) as a `Source`, keyed `mcp:<name>:<arguments as sorted
@@ -241,8 +276,8 @@ type Outcome = { kind: 'ended' } | { kind: 'failed'; error: unknown };
  * the record's seen ring dedups redelivery. `truncated` becomes the batch's `truncated`, which
  * marks the window as a gap.
  *
- * The subscription runs until `signal` aborts. A terminated, overflowed or idle stream reopens
- * from the last committed cursor after a short pause. A request error that the server says to
+ * The subscription runs until `signal` aborts. A terminated or idle stream reopens from the last
+ * committed cursor after a short pause; an overflowed one at once, when it moved that cursor. A request error that the server says to
  * retry (-32025, a request timeout) is thrown as a plain Error, so `attach` backs off through the
  * app's `retryBackoffMs` and resubscribes; any other error, and a closed Client, is thrown as a
  * `PermanentError` with the SDK error as its `cause`, and `attach` rejects.
@@ -272,10 +307,11 @@ export function mcpEventsSource(client: Client, options: McpEventsOptions): Sour
 
       let delivery = mode === 'auto' ? await listedDelivery(signal) : mode;
       while (delivery !== null && !signal.aborted) {
-        const outcome = delivery === 'stream' ? await runStream(position.cursor, deliver, signal) : await runPoll(position, deliver, signal);
+        const outcome = delivery === 'stream' ? await runStream(position, deliver, signal) : await runPoll(position, deliver, signal);
         if (signal.aborted) return;
+        if (outcome.kind === 'overflowed') continue;
         if (outcome.kind === 'ended') {
-          await sleep(clock, REOPEN_MS, signal);
+          await pause(REOPEN_MS, signal);
           continue;
         }
         if (policyOf(outcome.error) === 'fallback' && mode === 'auto' && delivery === 'stream') {
@@ -325,13 +361,14 @@ export function mcpEventsSource(client: Client, options: McpEventsOptions): Sour
       }
       await deliver(batch(events, result.cursor, result.truncated));
       if (result.hasMore) continue;
-      await sleep(clock, result.nextPollMs ?? pollMs, signal);
+      await pause(result.nextPollMs ?? pollMs, signal);
     }
     return { kind: 'ended' };
   }
 
-  async function runStream(cursor: string | null, deliver: (batch: SourceBatch) => Promise<void>, signal: AbortSignal): Promise<Outcome> {
+  async function runStream(position: { cursor: string | null }, deliver: (batch: SourceBatch) => Promise<void>, signal: AbortSignal): Promise<Outcome> {
     if (!client.transport) throw closedClient(undefined);
+    const opened = position.cursor;
     const demux = demuxFor(client);
     const controller = new AbortController();
     const items = inbox(maxBuffered, () => controller.abort(new Error('attend: stream inbox overflowed')));
@@ -348,7 +385,7 @@ export function mcpEventsSource(client: Client, options: McpEventsOptions): Sour
       },
       report,
     };
-    const params = { ...base, cursor };
+    const params = { ...base, cursor: opened };
     const onAbort = () => controller.abort(signal.reason);
     signal.addEventListener('abort', onAbort, { once: true });
     let settled = false;
@@ -398,9 +435,11 @@ export function mcpEventsSource(client: Client, options: McpEventsOptions): Sour
               return { kind: 'ended' };
             case 'failed':
               return signal.aborted ? { kind: 'ended' } : { kind: 'failed', error: item.error };
-            case 'overflow':
-              report({ kind: 'overflow', buffered: item.buffered });
-              return { kind: 'ended' };
+            case 'overflow': {
+              const moved = position.cursor !== opened;
+              report({ kind: 'overflow', buffered: item.buffered, reopenMs: moved ? 0 : REOPEN_MS });
+              return moved ? { kind: 'overflowed' } : { kind: 'ended' };
+            }
             case 'idle':
               report({ kind: 'idle' });
               return { kind: 'ended' };
@@ -432,6 +471,12 @@ export function mcpEventsSource(client: Client, options: McpEventsOptions): Sour
       if (subscription.id !== null) forget(demux, subscription.id);
       if (!settled) controller.abort(new Error('attend: stream closed'));
     }
+  }
+
+  /** Sleep `ms` on the clock, or return at once when `signal` aborts or the Client's transport closes. */
+  function pause(ms: number, signal: AbortSignal): Promise<void> {
+    const transport = client.transport;
+    return transport ? sleep(clock, ms, AbortSignal.any([signal, closingOf(transport)])) : Promise.resolve();
   }
 
   function parsePayload<S extends z.ZodType>(schema: S, payload: unknown, method: string): z.output<S> | null {

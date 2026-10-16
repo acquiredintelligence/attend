@@ -7,8 +7,9 @@
  * 1. Every input is idempotent against the record: a replayed `events` dedups, a stale
  *    `judged`, `judgeFailed`, `delivered` or `deliveryFailed` is ignored, a `tick` re-derives.
  *    The shell may therefore reload and re-step on a compare-and-swap conflict.
- * 2. `events` and `flush` yield traces only. Settling, judging and delivering happen on the
- *    other inputs, so a producer without a runner never strands an effect.
+ * 2. `events`, `flush` and a release yield traces only. Settling, judging and delivering happen
+ *    on the other inputs, so a producer without a runner never strands an effect, and a stopped
+ *    runner that releases a call never asks for another.
  * 3. Timers are state: `record.dueAt` is recomputed at the end of every step.
  */
 import type {
@@ -27,6 +28,7 @@ import type {
   Judgment,
   Kind,
   OutboxLane,
+  ReleasedInput,
   Route,
   ScopeRecord,
   SettlePolicy,
@@ -96,19 +98,30 @@ const handlers: Handlers = {
     return lane === null ? r : failDelivery(ctx, r, lane, input.message, input.permanent);
   },
   flush: onFlush,
+  judgeReleased: (ctx, r, input) => {
+    const b = liveBatch(ctx, r, input.batchId, input.attempt, 'judgeReleased');
+    return b ? releaseJudge(ctx, r, b.window, b.phase) : r;
+  },
+  deliveryReleased: (ctx, r, input) => {
+    const lane = liveDelivery(ctx, r, input.deliveryId, input.attempt, 'deliveryReleased');
+    return lane === null ? r : releaseDelivery(ctx, r, lane);
+  },
 };
 
 function dispatch<K extends keyof InputByKind>(ctx: Ctx, r: ScopeRecord, kind: K, input: InputByKind[K]): ScopeRecord {
   return handlers[kind](ctx, r, input);
 }
 
-/** Overload: ingest and flush never emit anything but traces (invariant 2). */
-export function step(config: StepConfig, record: ScopeRecord, input: EventsInput | FlushInput, now: number): Stepped<TraceEffect>;
+/** The inputs that yield traces only (invariant 2): no sweep follows them. */
+const UNSWEPT: ReadonlySet<Input['kind']> = new Set<Input['kind']>(['events', 'flush', 'judgeReleased', 'deliveryReleased']);
+
+/** Overload: ingest, flush and a release never emit anything but traces (invariant 2). */
+export function step(config: StepConfig, record: ScopeRecord, input: EventsInput | FlushInput | ReleasedInput, now: number): Stepped<TraceEffect>;
 export function step(config: StepConfig, record: ScopeRecord, input: Input, now: number): Stepped;
 export function step(config: StepConfig, record: ScopeRecord, input: Input, now: number): Stepped {
   const ctx: Ctx = { config, now, out: [] };
   let r = dispatch(ctx, structuredClone(record), input.kind, input);
-  if (input.kind !== 'events' && input.kind !== 'flush') r = sweep(ctx, r);
+  if (!UNSWEPT.has(input.kind)) r = sweep(ctx, r);
   r.dueAt = nextDue(config.policy, r);
   return { record: r, effects: ctx.out };
 }
@@ -461,6 +474,13 @@ function failJudge(ctx: Ctx, r: ScopeRecord, window: Window, phase: Judging['pha
   return r;
 }
 
+/** The runner never started this call: the batch goes back to retrying at once, its attempt unspent and its failures as they were. */
+function releaseJudge(ctx: Ctx, r: ScopeRecord, window: Window, phase: Judging['phase']): ScopeRecord {
+  r.batch = { window, phase: { phase: 'retrying', attempt: phase.attempt - 1, failures: phase.failures, at: ctx.now, offerWait: phase.offerWait } };
+  trace(ctx, { kind: 'released', scope: r.scope, stage: 'judge', id: window.id, attempt: phase.attempt });
+  return r;
+}
+
 // ─── deliveries ──────────────────────────────────────────────────────────────
 
 /** Only a lane's head is ever in flight, so a result names the lane whose head it belongs to. */
@@ -531,6 +551,17 @@ function failDelivery(ctx: Ctx, r: ScopeRecord, lane: OutboxLane, message: strin
   return r;
 }
 
+/** The runner never started the lane's in-flight head: it goes back to retrying at once, its attempt unspent and its failures as they were. */
+function releaseDelivery(ctx: Ctx, r: ScopeRecord, lane: OutboxLane): ScopeRecord {
+  const d = r.outbox[lane][0];
+  if (!d || d.phase.phase !== 'inFlight') return r;
+  const { item } = d;
+  const { attempt, failures } = d.phase;
+  r.outbox[lane][0] = { item, phase: { phase: 'retrying', attempt: attempt - 1, failures, at: ctx.now } };
+  trace(ctx, { kind: 'released', scope: r.scope, stage: item.kind === 'decision' ? 'sink' : 'deadLetter', id: item.id, attempt });
+  return r;
+}
+
 function pumpOutbox(ctx: Ctx, r: ScopeRecord): ScopeRecord {
   for (const lane of LANES) r = pumpLane(ctx, r, lane);
   return r;
@@ -556,10 +587,13 @@ function pumpLane(ctx: Ctx, r: ScopeRecord, lane: OutboxLane): ScopeRecord {
 
 // ─── flush ───────────────────────────────────────────────────────────────────
 
-/** Marks the buffer forced; the runner's next tick settles it, so a flush without a runner strands no effect. */
+/**
+ * Marks the buffer forced; the runner's next tick settles it, so a flush without a runner
+ * strands no effect. A window already in front of the judge is forced too: the force outlives
+ * its verdict, so a `wait` is judged again at once with `wait` withheld.
+ */
 function onFlush(ctx: Ctx, r: ScopeRecord): ScopeRecord {
-  const held = r.batch !== null && r.batch.phase.phase !== 'judging';
-  if (r.buffer.entries.length === 0 && !held) {
+  if (r.buffer.entries.length === 0 && r.batch === null) {
     trace(ctx, { kind: 'stale', scope: r.scope, input: 'flush', why: 'nothing to settle' });
     return r;
   }

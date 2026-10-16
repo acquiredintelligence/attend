@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { createAttend, PermanentError } from '../src/attend.js';
 import { mcpEventsSource, type McpEventsError, type McpEventsOptions } from '../src/mcp.js';
 import { memoryStore } from '../src/memory.js';
@@ -445,7 +445,7 @@ describe('mcpEventsSource over a real Client and Server', () => {
     await h.stop();
   });
 
-  test('past maxBuffered the stream closes, reopens from the committed cursor, and every event reaches the sink once', async () => {
+  test('past maxBuffered the stream closes, reopens at once from the committed cursor, and every event reaches the sink once', async () => {
     const server = mcpEventsTestServer(ALPHA);
     const client = await server.connect();
     const slow = heldStore();
@@ -459,13 +459,12 @@ describe('mcpEventsSource over a real Client and Server', () => {
 
     slow.release();
     await settle();
-    expect(h.errors).toEqual([{ kind: 'overflow', buffered: 2 }]);
-    expect((await h.store.get('s'))?.cursors).toEqual({ [KEY]: '3' });
-    await h.clock.advance(1000);
+    expect(h.errors).toEqual([{ kind: 'overflow', buffered: 2, reopenMs: 0 }]);
     expect(h.streamRequests(server)).toEqual([
       { name: 'alpha', cursor: null },
       { name: 'alpha', cursor: '3' },
     ]);
+    expect((await h.store.get('s'))?.cursors).toEqual({ [KEY]: '6' });
 
     for (let round = 0; round < 10 && deliveredIds(h).length < 6; round += 1) await h.clock.advance(1000);
     expect(deliveredIds(h)).toEqual(['e1', 'e2', 'e3', 'e4', 'e5', 'e6']);
@@ -475,7 +474,7 @@ describe('mcpEventsSource over a real Client and Server', () => {
     await h.stop();
   });
 
-  test('without cursors an overflow still reports and reopens, and only the dropped events are lost', async () => {
+  test('without cursors an overflow reports the reopen pause, waits it out before reopening, and only the dropped events are lost', async () => {
     const server = mcpEventsTestServer([{ name: 'alpha', delivery: ['push'], replay: false }]);
     const client = await server.connect();
     const slow = heldStore();
@@ -487,8 +486,12 @@ describe('mcpEventsSource over a real Client and Server', () => {
     await settle();
     slow.release();
     await settle();
-    expect(h.errors).toEqual([{ kind: 'overflow', buffered: 2 }]);
-    await h.clock.advance(1000);
+    await h.clock.advance(999);
+    await settle();
+    expect(h.streamRequests(server)).toEqual([{ name: 'alpha', cursor: null }]);
+    expect(h.errors).toEqual([{ kind: 'overflow', buffered: 2, reopenMs: 1000 }]);
+    await h.clock.advance(1);
+    await settle();
     expect(h.streamRequests(server)).toEqual([
       { name: 'alpha', cursor: null },
       { name: 'alpha', cursor: null },
@@ -513,8 +516,8 @@ describe('mcpEventsSource over a real Client and Server', () => {
     expect(deliveredIds(h)).toEqual(BACKLOG);
     expect(ingestedTotals(h)).toEqual({ count: 2500, duplicates: 0 });
     expect(h.errors).toEqual([
-      { kind: 'overflow', buffered: 1000 },
-      { kind: 'overflow', buffered: 1000 },
+      { kind: 'overflow', buffered: 1000, reopenMs: 0 },
+      { kind: 'overflow', buffered: 1000, reopenMs: 0 },
     ]);
     expect(h.streamRequests(server)).toEqual([
       { name: 'alpha', cursor: null },
@@ -539,6 +542,36 @@ describe('mcpEventsSource over a real Client and Server', () => {
     expect((await h.store.get('s'))?.cursors).toEqual({ [KEY]: '2500' });
     await h.stop();
   }, 15_000);
+
+  test('a server that replays in bursts at 3000 events a second is kept up with, because the stream reopens at once after an overflow', async () => {
+    const server = mcpEventsTestServer(ALPHA);
+    server.burst = true;
+    const client = await server.connect();
+    const h = setup();
+    void h.attach('s', client, { mode: 'stream' });
+    await settle();
+    const RATE = 3000;
+    const SECONDS = 4;
+    const all = Array.from({ length: RATE * SECONDS }, (_, i) => `e${i + 1}`);
+    const cursorAt = async () => (await h.store.get('s'))?.cursors[KEY] ?? null;
+    const committed: (string | null)[] = [];
+    const started = performance.now();
+    for (let second = 1; second <= SECONDS; second += 1) {
+      await server.append('alpha', ...all.slice((second - 1) * RATE, second * RATE).map((id) => occ(id)));
+      await h.clock.advance(1000);
+      const budget = performance.now() + 1500;
+      while ((await cursorAt()) !== String(second * RATE) && performance.now() < budget) await settle();
+      committed.push(await cursorAt());
+    }
+    const elapsed = performance.now() - started;
+    expect({ committed, under3s: elapsed < 3000 }).toEqual({ committed: ['3000', '6000', '9000', '12000'], under3s: true });
+    expect(ingestedTotals(h)).toEqual({ count: RATE * SECONDS, duplicates: 0 });
+    expect(h.errors.filter((e) => e.kind !== 'overflow')).toEqual([]);
+    await h.clock.advance(1000);
+    await h.clock.advance(1000);
+    expect(deliveredIds(h)).toEqual(all);
+    await h.stop();
+  }, 30_000);
 
   test('a stream with no notification for idleTimeoutMs is reported idle and reopened from the committed cursor', async () => {
     const server = mcpEventsTestServer(ALPHA);
@@ -597,6 +630,80 @@ describe('mcpEventsSource over a real Client and Server', () => {
     await expect(polling).rejects.toThrow('attend/mcp: the Client closed; reconnect it and attach again');
     await expect(polling).rejects.toBeInstanceOf(PermanentError);
     await expect(h.attend.attach('t', h.source(client, { mode: 'auto' }))).rejects.toThrow('attend/mcp: the Client closed; reconnect it and attach again');
+    await h.stop();
+  });
+
+  test('a Client closed while a poll source waits between polls ends the subscription at once, not at the next poll', async () => {
+    const server = mcpEventsTestServer(ALPHA);
+    server.nextPollMs = null;
+    const client = await server.connect();
+    const h = setup();
+    const polling = h.attend.attach('s', h.source(client, { pollMs: 10_000 }));
+    void polling.catch(() => undefined);
+    await settle();
+    expect(server.requests.map((r) => r.method)).toEqual(['events/poll']);
+    await client.close();
+    const outcome = await Promise.race([polling.then(() => 'resolved', (error: unknown) => error), settle().then(() => 'pending')]);
+    expect(outcome).toBeInstanceOf(PermanentError);
+    expect(outcome).toMatchObject({ message: 'attend/mcp: the Client closed; reconnect it and attach again' });
+    await h.stop();
+  });
+
+  test('a Client closed during the pause before a terminated stream reopens ends the subscription at once', async () => {
+    const server = mcpEventsTestServer(ALPHA);
+    const client = await server.connect();
+    const h = setup();
+    const streaming = h.attend.attach('s', h.source(client, { mode: 'stream' }));
+    void streaming.catch(() => undefined);
+    await settle();
+    await server.terminate('alpha');
+    await settle();
+    expect(server.liveStreams('alpha')).toEqual([]);
+    await client.close();
+    const outcome = await Promise.race([streaming.then(() => 'resolved', (error: unknown) => error), settle().then(() => 'pending')]);
+    expect(outcome).toBeInstanceOf(PermanentError);
+    expect(outcome).toMatchObject({ message: 'attend/mcp: the Client closed; reconnect it and attach again' });
+    await h.stop();
+  });
+
+  test('a Client closed and reconnected on the same transport still paces its polls and its reopens', async () => {
+    const server = mcpEventsTestServer(ALPHA);
+    server.nextPollMs = null;
+    const transport = server.reconnectable();
+    const client = new Client({ name: 'attend-test', version: '0.0.0' });
+    await client.connect(transport);
+    const h = setup();
+    const polling = h.attend.attach('s', h.source(client, { pollMs: 1000 }));
+    void polling.catch(() => undefined);
+    await settle();
+    await client.close();
+    await expect(polling).rejects.toBeInstanceOf(PermanentError);
+
+    await client.connect(transport);
+    void h.attach('s', client, { pollMs: 1000 });
+    void h.attach('t', client, { mode: 'stream' });
+    await settle();
+    await server.terminate('alpha');
+    await settle();
+    // Real time, in which a source that no longer pauses makes thousands of requests.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await h.clock.advance(999);
+    await settle();
+    const sinceReconnect = () => server.requests.slice(1).map((r) => [r.method, r.params]);
+    const counts = () => ({ polls: sinceReconnect().filter(([m]) => m === 'events/poll').length, streams: sinceReconnect().filter(([m]) => m === 'events/stream').length });
+    expect(counts()).toEqual({ polls: 1, streams: 1 });
+    expect(sinceReconnect()).toEqual([
+      ['events/poll', { name: 'alpha', cursor: '0' }],
+      ['events/stream', { name: 'alpha', cursor: null }],
+    ]);
+    await h.clock.advance(1);
+    await settle();
+    expect(sinceReconnect()).toEqual([
+      ['events/poll', { name: 'alpha', cursor: '0' }],
+      ['events/stream', { name: 'alpha', cursor: null }],
+      ['events/poll', { name: 'alpha', cursor: '0' }],
+      ['events/stream', { name: 'alpha', cursor: '0' }],
+    ]);
     await h.stop();
   });
 

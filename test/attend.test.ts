@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { ConflictError, createAttend, defaultNotice, logSource, OutboxFullError, PermanentError, routes, type AttendConfig } from '../src/attend.js';
 import { memoryLog, memoryStore } from '../src/memory.js';
 import { drain, fakeClock, recordingSink, scriptedJudge, type ScriptedAnswer } from '../src/testing.js';
-import type { DeadLetter, Decision, Event, EventLog, Judge, JudgeInput, Judgment, Kind, SettlePolicy, Source, SourceBatch, StateStore, Trace } from '../src/types.js';
+import type { DeadLetter, Decision, Event, EventLog, Judge, JudgeInput, Judgment, Kind, SettlePolicy, Sink, Source, SourceBatch, StateStore, Trace } from '../src/types.js';
 
 const kind = (e: Event): Kind => {
   switch (e.name) {
@@ -92,12 +92,56 @@ function listSource(key: string, events: Event[], options?: { failFirstWith?: Er
         const event = events[i];
         if (event) await emit({ events: [event], cursor: String(i + 1) });
       }
+      if (signal.aborted) return;
       await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
     },
   };
 }
 
 const realTick = () => new Promise((r) => setTimeout(r, 10));
+
+/** A store whose puts wait while held, the way a slow database leaves a write in flight. */
+function heldStore(): { store: StateStore; hold(): void; release(): void } {
+  const inner = memoryStore();
+  let gate: Promise<void> | null = null;
+  let open: () => void = () => undefined;
+  return {
+    store: {
+      get: (scope) => inner.get(scope),
+      async put(record, expectedVersion) {
+        if (gate) await gate;
+        return inner.put(record, expectedVersion);
+      },
+      due: (now, limit) => inner.due(now, limit),
+      remove: (scope) => inner.remove(scope),
+    },
+    hold() {
+      gate = new Promise((resolve) => {
+        open = () => resolve();
+      });
+    },
+    release() {
+      gate = null;
+      open();
+    },
+  };
+}
+
+const pendingOrResolved = (p: Promise<unknown>) => Promise.race([p.then(() => 'resolved'), drain().then(() => 'pending')]);
+
+/** A store whose every put takes a millisecond of real time, so a producer looping on `push` leaves room for timers to fire. */
+function pacedStore(): StateStore {
+  const inner = memoryStore();
+  return {
+    get: (scope) => inner.get(scope),
+    async put(record, expectedVersion) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      return inner.put(record, expectedVersion);
+    },
+    due: (now, limit) => inner.due(now, limit),
+    remove: (scope) => inner.remove(scope),
+  };
+}
 
 describe('createAttend', () => {
   test('a closing act settles after the grace, is judged with the configured context, and is delivered', async () => {
@@ -190,6 +234,22 @@ describe('createAttend', () => {
       [ID_A, 'queue', 2200],
       [ID_B, 'interrupt', 2200],
     ]);
+    await h.stop();
+  });
+
+  test('attend.flush() while the judge holds the only window forbids its wait: a wait verdict is judged again at once as forced', async () => {
+    const held = heldJudge();
+    const h = setup([], { judge: held.judge });
+    await h.attend.push('s', [ev('a')]);
+    await h.clock.advance(500);
+    expect(held.calls[0]?.routes.some((r) => r.route === 'wait')).toBe(true);
+    await h.attend.flush('s');
+    held.release({ route: 'wait' });
+    await h.clock.advance(0);
+    expect(held.calls[1]).toMatchObject({ window: { id: ID_A, reason: 'forced', waits: 1, events: [{ id: 'a' }] } });
+    expect(held.calls[1]?.routes.map((r) => r.route)).toEqual(NO_WAIT);
+    expect(h.sink.delivered.map((d) => [d.id, d.route, d.at])).toEqual([[ID_A, 'interrupt', 1500]]);
+    expect(await h.attend.inspect('s')).toMatchObject({ batch: null, buffer: { forcedAt: null }, dueAt: null });
     await h.stop();
   });
 
@@ -708,29 +768,119 @@ describe('createAttend', () => {
     await h.stop();
   });
 
-  test('an aborted run waits for the judge in flight, persists its verdict, starts no delivery, and the next runner delivers after the lease', async () => {
+  test('an aborted run waits for the judge in flight, persists its verdict, releases the delivery it will not start, and the next runner delivers at once', async () => {
     const store = memoryStore();
     const held = heldJudge();
     const first = setup([], { store, judge: held.judge });
     await first.attend.push('s', [ev('a')]);
     await first.clock.advance(500);
     const stopping = first.stop();
-    expect(await Promise.race([stopping.then(() => 'resolved'), drain().then(() => 'pending')])).toBe('pending');
+    expect(await pendingOrResolved(stopping)).toBe('pending');
     held.release({ route: 'queue' });
     await stopping;
     expect(first.sink.delivered).toEqual([]);
     expect(await store.get('s')).toMatchObject({
       batch: null,
-      outbox: { decisions: [{ item: { id: ID_A, kind: 'decision' }, phase: { phase: 'inFlight', attempt: 1, leaseUntil: 11_500 } }], deadLetters: [] },
-      dueAt: 11_500,
+      outbox: { decisions: [{ item: { id: ID_A, kind: 'decision' }, phase: { phase: 'retrying', attempt: 0, failures: 0, at: 1500 } }], deadLetters: [] },
+      dueAt: 1500,
     });
+    expect(first.traces).toContainEqual({ kind: 'released', scope: 's', stage: 'sink', id: ID_A, attempt: 1 });
     const second = setup([], { store, config: { clock: first.clock } });
-    await first.clock.advance(10_000);
-    expect(second.traces).toContainEqual(expect.objectContaining({ kind: 'retrying', stage: 'sink', id: ID_A, message: 'delivery lease expired' }));
-    await first.clock.advance(1000);
-    expect(second.sink.delivered.map((d) => [d.id, d.route])).toEqual([[ID_A, 'queue']]);
+    await first.clock.advance(0);
+    expect(second.sink.delivered.map((d) => [d.id, d.route, d.at])).toEqual([[ID_A, 'queue', 1500]]);
+    expect(second.sink.attempts.get(ID_A)).toBe(1);
+    expect(second.traces.filter((t) => t.kind === 'retrying')).toEqual([]);
     expect(first.sink.delivered).toEqual([]);
     await second.stop();
+  });
+
+  test('an aborted run releases the judge call for a window that settled on the late verdict, and the next runner judges it at once', async () => {
+    const store = memoryStore();
+    const held = heldJudge();
+    const first = setup([], { store, judge: held.judge });
+    await first.attend.push('s', [ev('a')]);
+    await first.clock.advance(500);
+    await first.attend.push('s', [ev('b')]);
+    await first.clock.advance(500);
+    const stopping = first.stop();
+    held.release({ route: 'queue' });
+    await stopping;
+    expect(held.calls.map((c) => c.window.id)).toEqual([ID_A]);
+    expect(await store.get('s')).toMatchObject({
+      batch: { window: { id: ID_B, reason: 'closing' }, phase: { phase: 'retrying', attempt: 0, failures: 0, at: 2000 } },
+      outbox: { decisions: [{ item: { id: ID_A }, phase: { phase: 'retrying', attempt: 0, failures: 0, at: 2000 } }], deadLetters: [] },
+      dueAt: 2000,
+    });
+    expect(first.traces.filter((t) => t.kind === 'released')).toEqual([
+      { kind: 'released', scope: 's', stage: 'sink', id: ID_A, attempt: 1 },
+      { kind: 'released', scope: 's', stage: 'judge', id: ID_B, attempt: 1 },
+    ]);
+    const second = setup([{ route: 'note' }], { store, config: { clock: first.clock } });
+    await first.clock.advance(0);
+    expect(second.judge.calls.map((c) => [c.window.id, c.window.reason])).toEqual([[ID_B, 'closing']]);
+    expect(second.sink.delivered.map((d) => [d.id, d.route, d.at])).toEqual([
+      [ID_A, 'queue', 2000],
+      [ID_B, 'note', 2000],
+    ]);
+    expect(second.traces.filter((t) => t.kind === 'retrying')).toEqual([]);
+    await second.stop();
+  });
+
+  test('an aborted run waits for a tick whose write is in flight, so the store sees it before run resolves', async () => {
+    const slow = heldStore();
+    const stuck: Sink = { deliver: () => new Promise(() => undefined) };
+    const h = setup([{ route: 'queue' }], { store: slow.store, config: { sink: stuck } });
+    await h.attend.push('s', [ev('a')]);
+    await h.clock.advance(500);
+    expect(await slow.store.get('s')).toMatchObject({ outbox: { decisions: [{ item: { id: ID_A }, phase: { phase: 'inFlight', attempt: 1, leaseUntil: 11_500 } }] } });
+    slow.hold();
+    await h.clock.advance(10_000);
+    const stopping = h.stop();
+    expect(await pendingOrResolved(stopping)).toBe('pending');
+    expect(await slow.store.get('s')).toMatchObject({ outbox: { decisions: [{ phase: { phase: 'inFlight' } }] } });
+    slow.release();
+    await stopping;
+    expect(await slow.store.get('s')).toMatchObject({
+      outbox: { decisions: [{ item: { id: ID_A }, phase: { phase: 'retrying', attempt: 1, failures: 1, at: 12_500 } }], deadLetters: [] },
+      dueAt: 12_500,
+    });
+  });
+
+  test("an aborted run waits for a source's write in flight, so the store sees it before run resolves", async () => {
+    const slow = heldStore();
+    const h = setup([], { store: slow.store });
+    slow.hold();
+    const attached = h.attend.attach('s', listSource('k', [ev('x', 'out')]));
+    await drain();
+    expect(await slow.store.get('s')).toBeNull();
+    const stopping = h.stop();
+    expect(await pendingOrResolved(stopping)).toBe('pending');
+    slow.release();
+    await stopping;
+    expect(await slow.store.get('s')).toMatchObject({ version: 1, cursors: { k: '1' }, buffer: { entries: [{ id: 'x', kind: 'consequence' }] } });
+    await attached;
+  });
+
+  test('an aborted run resolves while a producer keeps pushing on the same instance, and those pushes still persist', async () => {
+    const h = setup([], { store: pacedStore() });
+    let pushes = 0;
+    let stop = false;
+    const producer = (async () => {
+      while (!stop) {
+        pushes += 1;
+        await h.attend.push('s', [ev(`p${pushes}`, 'look')]);
+      }
+    })();
+    await realTick();
+    const stopping = h.stop();
+    const outcome = await Promise.race([stopping.then(() => 'resolved'), new Promise((resolve) => setTimeout(() => resolve('pending after 100 ms'), 100))]);
+    expect(outcome).toBe('resolved');
+    const pushesAtResolve = pushes;
+    await realTick();
+    stop = true;
+    await producer;
+    expect(pushes).toBeGreaterThan(pushesAtResolve);
+    expect((await h.store.get('s'))?.version).toBe(pushes);
   });
 
   test('an aborted run does not wait past the lease for a judge that never settles', async () => {

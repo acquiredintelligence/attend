@@ -418,6 +418,27 @@ describe('judging', () => {
     expect(record.batch).toEqual({ window: windowA, phase: { phase: 'retrying', attempt: 1, failures: 1, at: 31_600, offerWait: true } });
   });
 
+  test('a judge call the runner never started is released: it retries at once, costs no failure, and the retry takes its attempt number', () => {
+    const due: Delivery = { item: decisionItem({ ...decisionA, id: ID_B }), phase: { phase: 'retrying', attempt: 0, failures: 0, at: 650 } };
+    const before: ScopeRecord = { ...judgingA(), outbox: { decisions: [due], deadLetters: [] } };
+    const { record, effects } = step(cfg, before, { kind: 'judgeReleased', batchId: ID_A, attempt: 1 }, 700);
+    expect(record).toEqual({ ...before, batch: { window: windowA, phase: { phase: 'retrying', attempt: 0, failures: 0, at: 700, offerWait: true } }, dueAt: 650 });
+    expect(effects).toEqual([{ kind: 'trace', trace: { kind: 'released', scope, stage: 'judge', id: ID_A, attempt: 1 } }]);
+    const ticked = step(cfg, record, { kind: 'tick' }, 700);
+    expect(ticked.record.batch).toEqual({ window: windowA, phase: { phase: 'judging', attempt: 1, failures: 0, leaseUntil: 30_700, offerWait: true } });
+    expect(ticked.effects.map((e) => (e.kind === 'trace' ? e.trace.kind : e.kind))).toEqual(['deliver', 'delivering', 'judge', 'judging']);
+    expect(ticked.effects[2]).toMatchObject({ kind: 'judge', attempt: 1, offered: ['interrupt', 'queue', 'note', 'ask', 'skip', 'wait'] });
+  });
+
+  test('a release names one attempt, so a replay or a release for another attempt is stale', () => {
+    const released = step(cfg, judgingA(), { kind: 'judgeReleased', batchId: ID_A, attempt: 1 }, 700).record;
+    const again = step(cfg, released, { kind: 'judgeReleased', batchId: ID_A, attempt: 1 }, 800);
+    expect(again.record).toEqual(released);
+    expect(again.effects).toEqual([{ kind: 'trace', trace: { kind: 'stale', scope, input: 'judgeReleased', why: `no live judge attempt 1 for batch ${ID_A}` } }]);
+    const other = step(cfg, judgingA(), { kind: 'judgeReleased', batchId: ID_A, attempt: 2 }, 700);
+    expect(other.record).toEqual(judgingA());
+  });
+
   test('a wait resets the failure count but not the attempt count', () => {
     const before: ScopeRecord = { ...judgingA(), batch: { window: windowA, phase: { phase: 'judging', attempt: 3, failures: 2, leaseUntil: 30_600, offerWait: true } } };
     const waited = step(cfg, before, { kind: 'judged', batchId: ID_A, attempt: 3, judgment: { route: 'wait' } }, 700).record;
@@ -501,6 +522,27 @@ describe('delivery', () => {
     const still = step(cfg, record, { kind: 'tick' }, 11_000);
     expect(still.record.outbox).toEqual(record.outbox);
     expect(still.effects).toEqual([]);
+  });
+
+  test('a delivery the runner never started is released: it retries at once, costs no failure, and the retry takes its attempt number', () => {
+    const { record, effects } = step(cfg, inFlight(1, 0, 10_700), { kind: 'deliveryReleased', deliveryId: ID_A, attempt: 1 }, 800);
+    expect(record).toEqual({ ...base(), outbox: { decisions: [{ item: decisionItem(decisionA), phase: { phase: 'retrying', attempt: 0, failures: 0, at: 800 } }], deadLetters: [] }, dueAt: 800 });
+    expect(effects).toEqual([{ kind: 'trace', trace: { kind: 'released', scope, stage: 'sink', id: ID_A, attempt: 1 } }]);
+    const retried = step(cfg, record, { kind: 'tick' }, 800);
+    const sent: Delivery = { item: decisionItem(decisionA), phase: { phase: 'inFlight', attempt: 1, failures: 0, leaseUntil: 10_800 } };
+    expect(retried.record.outbox.decisions).toEqual([sent]);
+    expect(retried.effects[0]).toEqual({ kind: 'deliver', scope, delivery: sent });
+    const replayed = step(cfg, record, { kind: 'deliveryReleased', deliveryId: ID_A, attempt: 1 }, 900);
+    expect(replayed.record).toEqual(record);
+    expect(replayed.effects).toEqual([{ kind: 'trace', trace: { kind: 'stale', scope, input: 'deliveryReleased', why: `no live delivery attempt 1 for ${ID_A}` } }]);
+  });
+
+  test('a released dead letter keeps its lane and its failures', () => {
+    const letter: DeadLetter = { id: ID_A, scope, stage: 'sink', window: windowA, decision: decisionA, message: 'closed', permanent: false, attempts: 4, at: 800 };
+    const before: ScopeRecord = { ...base(), outbox: { decisions: [], deadLetters: [{ item: letterItem(letter), phase: { phase: 'inFlight', attempt: 7, failures: 2, leaseUntil: 10_800 } }] } };
+    const { record, effects } = step(cfg, before, { kind: 'deliveryReleased', deliveryId: ID_A, attempt: 7 }, 900);
+    expect(record.outbox).toEqual({ decisions: [], deadLetters: [{ item: letterItem(letter), phase: { phase: 'retrying', attempt: 6, failures: 2, at: 900 } }] });
+    expect(effects).toEqual([{ kind: 'trace', trace: { kind: 'released', scope, stage: 'deadLetter', id: ID_A, attempt: 7 } }]);
   });
 
   test('a backoff that has passed does not wait for the next tick', () => {
@@ -618,6 +660,33 @@ describe('flush', () => {
     expect(flushed.record).toEqual({ ...before, buffer: { ...before.buffer, forcedAt: 200 }, dueAt: 30_600 });
     const judged = step(cfg, flushed.record, { kind: 'judged', batchId: ID_A, attempt: 1, judgment: { route: 'skip' } }, 300);
     expect(judged.record.batch).toMatchObject({ window: { reason: 'forced' }, phase: { phase: 'judging' } });
+  });
+
+  test('while judging with nothing buffered it is recorded, and a wait verdict is judged again at once as forced with wait withheld', () => {
+    const flushed = step(cfg, judgingA(), { kind: 'flush' }, 200);
+    expect(flushed.record).toEqual({ ...judgingA(), buffer: { entries: [], dropped: 0, gap: false, forcedAt: 200 } });
+    expect(flushed.effects).toEqual([]);
+    const forced: Window = { ...windowA, reason: 'forced', waits: 1 };
+    const { record, effects } = step(cfg, flushed.record, { kind: 'judged', batchId: ID_A, attempt: 1, judgment: { route: 'wait' } }, 300);
+    expect(record).toEqual({
+      ...base(),
+      seen: ['a'],
+      batch: { window: forced, phase: { phase: 'judging', attempt: 2, failures: 0, leaseUntil: 30_300, offerWait: false } },
+      dueAt: 30_300,
+    });
+    expect(effects).toEqual([
+      { kind: 'trace', trace: { kind: 'waiting', scope, batchId: ID_A, waits: 1, until: 10_300 } },
+      { kind: 'judge', scope, batchId: ID_A, attempt: 2, window: forced, offered: NO_WAIT, recent: [], leaseUntil: 30_300 },
+      { kind: 'trace', trace: { kind: 'judging', scope, batchId: ID_A, attempt: 2, offerWait: false } },
+    ]);
+  });
+
+  test('while judging with nothing buffered, a verdict that routes spends the force', () => {
+    const flushed = step(cfg, judgingA(), { kind: 'flush' }, 200);
+    const { record } = step(cfg, flushed.record, { kind: 'judged', batchId: ID_A, attempt: 1, judgment: { route: 'queue' } }, 300);
+    expect(record.buffer).toEqual({ entries: [], dropped: 0, gap: false, forcedAt: null });
+    expect(record.batch).toBeNull();
+    expect(record.outbox.decisions.map((d) => d.item.id)).toEqual([ID_A]);
   });
 
   test('judges a retrying batch at the next tick, keeping its attempts and failures', () => {

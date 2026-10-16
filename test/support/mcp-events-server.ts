@@ -10,6 +10,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { RequestId, ServerCapabilities } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod/v4';
 
@@ -27,6 +28,13 @@ export interface EventSpec {
 export interface McpEventsTestServer {
   /** Connect a fresh Client over a new in-memory pair, closing the previous one. */
   connect(): Promise<Client>;
+  /**
+   * A client transport that gives the server a fresh connection on every `start()`, so a
+   * Client can be closed and reconnected on the same transport object, the way a stdio
+   * transport respawns its child. Messages from the server land on a later macrotask, the way
+   * a socket hands them over, so a source that spins still lets timers run.
+   */
+  reconnectable(): Transport;
   /** Every request received, oldest first. */
   requests: { method: Method; params: unknown }[];
   /** Request ids of the streams open right now, by event name. */
@@ -183,18 +191,53 @@ export function mcpEventsTestServer(events: EventSpec[]): McpEventsTestServer {
 
   const of = (name: string) => [...streams].filter((s) => s.name === name);
 
+  async function link(): Promise<InMemoryTransport> {
+    if (transport) await transport.close();
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    transport = serverTransport;
+    await server.connect(serverTransport);
+    return clientTransport;
+  }
+
   const api: McpEventsTestServer = {
     requests,
     nextPollMs: 1000,
     burst: false,
     async connect() {
-      if (transport) await transport.close();
-      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-      transport = serverTransport;
-      await server.connect(serverTransport);
       const client = new Client({ name: 'attend-test', version: '0.0.0' });
-      await client.connect(clientTransport);
+      await client.connect(await link());
       return client;
+    },
+    reconnectable() {
+      let live: InMemoryTransport | null = null;
+      const outer: Transport = {
+        async start() {
+          const inner = await link();
+          live = inner;
+          inner.onmessage = (message, extra) =>
+            setImmediate(() => {
+              if (live === inner) outer.onmessage?.(message, extra);
+            });
+          inner.onerror = (error) => outer.onerror?.(error);
+          inner.onclose = () => {
+            if (live !== inner) return;
+            live = null;
+            outer.onclose?.();
+          };
+          await inner.start();
+        },
+        send(message, options) {
+          if (!live) return Promise.reject(new Error('Not connected'));
+          return live.send(message, options);
+        },
+        async close() {
+          const closing = live;
+          live = null;
+          await closing?.close();
+          outer.onclose?.();
+        },
+      };
+      return outer;
     },
     liveStreams: (name) => of(name).map((s) => s.id),
     async append(name, ...occurrences) {

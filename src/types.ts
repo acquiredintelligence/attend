@@ -117,7 +117,10 @@ export interface Buffer {
   dropped: number;
   /** The source reported lost events while this window was open, or before it opened. */
   gap: boolean;
-  /** Set by `flush`; the window settles at the next tick whatever its deadline says. */
+  /**
+   * Set by `flush`; the window settles at the next tick whatever its deadline says. Set while a
+   * judge call is in flight, it forbids that call's verdict to hold the window.
+   */
   forcedAt: number | null;
 }
 
@@ -272,9 +275,21 @@ export interface FlushInput {
   kind: 'flush';
 }
 
+/**
+ * The runner stopped before starting the call this effect asked for. The lease is released
+ * and the call is due again at once with no failure counted, so the next runner takes it up
+ * on its first tick. The attempt number goes unspent and the next call takes it: a call that
+ * never happened produced no result that could collide with it. Stale against any other
+ * attempt, so a replay changes nothing.
+ */
+export type ReleasedInput =
+  | { kind: 'judgeReleased'; batchId: string; attempt: number }
+  | { kind: 'deliveryReleased'; deliveryId: string; attempt: number };
+
 export type Input =
   | EventsInput
   | FlushInput
+  | ReleasedInput
   | { kind: 'tick' }
   | { kind: 'judged'; batchId: string; attempt: number; judgment: Judgment }
   | { kind: 'judgeFailed'; batchId: string; attempt: number; message: string; permanent: boolean }
@@ -317,6 +332,7 @@ export type Trace =
   | { kind: 'retrying'; scope: string; stage: 'judge' | 'sink' | 'deadLetter' | 'source'; id: string; attempt: number; at: number; message: string }
   | { kind: 'delivering'; scope: string; deliveryId: string; attempt: number }
   | { kind: 'delivered'; scope: string; deliveryId: string }
+  | { kind: 'released'; scope: string; stage: 'judge' | 'sink' | 'deadLetter'; id: string; attempt: number }
   | { kind: 'deadLettered'; scope: string; letter: DeadLetter }
   | { kind: 'stale'; scope: string; input: Input['kind']; why: string }
   | { kind: 'conflict'; scope: string; version: number }
