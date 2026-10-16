@@ -216,6 +216,26 @@ export function scopeStoreConformance(make: () => Promise<ScopeStore> | ScopeSto
       for (const scope of scopes) assertEqual(await store.load(scope), { version: 1, snapshot: null, tail: [logged(`${scope}:0`)] }, scope);
       assertEqual((await store.due(10_000, 10)).map((key) => key.scope), scopes, 'separate due values');
     }],
+    ['what a read returned is unchanged by later commits, trims and removes', async (store) => {
+      const first: Snapshot = { version: 2, record: record('s', 2), policy, reducer: 1 };
+      await store.commit([write('s', 0, { inputs: [logged('a'), logged('b')], snapshot: first, appends: [append('one')], due: 1000 })]);
+      await store.commit([write('s', 2, { appends: [letter('two')] })]);
+      const returned = {
+        loaded: await store.load('s'),
+        page: await store.log.read({ after: null, limit: 10 }),
+        found: await store.log.find('decision', 'one'),
+        bounds: await store.log.bounds(),
+        due: await store.due(1000, 10),
+      };
+      const before = structuredClone(returned);
+      await store.commit([write('s', 3, { inputs: [logged('c')], appends: [append('three')], due: 2000 })]);
+      await store.log.trim({ maxRows: 1 });
+      await store.commit([write('s', 4, { snapshot: { version: 5, record: record('s', 5), policy, reducer: 1 }, appends: [append('four'), letter('five')], due: null })]);
+      await store.log.read({ after: null, limit: 10 });
+      await store.load('s');
+      await store.remove('s');
+      assertEqual(returned, before, 'returned values unchanged');
+    }],
   ]);
 }
 
