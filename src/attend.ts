@@ -64,6 +64,12 @@ export interface AttendConfig {
 }
 
 export interface RunOptions {
+  /**
+   * Aborting stops the sweep, the timers and the attached sources and starts no further judge,
+   * sink or dead-letter call. `run` then resolves once the calls already in flight have settled
+   * and persisted their results, or their leases have expired. Whatever this runner left
+   * undone, the next runner takes up when its lease expires.
+   */
   signal: AbortSignal;
   /** How often to ask the store for due scopes. The only path for scopes written by other processes. Default 1000. */
   sweepMs?: number;
@@ -95,7 +101,7 @@ export interface Attend {
   flush(scope: string): Promise<void>;
   /** The record as stored, for operators and tests. */
   inspect(scope: string): Promise<ScopeRecord | null>;
-  /** The runner: in-process timers for scopes touched here, the sweep for everything. Resolves on abort. */
+  /** The runner: in-process timers for scopes touched here, the sweep for everything. Resolves after an abort, once the calls in flight have settled. */
   run(options: RunOptions): Promise<void>;
 }
 
@@ -114,6 +120,8 @@ export function createAttend(config: AttendConfig): Attend {
   const timers = new Map<string, () => void>();
   const sources = new Set<AbortController>();
   const attached = new Set<string>();
+  /** Judge, sink and dead-letter calls in flight, each with the lease the reducer gave it. */
+  const calls = new Map<Promise<void>, number>();
   let running: { signal: AbortSignal } | null = null;
 
   function observe(trace: Trace): void {
@@ -172,12 +180,31 @@ export function createAttend(config: AttendConfig): Attend {
   }
 
   function tick(scope: string): void {
-    background(scope, 'tick', () => apply(scope, { kind: 'tick' }));
+    void background(scope, 'tick', () => apply(scope, { kind: 'tick' }));
   }
 
-  function background(scope: string, input: Input['kind'], work: () => Promise<void>): void {
-    void work().catch((error: unknown) => {
+  function background(scope: string, input: Input['kind'], work: () => Promise<void>): Promise<void> {
+    return work().catch((error: unknown) => {
       if (!(error instanceof ConflictError)) observe({ kind: 'failed', scope, input, message: messageOf(error) });
+    });
+  }
+
+  /** Only a live runner starts a call; one it does not start is recovered by the next runner when its lease expires. */
+  function call(scope: string, input: Input['kind'], leaseUntil: number, work: () => Promise<void>): void {
+    if (!running) return;
+    const done = background(scope, input, work).finally(() => calls.delete(done));
+    calls.set(done, leaseUntil);
+  }
+
+  /** Resolves when the call settles or its lease expires, whichever comes first. */
+  function settledOrExpired(done: Promise<void>, leaseUntil: number): Promise<void> {
+    if (leaseUntil <= clock.now()) return Promise.resolve();
+    return new Promise((resolve) => {
+      const cancel = clock.at(leaseUntil, resolve);
+      void done.then(() => {
+        cancel();
+        resolve();
+      });
     });
   }
 
@@ -187,10 +214,10 @@ export function createAttend(config: AttendConfig): Attend {
         observe(effect.trace);
         return;
       case 'judge':
-        background(scope, 'judged', () => runJudge(scope, effect));
+        call(scope, 'judged', effect.leaseUntil, () => runJudge(scope, effect));
         return;
       case 'deliver':
-        background(scope, 'delivered', () => runDeliver(scope, effect));
+        call(scope, 'delivered', effect.delivery.phase.leaseUntil, () => runDeliver(scope, effect));
         return;
       default:
         return assertNever(effect);
@@ -319,6 +346,7 @@ export function createAttend(config: AttendConfig): Attend {
         for (const cancel of timers.values()) cancel();
         timers.clear();
         for (const controller of sources) controller.abort();
+        await Promise.all([...calls].map(([done, leaseUntil]) => settledOrExpired(done, leaseUntil)));
       }
     },
   };

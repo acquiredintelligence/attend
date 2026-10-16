@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { ConflictError, createAttend, defaultNotice, logSource, OutboxFullError, PermanentError, routes, type AttendConfig } from '../src/attend.js';
 import { memoryLog, memoryStore } from '../src/memory.js';
-import { fakeClock, recordingSink, scriptedJudge, type ScriptedAnswer } from '../src/testing.js';
+import { drain, fakeClock, recordingSink, scriptedJudge, type ScriptedAnswer } from '../src/testing.js';
 import type { DeadLetter, Decision, Event, EventLog, Judge, JudgeInput, Judgment, Kind, SettlePolicy, Source, SourceBatch, StateStore, Trace } from '../src/types.js';
 
 const kind = (e: Event): Kind => {
@@ -706,6 +706,41 @@ describe('createAttend', () => {
     const h = setup([]);
     await expect(h.attend.run({ signal: new AbortController().signal })).rejects.toThrow('already running');
     await h.stop();
+  });
+
+  test('an aborted run waits for the judge in flight, persists its verdict, starts no delivery, and the next runner delivers after the lease', async () => {
+    const store = memoryStore();
+    const held = heldJudge();
+    const first = setup([], { store, judge: held.judge });
+    await first.attend.push('s', [ev('a')]);
+    await first.clock.advance(500);
+    const stopping = first.stop();
+    expect(await Promise.race([stopping.then(() => 'resolved'), drain().then(() => 'pending')])).toBe('pending');
+    held.release({ route: 'queue' });
+    await stopping;
+    expect(first.sink.delivered).toEqual([]);
+    expect(await store.get('s')).toMatchObject({
+      batch: null,
+      outbox: { decisions: [{ item: { id: ID_A, kind: 'decision' }, phase: { phase: 'inFlight', attempt: 1, leaseUntil: 11_500 } }], deadLetters: [] },
+      dueAt: 11_500,
+    });
+    const second = setup([], { store, config: { clock: first.clock } });
+    await first.clock.advance(10_000);
+    expect(second.traces).toContainEqual(expect.objectContaining({ kind: 'retrying', stage: 'sink', id: ID_A, message: 'delivery lease expired' }));
+    await first.clock.advance(1000);
+    expect(second.sink.delivered.map((d) => [d.id, d.route])).toEqual([[ID_A, 'queue']]);
+    expect(first.sink.delivered).toEqual([]);
+    await second.stop();
+  });
+
+  test('an aborted run does not wait past the lease for a judge that never settles', async () => {
+    const h = setup([], { judge: () => new Promise(() => undefined) });
+    await h.attend.push('s', [ev('a')]);
+    await h.clock.advance(500);
+    const stopping = h.stop();
+    expect(await Promise.race([stopping.then(() => 'resolved'), drain().then(() => 'pending')])).toBe('pending');
+    await h.clock.advance(30_000);
+    expect(await Promise.race([stopping.then(() => 'resolved'), drain().then(() => 'pending')])).toBe('resolved');
   });
 
 });
