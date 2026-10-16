@@ -60,7 +60,7 @@ describe('sqliteStore over one file', () => {
   test('a record survives a new store instance over the same file', async () => {
     const path = join(dir, 'reopen.db');
     const first = open(path);
-    const r: ScopeRecord = { ...record('s', 3, 50), cursor: 'c9', seen: ['a'] };
+    const r: ScopeRecord = { ...record('s', 3, 50), cursors: { 'log:s': 'c9' }, seen: ['a'] };
     await sqliteStore(first).put(r, 0);
     first.close();
     const store = sqliteStore(open(path));

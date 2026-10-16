@@ -78,7 +78,7 @@ describe('redisStore across connections', () => {
 
   test('a record survives a new store instance on a new connection', async () => {
     const prefix = fresh();
-    const r: ScopeRecord = { ...record('s', 3, 50), cursor: 'c9', seen: ['a'] };
+    const r: ScopeRecord = { ...record('s', 3, 50), cursors: { 'log:s': 'c9' }, seen: ['a'] };
     await redisStore(await connect(), { prefix }).put(r, 0);
     const store = redisStore(await connect(), { prefix });
     expect(await store.get('s')).toEqual(r);

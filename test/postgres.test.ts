@@ -78,7 +78,7 @@ describe('postgresStore across connections', () => {
   test('a record survives a new store instance on a new connection, and migrate again keeps it', async () => {
     const prefix = await fresh();
     const first = await connect();
-    const r: ScopeRecord = { ...record('s', 3, 50), cursor: 'c9', seen: ['a'] };
+    const r: ScopeRecord = { ...record('s', 3, 50), cursors: { 'log:s': 'c9' }, seen: ['a'] };
     await postgresStore(first, { prefix }).put(r, 0);
     await first.end();
     const second = await connect();
