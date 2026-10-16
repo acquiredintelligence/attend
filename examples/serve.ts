@@ -6,9 +6,9 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
-import { createAttend, memoryStore } from 'attend';
-import { decisionFeed } from 'attend/mcp';
-import { serve } from 'attend/server';
+import { createAttend, memoryStore } from '@acquiredintelligence/attend';
+import { decisionFeed } from '@acquiredintelligence/attend/mcp';
+import { serve } from '@acquiredintelligence/attend/server';
 
 const store = memoryStore();
 const attend = createAttend({

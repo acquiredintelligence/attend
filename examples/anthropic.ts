@@ -2,8 +2,8 @@
  * `llmJudge` on Claude with structured output. The README shows this with `@anthropic-ai/sdk`;
  * this file declares the part of that client the judge reads, so it typechecks without the SDK.
  */
-import { PermanentError } from 'attend';
-import { llmJudge } from 'attend/llm';
+import { PermanentError } from '@acquiredintelligence/attend';
+import { llmJudge } from '@acquiredintelligence/attend/llm';
 
 type ContentBlock = { type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
 

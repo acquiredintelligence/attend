@@ -19,7 +19,7 @@ A sink is `{ deliver(decision, signal) }`. attend calls it at least once per dec
 Map each route to an operation in the host. The decision id makes each operation idempotent.
 
 ```ts
-import { createAttend, defaultNotice, routes, type DeadLetter, type Decision, type Event, type Judge, type Kind, type ScopeStore } from 'attend';
+import { createAttend, defaultNotice, routes, type DeadLetter, type Decision, type Event, type Judge, type Kind, type ScopeStore } from '@acquiredintelligence/attend';
 
 export interface Host {
   /** Deliver now, even mid-turn: steer or cancel the current turn. */
@@ -63,7 +63,7 @@ Each `Host` method records `key` and returns early when it has seen the key befo
 ## Failures
 
 - Throw to retry. attend retries through `retryBackoffMs`, then turns the decision into a dead letter.
-- Throw `PermanentError` from `attend` to dead-letter at once, for a decision the host can never take.
+- Throw `PermanentError` from `@acquiredintelligence/attend` to dead-letter at once, for a decision the host can never take.
 - Each delivery holds a lease of `deliveryTimeoutMs`. attend aborts `signal` when it expires and counts it as a failed attempt. Stop when `signal` aborts.
 - One stuck delivery holds back later decisions in the same scope, because delivery is in order. Dead letters go through their own lane, so a failing `deadLetter` never holds back decisions.
 - Nothing is dropped. A scope whose sink stays down fills its decision lane to `maxOutbox`, and one whose dead-letter handler stays down fills its dead-letter lane to `maxDeadLetters`. Either cap makes `push` and a source's `emit` reject with `OutboxFullError` until the lane drains, and `attach` backs off and resubscribes on its own.

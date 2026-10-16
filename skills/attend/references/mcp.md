@@ -1,14 +1,14 @@
 # MCP Events sources
 
-`mcpEventsSource(client, options)` from `attend/mcp` turns one MCP Events subscription into a `Source`. It needs the peer dependencies `@modelcontextprotocol/sdk` and `zod` (3.25 or later, or 4).
+`mcpEventsSource(client, options)` from `@acquiredintelligence/attend/mcp` turns one MCP Events subscription into a `Source`. It needs the peer dependencies `@modelcontextprotocol/sdk` and `zod` (3.25 or later, or 4).
 
 ## Wire it
 
 ```ts
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { createAttend, memoryStore, routes } from 'attend';
-import { mcpEventsSource } from 'attend/mcp';
+import { createAttend, memoryStore, routes } from '@acquiredintelligence/attend';
+import { mcpEventsSource } from '@acquiredintelligence/attend/mcp';
 
 const client = new Client({ name: 'my-agent', version: '1.0.0' });
 await client.connect(new StdioClientTransport({ command: 'node', args: ['./ci-events-server.js'] }));
@@ -71,7 +71,7 @@ A rejected `attach` means the server refused the subscription or the Client clos
 `kind` cannot drop an event. To drop noise such as heartbeats, wrap the source and keep its key:
 
 ```ts
-import type { Event, Source } from 'attend';
+import type { Event, Source } from '@acquiredintelligence/attend';
 
 export const only = (source: Source, keep: (event: Event) => boolean): Source => ({
   key: source.key,
@@ -114,7 +114,7 @@ export async function pollServerClient(event: string, occurrences: Occurrence[])
 }
 ```
 
-Attach `mcpEventsSource(client, { name, clock })` with the same fake clock as `createAttend`. The client and the server talk through promise callbacks, so call `drain()` from `attend/testing` about four times after you attach, and again after each poll interval you advance, before you assert. Then advance past the settle deadline.
+Attach `mcpEventsSource(client, { name, clock })` with the same fake clock as `createAttend`. The client and the server talk through promise callbacks, so call `drain()` from `@acquiredintelligence/attend/testing` about four times after you attach, and again after each poll interval you advance, before you assert. Then advance past the settle deadline.
 
 ## Typing note
 
@@ -125,8 +125,8 @@ With `exactOptionalPropertyTypes` on, SDK 1.32's `StreamableHTTPClientTransport`
 `npx attend serve` runs attend as a sidecar. Events go in as NDJSON on `POST /v1/ingest`, and judged decisions come out on `/mcp` as MCP Events. Raw events never cross MCP.
 
 ```sh
-npm install attend @modelcontextprotocol/server zod
+npm install @acquiredintelligence/attend @modelcontextprotocol/server zod
 npx attend serve --store sqlite:attend.db --judge jev --kinds kinds.json --act-threshold 0.4
 ```
 
-`kinds.json` maps event names to kinds, such as `{"message.created":"flush","build.failed":"closing"}`. Flags and their environment variables are in the README. Subscribe to `attention.decision` with `events/stream`, poll it with `events/poll`, or call the `attend_wait` tool in a loop from a host that cannot subscribe. In TypeScript, `decisionFeed` from `attend/mcp` keeps the cursor. Use `serve(attend, store, { listen })` from `attend/server` to run the same thing inside your own process.
+`kinds.json` maps event names to kinds, such as `{"message.created":"flush","build.failed":"closing"}`. Flags and their environment variables are in the README. Subscribe to `attention.decision` with `events/stream`, poll it with `events/poll`, or call the `attend_wait` tool in a loop from a host that cannot subscribe. In TypeScript, `decisionFeed` from `@acquiredintelligence/attend/mcp` keeps the cursor. Use `serve(attend, store, { listen })` from `@acquiredintelligence/attend/server` to run the same thing inside your own process.

@@ -32,7 +32,7 @@ An app emits a firehose of events: log lines, messages, clicks, alerts. An agent
 The judge picks the route and the app executes it: `interrupt` means "the agent should hear this now", and your handler decides whether that cancels the turn, steers it or shows a banner. Raw events never leave attend. Only settled, judged decisions do.
 
 ```sh
-npm install attend
+npm install @acquiredintelligence/attend
 ```
 
 attend needs Node 22.13 or later and ships ESM only. The core has no runtime dependencies and imports nothing from Node.
@@ -53,12 +53,12 @@ Raw events never cross MCP, so the MCP hop carries a few decisions a minute and 
 ### attend serve
 
 ```sh
-npm install attend @modelcontextprotocol/server zod
+npm install @acquiredintelligence/attend @modelcontextprotocol/server zod
 npx attend serve --store sqlite:attend.db --judge jev --kinds kinds.json
 # attend serving http://127.0.0.1:8787  (ingest POST http://127.0.0.1:8787/v1/ingest, MCP http://127.0.0.1:8787/mcp)
 ```
 
-One command, no image. The MCP server package is an optional peer of `attend`, so the embedded engine stays dependency-free; `attend serve` exits with an error naming it when it is missing. Every flag has an environment variable, and a flag wins.
+One command, no image. The MCP server package is an optional peer of `@acquiredintelligence/attend`, so the embedded engine stays dependency-free; `attend serve` exits with an error naming it when it is missing. Every flag has an environment variable, and a flag wins.
 
 | Flag | Env | Default | |
 |---|---|---|---|
@@ -80,15 +80,15 @@ curl -H 'content-type: application/x-ndjson' --data-binary @events.ndjson http:/
 
 A line is an event, `{"scope", "flush": true}` or `{"scope", "end": true}`. The reply is `{accepted, duplicates, rejected: [{line, scope, error}]}` once every accepted line has committed, and a `429` with `Retry-After` when attend is over its limit. `POST /v1/ingest/stream` keeps one NDJSON request open and answers with acks and credits.
 
-An agent hears the decisions by subscribing to `attention.decision` on `/mcp`. Hosts that do not subscribe call the `attend_wait` tool in a loop. In TypeScript, `decisionFeed` from `attend/mcp` keeps the cursor for you. This is [`examples/serve.ts`](examples/serve.ts), which runs the server and a subscriber in one process:
+An agent hears the decisions by subscribing to `attention.decision` on `/mcp`. Hosts that do not subscribe call the `attend_wait` tool in a loop. In TypeScript, `decisionFeed` from `@acquiredintelligence/attend/mcp` keeps the cursor for you. This is [`examples/serve.ts`](examples/serve.ts), which runs the server and a subscriber in one process:
 
 ```ts
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
-import { createAttend, memoryStore } from 'attend';
-import { decisionFeed } from 'attend/mcp';
-import { serve } from 'attend/server';
+import { createAttend, memoryStore } from '@acquiredintelligence/attend';
+import { decisionFeed } from '@acquiredintelligence/attend/mcp';
+import { serve } from '@acquiredintelligence/attend/server';
 
 const store = memoryStore();
 const attend = createAttend({
@@ -116,7 +116,7 @@ const feed = decisionFeed(client, { cursor: null, signal: stop.signal })[Symbol.
 ## Quickstart
 
 ```ts
-import { createAttend, defaultNotice, memoryStore, routes, type Decision } from 'attend';
+import { createAttend, defaultNotice, memoryStore, routes, type Decision } from '@acquiredintelligence/attend';
 
 const tell = (decision: Decision) => console.log(`[${decision.route}]\n${defaultNotice(decision)}`);
 
@@ -237,12 +237,12 @@ attend picks the route, and your sink carries it out. `routes()` makes you write
 
 ## MCP Events
 
-`mcpEventsSource` from `attend/mcp` turns one MCP Events subscription into a source. Install the peer dependencies with `npm install @modelcontextprotocol/sdk zod`; zod 3.25 or later and zod 4 both work. This excerpt is from [`examples/mcp-events.ts`](examples/mcp-events.ts), with `attend` set up as in the quickstart and `controller` an `AbortController`:
+`mcpEventsSource` from `@acquiredintelligence/attend/mcp` turns one MCP Events subscription into a source. Install the peer dependencies with `npm install @modelcontextprotocol/sdk zod`; zod 3.25 or later and zod 4 both work. This excerpt is from [`examples/mcp-events.ts`](examples/mcp-events.ts), with `attend` set up as in the quickstart and `controller` an `AbortController`:
 
 ```ts
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { mcpEventsSource } from 'attend/mcp';
+import { mcpEventsSource } from '@acquiredintelligence/attend/mcp';
 
 const client = new Client({ name: 'my-agent', version: '1.0.0' });
 await client.connect(new StdioClientTransport({ command: 'node', args: ['./ci-events-server.js'] }));
@@ -286,12 +286,12 @@ A judge is a function, `(input: JudgeInput, signal: AbortSignal) => Promise<Judg
 
 ### llmJudge
 
-`llmJudge` from `attend/llm` works with any model that answers in JSON matching a schema. You pass that one call as `complete`. attend writes the prompt and the schema and validates the reply. With Claude:
+`llmJudge` from `@acquiredintelligence/attend/llm` works with any model that answers in JSON matching a schema. You pass that one call as `complete`. attend writes the prompt and the schema and validates the reply. With Claude:
 
 ```ts
 import Anthropic from '@anthropic-ai/sdk';
-import { PermanentError } from 'attend';
-import { llmJudge } from 'attend/llm';
+import { PermanentError } from '@acquiredintelligence/attend';
+import { llmJudge } from '@acquiredintelligence/attend/llm';
 
 const anthropic = new Anthropic();
 
@@ -326,20 +326,20 @@ export const judge = llmJudge({
 
 ### jevJudge
 
-`jevJudge` from `attend/jev` calls TypeSafe's Jev, a classifier built for this kind of question, with your own TypeSafe key. It asks one `choice` question for the route and one `noul` question per predicate, and sends the state as JSON. The model defaults to `jev-latest`; `jev-preview`, `jev-1.14.0` and `jev-1.13.0` are the others. Pass `endpoint` to go through OpenRouter or LiteLLM, and `longContext: true` for 262k tokens of context at some cost in speed and accuracy. Its probabilities are real, so [the act threshold](#the-act-threshold) works with it.
+`jevJudge` from `@acquiredintelligence/attend/jev` calls TypeSafe's Jev, a classifier built for this kind of question, with your own TypeSafe key. It asks one `choice` question for the route and one `noul` question per predicate, and sends the state as JSON. The model defaults to `jev-latest`; `jev-preview`, `jev-1.14.0` and `jev-1.13.0` are the others. Pass `endpoint` to go through OpenRouter or LiteLLM, and `longContext: true` for 262k tokens of context at some cost in speed and accuracy. Its probabilities are real, so [the act threshold](#the-act-threshold) works with it.
 
 ```ts
-import { jevJudge } from 'attend/jev';
+import { jevJudge } from '@acquiredintelligence/attend/jev';
 
 export const judge = jevJudge({ apiKey: process.env.TYPESAFE_API_KEY ?? '' });
 ```
 
 ### decisionsJudge
 
-`decisionsJudge` from `attend/decisions` calls the OpenAI Decisions API. It asks one `choice` question for the route and one `predicate` question per predicate.
+`decisionsJudge` from `@acquiredintelligence/attend/decisions` calls the OpenAI Decisions API. It asks one `choice` question for the route and one `predicate` question per predicate.
 
 ```ts
-import { decisionsJudge } from 'attend/decisions';
+import { decisionsJudge } from '@acquiredintelligence/attend/decisions';
 
 export const judge = decisionsJudge({ apiKey: process.env.OPENAI_API_KEY ?? '', model: '<model id>' });
 ```
@@ -354,11 +354,11 @@ A window must never overload the judge that reads it. A judge declares its input
 
 By default the judge's route stands. A judge that returns real probabilities (`jevJudge`, `decisionsJudge`) also ranks how much the agent should act, and only your app knows whether an interruption or a missed moment costs more. Set `actThreshold` in (0, 1] on `createAttend`, and the route becomes an acting route (`interrupt` or `ask`, whichever is likelier and offered) exactly when `p(interrupt) + p(ask)` is at least the threshold, and a quieter route (`skip`, `note`, `queue` or `wait`, by probability) otherwise. It is off by default. A judgment without probabilities is never changed, and a changed route emits a `routeThresholded` trace. The threshold is applied before the decision is logged, so replays stay deterministic.
 
-Pick it from your own traffic instead of guessing. Replay a recorded stream with the threshold off, record each judgment, and `suggestThreshold` from `attend/testing` returns the smallest threshold whose acts fit an interruptions-per-hour budget, with the rate at every candidate:
+Pick it from your own traffic instead of guessing. Replay a recorded stream with the threshold off, record each judgment, and `suggestThreshold` from `@acquiredintelligence/attend/testing` returns the smallest threshold whose acts fit an interruptions-per-hour budget, with the rate at every candidate:
 
 ```ts
-import { suggestThreshold } from 'attend/testing';
-import type { Judge, Judgment } from 'attend';
+import { suggestThreshold } from '@acquiredintelligence/attend/testing';
+import type { Judge, Judgment } from '@acquiredintelligence/attend';
 
 export const judgments: Judgment[] = [];
 export const recording = (judge: Judge): Judge => async (input, signal) => {
@@ -382,7 +382,7 @@ Give `createAttend` a `capture(scope, signal)` that returns a `JudgeImage` (base
 Any function with the judge signature works, and judges compose as functions. This one answers a direct message without calling a model:
 
 ```ts
-import type { Judge } from 'attend';
+import type { Judge } from '@acquiredintelligence/attend';
 
 export const withShortcut =
   (judge: Judge): Judge =>
@@ -427,10 +427,10 @@ One `ScopeStore` holds each scope's latest snapshot, the inputs committed since 
 
 | Store | Create it | Guarantees | Caveats |
 |---|---|---|---|
-| Memory | `memoryStore()` from `attend` | Atomic within one process. | State is lost when the process exits. Use it for tests, demos and browser apps. |
-| SQLite | `sqliteStore(db)` from `attend/sqlite`, with `db` a `node:sqlite` `DatabaseSync`, a `bun:sqlite` `Database`, or any object with the same `exec` and `prepare`. `sqliteStore({ file, worker: true })` runs the database on a worker thread. | One transaction per group of writes. Durable on a file. Creates its tables on construction. | Given a handle, calls block the event loop for their duration; the worker mode does not. Processes that share the file must run on one host. |
-| Postgres | `postgresStore(pool)` from `attend/postgres`, after `await migrate(pool)` | One statement commits a group of scopes' writes together, and decisions wake subscribers in other processes through `LISTEN` and `NOTIFY` when you pass a `listener`. Durable. Safe for many replicas. | Run `migrate()` at deploy with a role that can create tables. The store needs only `SELECT`, `INSERT`, `UPDATE` and `DELETE`. The table prefix must be lowercase. PostgreSQL 13 or later. |
-| Redis | `redisStore((args) => client.sendCommand(args))` from `attend/redis` | One script validates and writes a group of scopes' writes together, and keeps the decision log in a stream. Redis 6.2 or later. | Durable only as far as your Redis persistence settings. On Redis Cluster, a group's keys must hash to one slot. Put a hash tag in the prefix, such as `redisStore(send, { prefix: 'attend:{app}:' })`. |
+| Memory | `memoryStore()` from `@acquiredintelligence/attend` | Atomic within one process. | State is lost when the process exits. Use it for tests, demos and browser apps. |
+| SQLite | `sqliteStore(db)` from `@acquiredintelligence/attend/sqlite`, with `db` a `node:sqlite` `DatabaseSync`, a `bun:sqlite` `Database`, or any object with the same `exec` and `prepare`. `sqliteStore({ file, worker: true })` runs the database on a worker thread. | One transaction per group of writes. Durable on a file. Creates its tables on construction. | Given a handle, calls block the event loop for their duration; the worker mode does not. Processes that share the file must run on one host. |
+| Postgres | `postgresStore(pool)` from `@acquiredintelligence/attend/postgres`, after `await migrate(pool)` | One statement commits a group of scopes' writes together, and decisions wake subscribers in other processes through `LISTEN` and `NOTIFY` when you pass a `listener`. Durable. Safe for many replicas. | Run `migrate()` at deploy with a role that can create tables. The store needs only `SELECT`, `INSERT`, `UPDATE` and `DELETE`. The table prefix must be lowercase. PostgreSQL 13 or later. |
+| Redis | `redisStore((args) => client.sendCommand(args))` from `@acquiredintelligence/attend/redis` | One script validates and writes a group of scopes' writes together, and keeps the decision log in a stream. Redis 6.2 or later. | Durable only as far as your Redis persistence settings. On Redis Cluster, a group's keys must hash to one slot. Put a hash tag in the prefix, such as `redisStore(send, { prefix: 'attend:{app}:' })`. |
 
 Each store also takes `retain` (decision rows kept by count or age), so the log does not grow without bound. Every store passes the same conformance and crash suites.
 
@@ -450,13 +450,13 @@ Each adapter also has an `EventLog`: `memoryLog`, `sqliteLog`, `postgresLog` and
 
 ## Testing with a fake clock
 
-`attend/testing` makes settling deterministic. Inject `fakeClock()`, answer with `scriptedJudge`, and assert on `recordingSink`. This excerpt is from [`examples/testing.ts`](examples/testing.ts), which runs with `node --test`:
+`@acquiredintelligence/attend/testing` makes settling deterministic. Inject `fakeClock()`, answer with `scriptedJudge`, and assert on `recordingSink`. This excerpt is from [`examples/testing.ts`](examples/testing.ts), which runs with `node --test`:
 
 ```ts
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createAttend, memoryStore, type DeadLetter, type Event, type Kind } from 'attend';
-import { fakeClock, recordingSink, scriptedJudge, type ScriptedAnswer } from 'attend/testing';
+import { createAttend, memoryStore, type DeadLetter, type Event, type Kind } from '@acquiredintelligence/attend';
+import { fakeClock, recordingSink, scriptedJudge, type ScriptedAnswer } from '@acquiredintelligence/attend/testing';
 
 const kind = (event: Event): Kind => {
   if (event.name === 'user.message') return 'flush';
@@ -524,8 +524,8 @@ Run the conformance suites and the crash suites against your adapter with any te
 
 ```ts
 import { test } from 'node:test';
-import { memoryStore } from 'attend';
-import { crashSuite, multiScopeCrashSuite, scopeStoreConformance, decisionLogConformance } from 'attend/testing';
+import { memoryStore } from '@acquiredintelligence/attend';
+import { crashSuite, multiScopeCrashSuite, scopeStoreConformance, decisionLogConformance } from '@acquiredintelligence/attend/testing';
 
 for (const c of scopeStoreConformance(() => memoryStore())) test(c.name, c.run);
 for (const c of crashSuite(() => memoryStore())) test(c.name, c.run);
@@ -574,7 +574,7 @@ For Codex or Cursor, copy `skills/attend` into your project's `.agents/skills/`.
 
 ## Status
 
-attend is v0, and its API can change before 1.0. MCP Events is a working-group draft, so its wire shapes can change too. `attend/mcp` follows the current draft.
+attend is v0, and its API can change before 1.0. MCP Events is a working-group draft, so its wire shapes can change too. `@acquiredintelligence/attend/mcp` follows the current draft.
 
 ## License
 

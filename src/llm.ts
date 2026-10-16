@@ -13,8 +13,8 @@
  *
  * ```ts
  * import Anthropic from '@anthropic-ai/sdk';
- * import { PermanentError } from 'attend';
- * import { llmJudge } from 'attend/llm';
+ * import { PermanentError } from '@acquiredintelligence/attend';
+ * import { llmJudge } from '@acquiredintelligence/attend/llm';
  *
  * const anthropic = new Anthropic();
  *
@@ -49,8 +49,8 @@
  *
  * ```ts
  * import OpenAI from 'openai';
- * import { PermanentError } from 'attend';
- * import { llmJudge } from 'attend/llm';
+ * import { PermanentError } from '@acquiredintelligence/attend';
+ * import { llmJudge } from '@acquiredintelligence/attend/llm';
  *
  * const openai = new OpenAI();
  *
@@ -84,8 +84,8 @@
  *
  * ```ts
  * import { GoogleGenAI } from '@google/genai';
- * import { PermanentError } from 'attend';
- * import { llmJudge } from 'attend/llm';
+ * import { PermanentError } from '@acquiredintelligence/attend';
+ * import { llmJudge } from '@acquiredintelligence/attend/llm';
  *
  * const ai = new GoogleGenAI({});
  *
@@ -109,7 +109,7 @@
  * ```ts
  * import { openai } from '@ai-sdk/openai';
  * import { generateObject, jsonSchema } from 'ai';
- * import { llmJudge } from 'attend/llm';
+ * import { llmJudge } from '@acquiredintelligence/attend/llm';
  *
  * export const judge = llmJudge({
  *   complete: async ({ system, prompt, images, schema, signal }) => {

@@ -96,8 +96,8 @@ Then, in the same message, one batch (keep only the questions you could not answ
 Put it where the app keeps its integrations, named for what it is. It owns the kinds table, the judge, the sink and the run loop, and exports two things the call sites use: `hear` and `startAttention`.
 
 ```ts
-import { createAttend, defaultNotice, memoryStore, routes, type Decision, type Event, type Kind } from 'attend';
-import { jevJudge } from 'attend/jev';
+import { createAttend, defaultNotice, memoryStore, routes, type Decision, type Event, type Kind } from '@acquiredintelligence/attend';
+import { jevJudge } from '@acquiredintelligence/attend/jev';
 
 declare const agent: {
   steer(scope: string, text: string): Promise<void>;
@@ -139,29 +139,29 @@ At each chokepoint from step 1, add one line that hands the existing event to `h
 
 | Situation | Choice |
 |---|---|
-| The user has a TypeSafe key | `jevJudge` from `attend/jev`. A fast classifier with real probabilities. The speed default for real time. |
-| The app uses the OpenAI Decisions API | `decisionsJudge` from `attend/decisions` |
-| The app has an LLM client and the user prefers it | `llmJudge` from `attend/llm` with a `complete` call; slower, see [references/judges.md](references/judges.md) |
+| The user has a TypeSafe key | `jevJudge` from `@acquiredintelligence/attend/jev`. A fast classifier with real probabilities. The speed default for real time. |
+| The app uses the OpenAI Decisions API | `decisionsJudge` from `@acquiredintelligence/attend/decisions` |
+| The app has an LLM client and the user prefers it | `llmJudge` from `@acquiredintelligence/attend/llm` with a `complete` call; slower, see [references/judges.md](references/judges.md) |
 | A rule decides ("a direct message always interrupts") | A plain function |
 | Tests, a demo, a short-lived process | `memoryStore()` |
-| One host with a disk | `sqliteStore(db)` from `attend/sqlite` |
-| Several replicas, or Postgres already there | `postgresStore(pool)` from `attend/postgres` after `migrate(pool)` |
-| Redis already there | `redisStore(send)` from `attend/redis` |
+| One host with a disk | `sqliteStore(db)` from `@acquiredintelligence/attend/sqlite` |
+| Several replicas, or Postgres already there | `postgresStore(pool)` from `@acquiredintelligence/attend/postgres` after `migrate(pool)` |
+| Redis already there | `redisStore(send)` from `@acquiredintelligence/attend/redis` |
 
 [references/stores.md](references/stores.md) has the setup for each store. If the app is not TypeScript, or the agent is another process, run `npx attend serve` beside it instead, post NDJSON to `/v1/ingest` from the existing chokepoints, and read decisions over MCP Events (`events/stream`, `events/poll` or the `attend_wait` tool). See [references/mcp.md](references/mcp.md).
 
 ### Prove it with a fake clock
 
-Inject `fakeClock()` from `attend/testing` as `clock`, answer with `scriptedJudge([...])`, and assert on `recordingSink()`. Advance the clock to the exact deadline (such as `DEFAULT_POLICY.closingGraceMs`) and assert nothing happens one millisecond before it. Cover every kind the app uses, one `wait` that merges with the next window, and one failure that ends in a dead letter. [references/testing.md](references/testing.md) has the setup.
+Inject `fakeClock()` from `@acquiredintelligence/attend/testing` as `clock`, answer with `scriptedJudge([...])`, and assert on `recordingSink()`. Advance the clock to the exact deadline (such as `DEFAULT_POLICY.closingGraceMs`) and assert nothing happens one millisecond before it. Cover every kind the app uses, one `wait` that merges with the next window, and one failure that ends in a dead letter. [references/testing.md](references/testing.md) has the setup.
 
 ### Tune the act threshold
 
 By default the judge's route stands. Where the judge returns real probabilities (`jevJudge`, `decisionsJudge`), set `actThreshold` so the agent acts only when `p(interrupt) + p(ask)` reaches it. Choose the value from the app's own events against the user's interruptions-per-hour budget (question 3), not by guessing: replay a recording with the threshold off, collect each judgment, and let `suggestThreshold` pick the smallest threshold that fits.
 
 ```ts
-import { createAttend, memoryStore, type Event, type Judge, type Judgment } from 'attend';
-import { jevJudge } from 'attend/jev';
-import { fakeClock, suggestThreshold } from 'attend/testing';
+import { createAttend, memoryStore, type Event, type Judge, type Judgment } from '@acquiredintelligence/attend';
+import { jevJudge } from '@acquiredintelligence/attend/jev';
+import { fakeClock, suggestThreshold } from '@acquiredintelligence/attend/testing';
 
 export async function tune(recorded: { scope: string; event: Event }[], maxActsPerHour: number) {
   const judgments: Judgment[] = [];

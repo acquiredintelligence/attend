@@ -5,8 +5,8 @@
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { createAttend, defaultNotice, memoryStore, routes, type Decision } from 'attend';
-import { mcpEventsSource } from 'attend/mcp';
+import { createAttend, defaultNotice, memoryStore, routes, type Decision } from '@acquiredintelligence/attend';
+import { mcpEventsSource } from '@acquiredintelligence/attend/mcp';
 
 const client = new Client({ name: 'my-agent', version: '1.0.0' });
 await client.connect(new StdioClientTransport({ command: 'node', args: ['./ci-events-server.js'] }));

@@ -1,4 +1,4 @@
-import { createAttend, defaultNotice, memoryStore, routes, type Decision } from 'attend';
+import { createAttend, defaultNotice, memoryStore, routes, type Decision } from '@acquiredintelligence/attend';
 
 const tell = (decision: Decision) => console.log(`[${decision.route}]\n${defaultNotice(decision)}`);
 

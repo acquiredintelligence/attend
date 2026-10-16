@@ -18,10 +18,10 @@
       "node"
     ],
     "paths": {
-      "attend": [
+      "@acquiredintelligence/attend": [
         "./src/index.ts"
       ],
-      "attend/*": [
+      "@acquiredintelligence/attend/*": [
         "./src/*.ts"
       ]
     }
