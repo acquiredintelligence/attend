@@ -9,37 +9,44 @@ type Parsed =
   | { kind: 'flush' | 'end'; scope: string }
   | { kind: 'rejected'; scope: string | null; error: Rejection['error'] };
 
+type Operation = Exclude<Parsed, { kind: 'rejected' }>;
+type QueuedLine = { line: number; text: string | null } | { line: number; parsed: Parsed };
+type RetryWindow = { active: boolean; lines: Set<number> };
+
 function object(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function parse(text: string | null, principal: Principal | null): Parsed {
   if (text === null) return { kind: 'rejected', scope: null, error: 'too_large' };
-  let value: unknown;
-  try { value = JSON.parse(text); }
-  catch { return { kind: 'rejected', scope: null, error: 'invalid' }; }
-  const scope = object(value) && typeof value.scope === 'string' ? value.scope : null;
-  const invalid: Parsed = { kind: 'rejected', scope, error: 'invalid' };
-  if (!object(value) || !scope) return invalid;
-  const { scope: _, flush, end, ...event } = value;
-  let parsed: Parsed;
-  if (flush !== undefined || end !== undefined) {
-    if (flush === true && end === undefined) parsed = { kind: 'flush', scope };
-    else if (end === true && flush === undefined) parsed = { kind: 'end', scope };
-    else return invalid;
-  } else {
-    if (typeof event.id !== 'string' || typeof event.at !== 'number' || !Number.isFinite(event.at)
-      || typeof event.name !== 'string' || !object(event.data)
-      || (event.text !== undefined && typeof event.text !== 'string')) return invalid;
-    parsed = { kind: 'event', scope, event: {
-      ...event, id: event.id, at: event.at, name: event.name, data: event.data as JsonObject,
-      ...(typeof event.text === 'string' ? { text: event.text } : {}),
-    } };
-  }
-  if (principal && !principal.scopes.some((prefix) => scope.startsWith(prefix))) {
-    return { kind: 'rejected', scope, error: 'forbidden' };
-  }
-  return parsed;
+  let scope: string | null = null;
+  try {
+    let value: unknown;
+    try { value = JSON.parse(text); }
+    catch (error) { return { kind: 'rejected', scope: null, error: error instanceof SyntaxError ? 'invalid' : 'internal' }; }
+    scope = object(value) && typeof value.scope === 'string' ? value.scope : null;
+    const invalid: Parsed = { kind: 'rejected', scope, error: 'invalid' };
+    if (!object(value) || !scope) return invalid;
+    const { scope: _, flush, end, ...event } = value;
+    let parsed: Parsed;
+    if (flush !== undefined || end !== undefined) {
+      if (flush === true && end === undefined) parsed = { kind: 'flush', scope };
+      else if (end === true && flush === undefined) parsed = { kind: 'end', scope };
+      else return invalid;
+    } else {
+      if (typeof event.id !== 'string' || typeof event.at !== 'number' || !Number.isFinite(event.at)
+        || typeof event.name !== 'string' || !object(event.data)
+        || (event.text !== undefined && typeof event.text !== 'string')) return invalid;
+      parsed = { kind: 'event', scope, event: {
+        ...event, id: event.id, at: event.at, name: event.name, data: event.data as JsonObject,
+        ...(typeof event.text === 'string' ? { text: event.text } : {}),
+      } };
+    }
+    if (principal && !principal.scopes.some((prefix) => parsed.scope.startsWith(prefix))) {
+      return { kind: 'rejected', scope, error: 'forbidden' };
+    }
+    return parsed;
+  } catch { return { kind: 'rejected', scope, error: 'internal' }; }
 }
 
 export function ndjsonIngest(attend: Attend, options: NdjsonIngestOptions = {}): HttpRoute {
@@ -72,7 +79,9 @@ export function ndjsonIngest(attend: Attend, options: NdjsonIngestOptions = {}):
     let offset = 0;
     let parts: Buffer[] = [];
     let lineBytes = 0;
-    let queue: { line: number; text: string | null }[] = [];
+    let queue: QueuedLine[] = [];
+    let deferred: QueuedLine[] = [];
+    const scopeBlocks = new Map<string, { line: number; operation: Operation; retry: RetryWindow }>();
     let cursor = 0;
     let total = 0;
     let written = 0;
@@ -147,18 +156,30 @@ export function ndjsonIngest(attend: Attend, options: NdjsonIngestOptions = {}):
       done.set(line, rejection);
       if (!ackScheduled) { ackScheduled = true; queueMicrotask(flushAck); }
     };
-    const holdCredit = (line: number, delay: number) => {
-      const until = Date.now() + delay;
-      blockedUntil = Math.max(blockedUntil, until);
+    const holdCredit = (line: number, retry: RetryWindow) => {
+      if (!retry.active) return;
+      retry.lines.add(line);
       withheld.add(line);
+    };
+    const pauseDispatch = (line: number, delay: number): RetryWindow => {
+      const until = Date.now() + delay;
+      const retry: RetryWindow = { active: true, lines: new Set() };
+      blockedUntil = Math.max(blockedUntil, until);
+      holdCredit(line, retry);
       request.pause();
       const arm = (remaining: number) => {
         const timer = setTimeout(() => {
           retryTimers.delete(timer);
           if (stopped) return;
           if (Date.now() < until) { arm(until - Date.now()); return; }
-          withheld.delete(line);
-          if (line < written) frame({ credit: 1 });
+          retry.active = false;
+          let granted = 0;
+          for (const held of retry.lines) {
+            withheld.delete(held);
+            if (held < written) granted += 1;
+          }
+          retry.lines.clear();
+          if (granted) frame({ credit: granted });
           fill();
           schedule();
           complete();
@@ -166,43 +187,58 @@ export function ndjsonIngest(attend: Attend, options: NdjsonIngestOptions = {}):
         retryTimers.add(timer);
       };
       arm(delay);
+      return retry;
     };
-    const reject = (line: number, scope: string, error: unknown) => {
+    const reject = (line: number, operation: Operation, error: unknown) => {
       if (stopped) return;
       let code: Rejection['error'];
       if (error instanceof BackpressureError) {
         code = 'backpressure';
         retryAfterMs = Math.max(retryAfterMs ?? 0, error.retryAfterMs);
-        if (stream) holdCredit(line, error.retryAfterMs);
+        if (stream) {
+          const retry = pauseDispatch(line, error.retryAfterMs);
+          const previous = scopeBlocks.get(operation.scope);
+          if (!previous || line < previous.line) scopeBlocks.set(operation.scope, { line, operation, retry });
+        }
       } else if (error instanceof OutboxFullError) code = 'outbox_full';
       else if (error instanceof ConflictError) code = 'conflict';
-      else { fail(); return; }
-      finish(line, { line, scope, error: code });
+      else code = 'internal';
+      finish(line, { line, scope: operation.scope, error: code });
     };
     const blocked = () => stream && (Date.now() < blockedUntil || outputBlocked);
     const processSlice = async () => {
       try {
         let count = 0;
-        while (!stopped && !blocked() && cursor < queue.length && count++ < slice) {
+        while (!stopped && !outputBlocked && cursor < queue.length && count++ < slice) {
           const item = queue[cursor++];
           if (!item) break;
-          const parsed = parse(item.text, principal);
+          const parsed = 'parsed' in item ? item.parsed : parse(item.text, principal);
           if (!stream && retryAfterMs !== null) {
             finish(item.line, { line: item.line, scope: parsed.scope, error: 'backpressure' });
           } else if (parsed.kind === 'rejected') {
             finish(item.line, { line: item.line, scope: parsed.scope, error: parsed.error });
           } else {
-            try {
-              const operation = parsed.kind === 'event' ? attend.push(parsed.scope, [parsed.event])
-                : parsed.kind === 'flush' ? attend.flush(parsed.scope) : attend.end(parsed.scope);
-              operation.then(() => finish(item.line, null), (error: unknown) => reject(item.line, parsed.scope, error));
-            } catch (error) { reject(item.line, parsed.scope, error); }
+            const block = scopeBlocks.get(parsed.scope);
+            if (block && !(parsed.kind === block.operation.kind
+              && (parsed.kind !== 'event' || (block.operation.kind === 'event' && parsed.event.id === block.operation.event.id)))) {
+              holdCredit(item.line, block.retry);
+              finish(item.line, { line: item.line, scope: parsed.scope, error: 'backpressure' });
+            } else {
+              if (block) scopeBlocks.delete(parsed.scope);
+              if (blocked() || deferred.length) deferred.push({ line: item.line, parsed });
+              else {
+                try {
+                  const operation = parsed.kind === 'event' ? attend.push(parsed.scope, [parsed.event])
+                    : parsed.kind === 'flush' ? attend.flush(parsed.scope) : attend.end(parsed.scope);
+                  operation.then(() => finish(item.line, null), (error: unknown) => reject(item.line, parsed, error));
+                } catch (error) { reject(item.line, parsed, error); }
+              }
+            }
           }
           // Observe immediate admission failures without waiting for the group commit.
           await Promise.resolve();
         }
-      } catch { fail(); }
-      finally {
+      } finally {
         if (cursor >= queue.length / 2) { queue = queue.slice(cursor); cursor = 0; }
         scheduled = false;
         schedule();
@@ -210,7 +246,13 @@ export function ndjsonIngest(attend: Attend, options: NdjsonIngestOptions = {}):
       }
     };
     function schedule() {
-      if (stopped || scheduled || blocked() || cursor === queue.length) return;
+      if (stopped || scheduled || outputBlocked) return;
+      if (!blocked() && deferred.length) {
+        queue = deferred.concat(queue.slice(cursor));
+        deferred = [];
+        cursor = 0;
+      }
+      if (cursor === queue.length) return;
       scheduled = true;
       setImmediate(() => { void processSlice(); });
     }

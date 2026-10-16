@@ -156,7 +156,7 @@ describe('ndjsonIngest stream', () => {
       }
     }) });
     const client = connect(await listen(ndjsonIngest(attend, { stream: true })));
-    client.req.end(lines([event('a'), event('b')]));
+    client.req.end(lines([event('a'), event('b', 'allowed/b')]));
     await expect.poll(() => client.frames.some((frame) => frame.through === 1), { interval: 5 }).toBe(true);
     await pause(120);
     expect(Date.now() - rejectedAt).toBeLessThan(190);
@@ -337,22 +337,7 @@ describe('ndjsonIngest admission and validation', () => {
     expect(attend.push).toHaveBeenCalledWith('anywhere', [{ id: 'a', at: 0, name: 'event', data: { value: 'a' }, text: 'hello', extra: 1 }]);
   });
 
-  test('reports unexpected errors as a short 500 without leaking the error', async () => {
-    const result = await post(fake({ push: async () => { throw new Error('secret detail'); } }), lines([event('a')]));
-    expect(result.status).toBe(500);
-    expect(result.body).toBe('Internal server error');
-  });
 
-  test('destroys a stream on an unexpected operation error', async () => {
-    const gate = deferred();
-    const attend = fake({ push: async () => { await gate.promise; throw new Error('secret detail'); } });
-    const client = connect(await listen(ndjsonIngest(attend, { stream: true })));
-    client.req.end(lines([event('a')]));
-    await expect.poll(() => client.frames).toEqual([{ credit: 8192 }]);
-    gate.resolve();
-    await expect(client.response).rejects.toThrow();
-    expect(client.frames).toEqual([{ credit: 8192 }]);
-  });
 });
 
 describe.each([false, true])('ndjsonIngest slicing (stream=%s)', (stream) => {
@@ -414,5 +399,247 @@ describe.each([false, true])('ndjsonIngest real Attend (stream=%s)', (stream) =>
     expect(record?.buffer.entries.map(({ id, data }) => ({ id, data }))).toEqual([
       { id: 'a', data: { value: 'a' } }, { id: 'b', data: { value: 'b' } },
     ]);
+  });
+});
+
+describe.each([false, true])('ndjsonIngest line fault containment (stream=%s)', (stream) => {
+  test.each(['throw', 'reject'])('contains a push %s and grants its credit', async (failure) => {
+    const gate = deferred();
+    const attend = fake({ push: vi.fn((_scope, events) => {
+      if (events[0]?.id === 'poison') {
+        if (failure === 'throw') throw new Error('secret detail');
+        return Promise.reject(new Error('secret detail'));
+      }
+      return gate.promise;
+    }) });
+    const client = connect(await listen(ndjsonIngest(attend, { stream })));
+    client.req.end(lines([event('before'), event('poison'), event('after')]));
+    await expect.poll(() => vi.mocked(attend.push).mock.calls.length).toBe(3);
+    gate.resolve();
+    const result = await client.response;
+    expect(result.status).toBe(200);
+    if (stream) expect(client.frames).toEqual([
+      { credit: 8192 }, { ack: 1, through: 3, rejected: [1], errors: ['internal'] }, { credit: 3 },
+    ]);
+    else expect(JSON.parse(result.body)).toEqual({ accepted: 2, duplicates: 0, rejected: [
+      { line: 1, error: 'internal', scope: 'allowed/a' },
+    ] });
+    expect(result.body).not.toContain('secret detail');
+    expect(vi.mocked(attend.push).mock.calls.map(([, events]) => events[0]?.id)).toEqual(['before', 'poison', 'after']);
+  });
+
+  test.each(['flush', 'end'] as const)('contains an unexpected %s failure', async (kind) => {
+    const attend = fake({ [kind]: () => { throw new Error('secret command detail'); } });
+    const client = connect(await listen(ndjsonIngest(attend, { stream })));
+    client.req.end(lines([{ scope: 'allowed/a', [kind]: true }, event('after')]));
+    const result = await client.response;
+    expect(result.status).toBe(200);
+    if (stream) expect(client.frames).toEqual([
+      { credit: 8192 }, { ack: 1, through: 1, rejected: [0], errors: ['internal'] }, { credit: 1 },
+      { ack: 2, through: 2 }, { credit: 1 },
+    ]);
+    else expect(JSON.parse(result.body)).toEqual({ accepted: 1, duplicates: 0, rejected: [
+      { line: 0, error: 'internal', scope: 'allowed/a' },
+    ] });
+  });
+
+  test('contains an unexpected JSON parse failure', async () => {
+    const parse = JSON.parse;
+    const poison = JSON.stringify(event('poison'));
+    const spy = vi.spyOn(JSON, 'parse').mockImplementation((text: string) => {
+      if (text === poison) throw new RangeError('secret parser detail');
+      return parse(text);
+    });
+    try {
+      const client = connect(await listen(ndjsonIngest(fake(), { stream })));
+      client.req.end(poison + '\n' + lines([event('after')]));
+      const result = await client.response;
+      expect(result.status).toBe(200);
+      if (stream) expect(client.frames).toEqual([
+        { credit: 8192 }, { ack: 1, through: 1, rejected: [0], errors: ['internal'] }, { credit: 1 },
+        { ack: 2, through: 2 }, { credit: 1 },
+      ]);
+      else expect(JSON.parse(result.body)).toEqual({ accepted: 1, duplicates: 0, rejected: [
+        { line: 0, error: 'internal', scope: null },
+      ] });
+    } finally { spy.mockRestore(); }
+  });
+
+  test('contains a validation throw with its scope', async () => {
+    const finite = Number.isFinite;
+    const spy = vi.spyOn(Number, 'isFinite').mockImplementation((value) => {
+      if (value === 12345) throw new Error('secret validation detail');
+      return finite(value);
+    });
+    try {
+      const client = connect(await listen(ndjsonIngest(fake(), { stream })));
+      client.req.end(lines([{ ...event('poison'), at: 12345 }, event('after')]));
+      const result = await client.response;
+      expect(result.status).toBe(200);
+      if (stream) expect(client.frames).toEqual([
+        { credit: 8192 }, { ack: 1, through: 1, rejected: [0], errors: ['internal'] }, { credit: 1 },
+        { ack: 2, through: 2 }, { credit: 1 },
+      ]);
+      else expect(JSON.parse(result.body)).toEqual({ accepted: 1, duplicates: 0, rejected: [
+        { line: 0, error: 'internal', scope: 'allowed/a' },
+      ] });
+    } finally { spy.mockRestore(); }
+  });
+
+  test.each(['kind hook', 'deep data'])('contains real Attend %s faults and survives resending the body', async (fault) => {
+    const attend = createAttend({
+      store: memoryStore(), clock: fakeClock(1000), judge: scriptedJudge([{ route: 'note' }]),
+      kind: (value) => {
+        if (fault === 'kind hook' && value.id === 'poison') throw new Error('secret kind detail');
+        return 'context';
+      },
+      sink: 'log', deadLetter: 'log',
+    });
+    const controller = new AbortController();
+    const running = attend.run({ signal: controller.signal });
+    stops.push(async () => { controller.abort(); await running; });
+    const poison = fault === 'kind hook' ? JSON.stringify(event('poison'))
+      : '{"scope":"allowed/a","id":"poison","at":0,"name":"event","data":' + '{"nested":'.repeat(5000) + '{}' + '}'.repeat(5000) + '}';
+    if (fault === 'deep data') {
+      const data = JSON.parse('{"nested":'.repeat(5000) + '{}' + '}'.repeat(5000));
+      await expect(attend.push('probe', [{ id: 'deep', at: 0, name: 'event', data }])).rejects.toThrow(TypeError);
+    }
+    const body = lines([event('before')]) + poison + '\n' + lines([event('after'), event('other', 'allowed/b')]);
+    const port = await listen(ndjsonIngest(attend, { stream }));
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const client = connect(port);
+      client.req.end(body);
+      const result = await client.response;
+      expect(result.status).toBe(200);
+      if (stream) {
+        expect(client.frames.flatMap((frame) => frame.rejected ?? [])).toEqual([1]);
+        expect(client.frames.flatMap((frame) => frame.errors ?? [])).toEqual(['internal']);
+        expect(client.frames.filter((frame) => frame.through !== undefined).at(-1)?.through).toBe(4);
+        expect(client.frames.reduce((sum, frame) => sum + (frame.credit ?? 0), 0)).toBe(8196);
+      } else expect(JSON.parse(result.body)).toEqual({ accepted: 3, duplicates: 0, rejected: [
+        { line: 1, error: 'internal', scope: 'allowed/a' },
+      ] });
+      expect(result.body).not.toContain('secret');
+      expect((await attend.inspect('allowed/a'))?.buffer.entries.map(({ id, data }) => ({ id, data }))).toEqual([
+        { id: 'before', data: { value: 'before' } }, { id: 'after', data: { value: 'after' } },
+      ]);
+      expect((await attend.inspect('allowed/b'))?.buffer.entries.map(({ id, data }) => ({ id, data }))).toEqual([
+        { id: 'other', data: { value: 'other' } },
+      ]);
+    }
+  });
+});
+
+describe('ndjsonIngest scope ordering after backpressure', () => {
+  test('rejects every remaining request line across interleaved scopes', async () => {
+    const attend = fake({ push: vi.fn(async (_scope, events) => {
+      if (events[0]?.id === '2') throw new BackpressureError(200, 20000);
+    }) });
+    const result = await post(attend, lines([
+      event('0', 'S'), event('0', 'T'), event('1', 'S'), event('2', 'S'),
+      event('1', 'T'), event('3', 'S'), event('2', 'T'), event('4', 'S'),
+    ]));
+    expect(result.status).toBe(429);
+    expect(result.headers['retry-after']).toBe('1');
+    expect(JSON.parse(result.body)).toEqual({ accepted: 3, duplicates: 0, rejected: [
+      { line: 3, error: 'backpressure', scope: 'S' }, { line: 4, error: 'backpressure', scope: 'T' },
+      { line: 5, error: 'backpressure', scope: 'S' }, { line: 6, error: 'backpressure', scope: 'T' },
+      { line: 7, error: 'backpressure', scope: 'S' },
+    ] });
+    expect(vi.mocked(attend.push).mock.calls.map(([scope, events]) => [scope, events[0]?.id])).toEqual([
+      ['S', '0'], ['T', '0'], ['S', '1'], ['S', '2'],
+    ]);
+  });
+
+  test('blocks queued and later scope lines until the rejected event is resent', async () => {
+    let failed = false;
+    let rejectedAt = 0;
+    const calls: [string, string | undefined][] = [];
+    const times: number[] = [];
+    const attend = fake({ push: vi.fn(async (scope, events) => {
+      const id = events[0]?.id;
+      calls.push([scope, id]);
+      times.push(Date.now());
+      if (scope === 'S' && id === '2' && !failed) {
+        failed = true;
+        rejectedAt = Date.now();
+        throw new BackpressureError(200, 20000);
+      }
+    }) });
+    const client = connect(await listen(ndjsonIngest(attend, { stream: true })));
+    client.req.write(lines([
+      event('0', 'S'), event('0', 'T'), event('1', 'S'), event('2', 'S'),
+      event('3', 'S'), event('4', 'S'), event('1', 'T'),
+    ]));
+    await expect.poll(() => client.frames.flatMap((frame) => frame.rejected ?? []), { interval: 5 }).toEqual([3, 4, 5]);
+    await pause(100);
+    expect(Date.now() - rejectedAt).toBeLessThan(190);
+    expect(client.frames.reduce((sum, frame) => sum + (frame.credit ?? 0), 0)).toBe(8195);
+    expect(calls).toEqual([['S', '0'], ['T', '0'], ['S', '1'], ['S', '2']]);
+    await expect.poll(() => client.frames.some((frame) => frame.credit === 3), { interval: 5 }).toBe(true);
+    expect(Date.now() - rejectedAt).toBeGreaterThanOrEqual(190);
+    await expect.poll(() => calls).toEqual([['S', '0'], ['T', '0'], ['S', '1'], ['S', '2'], ['T', '1']]);
+    expect(times[4]! - rejectedAt).toBeGreaterThanOrEqual(190);
+    client.req.write(lines([event('different', 'S'), event('2', 'T')]));
+    await expect.poll(() => client.frames.filter((frame) => frame.through !== undefined).at(-1)?.through).toBe(9);
+    expect(client.frames.flatMap((frame) => frame.rejected ?? [])).toEqual([3, 4, 5, 7]);
+    expect(calls).toEqual([['S', '0'], ['T', '0'], ['S', '1'], ['S', '2'], ['T', '1'], ['T', '2']]);
+    client.req.end(lines([event('2', 'S'), event('3', 'S'), event('4', 'S')]));
+    expect((await client.response).status).toBe(200);
+    expect(calls).toEqual([
+      ['S', '0'], ['T', '0'], ['S', '1'], ['S', '2'], ['T', '1'], ['T', '2'],
+      ['S', '2'], ['S', '3'], ['S', '4'],
+    ]);
+    expect(calls.filter(([scope]) => scope === 'S').map(([, id]) => id)).toEqual(['0', '1', '2', '2', '3', '4']);
+    expect(client.frames.flatMap((frame) => frame.errors ?? [])).toEqual(['backpressure', 'backpressure', 'backpressure', 'backpressure']);
+    expect(client.frames.filter((frame) => frame.through !== undefined).at(-1)?.through).toBe(12);
+    expect(client.frames.reduce((sum, frame) => sum + (frame.credit ?? 0), 0)).toBe(8204);
+  });
+
+  test('applies a delayed rejection to scope lines that have not been dispatched', async () => {
+    let rejectAdmission: () => void = () => undefined;
+    const pending = new Promise<void>((_resolve, reject) => {
+      rejectAdmission = () => reject(new BackpressureError(200, 20000));
+    });
+    const calls: [string, string | undefined][] = [];
+    const attend = fake({ push: (scope, events) => {
+      const id = events[0]?.id;
+      calls.push([scope, id]);
+      if (scope === 'S' && id === '0') return pending;
+      if (scope === 'S' && id === '1') queueMicrotask(rejectAdmission);
+      return Promise.resolve();
+    } });
+    const client = connect(await listen(ndjsonIngest(attend, { stream: true, slice: 1 })));
+    client.req.end(lines([event('0', 'S'), event('1', 'S'), event('2', 'S'), event('0', 'T')]));
+    expect((await client.response).status).toBe(200);
+    expect(calls).toEqual([['S', '0'], ['S', '1'], ['T', '0']]);
+    expect(client.frames.flatMap((frame) => frame.rejected ?? [])).toEqual([0, 2]);
+    expect(client.frames.flatMap((frame) => frame.errors ?? [])).toEqual(['backpressure', 'backpressure']);
+    expect(client.frames.filter((frame) => frame.through !== undefined).at(-1)?.through).toBe(4);
+    expect(client.frames.reduce((sum, frame) => sum + (frame.credit ?? 0), 0)).toBe(8196);
+  });
+
+  test.each(['flush', 'end'] as const)('unblocks a scope only when its rejected %s is resent', async (kind) => {
+    let failed = false;
+    const calls: string[] = [];
+    const attend = fake({
+      push: async (_scope, events) => { calls.push(events[0]?.id ?? ''); },
+      [kind]: async () => {
+        calls.push(kind);
+        if (!failed) { failed = true; throw new BackpressureError(200, 20000); }
+      },
+    });
+    const client = connect(await listen(ndjsonIngest(attend, { stream: true })));
+    client.req.write(lines([{ scope: 'S', [kind]: true }, event('different', 'S')]));
+    await expect.poll(() => client.frames.flatMap((frame) => frame.rejected ?? []), { interval: 5 }).toEqual([0, 1]);
+    expect(calls).toEqual([kind]);
+    await expect.poll(() => client.frames.some((frame) => frame.credit === 2), { interval: 5 }).toBe(true);
+    client.req.end(lines([{ scope: 'S', [kind]: true }, event('after', 'S')]));
+    expect((await client.response).status).toBe(200);
+    expect(calls).toEqual([kind, kind, 'after']);
+    expect(client.frames.flatMap((frame) => frame.rejected ?? [])).toEqual([0, 1]);
+    expect(client.frames.flatMap((frame) => frame.errors ?? [])).toEqual(['backpressure', 'backpressure']);
+    expect(client.frames.filter((frame) => frame.through !== undefined).at(-1)?.through).toBe(4);
+    expect(client.frames.reduce((sum, frame) => sum + (frame.credit ?? 0), 0)).toBe(8196);
   });
 });

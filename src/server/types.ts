@@ -283,7 +283,7 @@ export type IngestLine =
 export interface IngestResult {
   accepted: number;
   duplicates: number;
-  rejected: { line: number; scope: string | null; error: 'invalid' | 'outbox_full' | 'backpressure' | 'too_large' | 'forbidden' | 'conflict' }[];
+  rejected: { line: number; scope: string | null; error: 'invalid' | 'outbox_full' | 'backpressure' | 'too_large' | 'forbidden' | 'conflict' | 'internal' }[];
 }
 
 export interface NdjsonIngestOptions {
