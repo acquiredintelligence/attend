@@ -39,8 +39,9 @@ export function sqliteStore(db: SqliteDatabase, options?: SqliteOptions): StateS
   const remove = db.prepare(`DELETE FROM ${table} WHERE scope = ?`);
   return {
     async get(scope) {
+      // No row is `undefined` from node:sqlite and `null` from bun:sqlite.
       const row = select.get(scope);
-      return row === undefined ? null : parseRecord(column(row, 'record'), scope);
+      return row === undefined || row === null ? null : parseRecord(column(row, 'record'), scope);
     },
     async put(record, expectedVersion) {
       const json = JSON.stringify(record);
