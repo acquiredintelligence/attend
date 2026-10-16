@@ -312,6 +312,9 @@ export function logConformance(make: () => Promise<EventLog> | EventLog, options
   ];
   return cases.map(([name, run]) => ({ name, run: async () => run(await make()) }));
 }
+export { decisionLogConformance, scopeStoreConformance } from './testing/conformance.js';
+export { suggestThreshold } from './core/threshold.js';
+export type { SuggestThresholdOptions, ThresholdCandidate, ThresholdSuggestion } from './core/threshold.js';
 
 // ─── crash harness ───────────────────────────────────────────────────────────
 
