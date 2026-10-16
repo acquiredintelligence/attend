@@ -52,6 +52,7 @@ test('decision log case names match the contract', () => {
     'read returns rows strictly after a position and pages by limit',
     'checked reaches the head when a read is exhausted and the last row examined when it stops early',
     'a scoped read examines only that scope',
+    'a prefix read counts every row it examines toward scanLimit, like kinds and routes',
     'a prefix read matches only scopes that start with the prefix',
     'kinds, routes and sinceAt filter rows',
     'find returns a row by kind and id',

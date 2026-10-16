@@ -122,8 +122,8 @@ export function postgresStore(client: PostgresClient, options?: PostgresStoreOpt
       const where = ['txid < (SELECT xid FROM h)'];
       if (after) where.push(`(txid, n) > (${bind(after.txid)}::xid8, ${bind(after.n)}::int)`);
       if (query.scope !== undefined) where.push(`scope = ${bind(query.scope)}`);
-      if (query.scopePrefix !== undefined) where.push(`starts_with(scope, ${bind(query.scopePrefix)})`);
       const hits: string[] = [];
+      if (query.scopePrefix !== undefined) hits.push(`starts_with(scope, ${bind(query.scopePrefix)})`);
       if (query.kinds !== undefined) hits.push(`kind = ANY(${bind(query.kinds)}::text[])`);
       if (query.routes !== undefined) hits.push(`route = ANY(${bind(query.routes)}::text[])`);
       if (query.sinceAt !== undefined) hits.push(`at >= ${bind(query.sinceAt)}`);
