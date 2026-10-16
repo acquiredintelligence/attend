@@ -5,16 +5,16 @@
 import type { Event, EventLog, LogEntry, ScopeRecord, StateStore } from './types.js';
 
 export function memoryStore(): StateStore {
-  const rows = new Map<string, { version: number; dueAt: number | null; json: string }>();
+  const rows = new Map<string, ScopeRecord>();
   return {
     async get(scope) {
       const row = rows.get(scope);
-      return row ? parseRecord(row.json) : null;
+      return row ? structuredClone(row) : null;
     },
     async put(record, expectedVersion) {
       const current = rows.get(record.scope)?.version ?? 0;
       if (current !== expectedVersion) return 'conflict';
-      rows.set(record.scope, { version: record.version, dueAt: record.dueAt, json: JSON.stringify(record) });
+      rows.set(record.scope, structuredClone(record));
       return 'ok';
     },
     async due(now, limit) {
@@ -27,13 +27,6 @@ export function memoryStore(): StateStore {
       rows.delete(scope);
     },
   };
-}
-
-/** The store wrote the JSON itself, so the shape is its own; parsing is the only cast-free way back. */
-function parseRecord(json: string): ScopeRecord {
-  const value: unknown = JSON.parse(json);
-  if (typeof value !== 'object' || value === null) throw new Error('attend: corrupt record');
-  return value as ScopeRecord;
 }
 
 export function memoryLog(options?: { retain?: number }): EventLog {
