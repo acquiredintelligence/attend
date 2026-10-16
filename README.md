@@ -23,7 +23,7 @@ const tell = (decision: Decision) => console.log(`[${decision.route}]\n${default
 
 const attend = createAttend({
   store: memoryStore(),
-  kind: (event) => (event.name === 'user.message' ? { kind: 'flush' } : { kind: 'consequence' }),
+  kind: (event) => (event.name === 'user.message' ? 'flush' : 'consequence'),
   judge: async ({ window }) => ({ route: window.reason === 'flush' ? 'interrupt' : 'note' }),
   sink: routes({ interrupt: tell, queue: tell, note: tell, ask: tell }),
   deadLetter: (letter) => console.error('dead letter', letter.id, letter.message),
@@ -49,7 +49,7 @@ Before production, replace the function judge with [`llmJudge`](#judges) and `me
 
 ## Demo
 
-`pnpm demo` starts a real MCP Events server in the same process, streams a short CI story into attend, and prints what the agent hears. It needs no API key and no database. The source is [`examples/demo.ts`](examples/demo.ts). Node runs it as TypeScript directly, so use a Node version that strips types by default, such as Node 24.
+`pnpm demo` starts a real MCP Events server in the same process, streams a short CI story into attend, and prints what the agent hears. It needs no API key and no database. The source is [`examples/demo.ts`](examples/demo.ts); the script builds the package and runs it with `node --experimental-strip-types`, so Node 22.13 or later runs it as TypeScript.
 
 ```text
 attend demo: a CI server streams MCP Events, and attend decides what the agent hears.
@@ -102,7 +102,7 @@ attend held the log lines until the failed test closed the window. The judge cho
   sink.deliver(decision)    at least once, idempotent on the decision id
 ```
 
-1. A source hands events to a scope. A scope is whatever one agent attends to: a conversation, a repo or a device. Each scope has one record, which holds the source's cursor, the open window, the judge slot and the outbox.
+1. A source hands events to a scope. A scope is whatever one agent attends to: a conversation, a repo or a device. Each scope has one record, which holds a cursor per attached source, the open window, the judge slot and the outbox.
 2. `kind(event)` gives each event a settle role when it arrives. attend stores the kind on the event, so a later change to `kind` never reinterprets an open window.
 3. The window settles at the earliest deadline among its events. A window that holds only `consequence` and `context` events never settles.
 4. The judge sees the settled window and picks a route. One judge call runs per scope at a time. Events that arrive during the call wait in the next window.
@@ -114,12 +114,12 @@ attend held the log lines until the failed test closed the window. The judge cho
 |---|---|---|
 | `closing` | The end of an act: a submit, a save, a merged pull request, a finished build | `closingGraceMs` after the last closing event, so the output it causes can join the window |
 | `flush` | Someone addresses the agent directly: a message to it, an @mention | At once. `wait` is not offered. |
-| `continuous` | One sample of an ongoing gesture on a named `stream`: typing, scrolling, dragging, a partial transcript | Once no continuous event on any stream has arrived for `streamGapMs` |
+| `continuous` | One step of an ongoing act: typing, scrolling, dragging, a partial transcript | Once no continuous event has arrived for `streamGapMs` |
 | `passive` | A dwell or a look: a hover, a focus, a page view | `passiveQuietMs` after the last passive event |
 | `consequence` | System output: a log line, a status change, a tool result | Never. It joins the open window. |
 | `context` | The agent's own output | Never. It joins the open window as context for the judge, and `defaultNotice` leaves it out. |
 
-`closing`, `continuous` and `passive` events are acts. A window also settles when its first act is `maxWindowMs` old (reason `age`), or when you call `attend.flush(scope)` (reason `forced`, with `wait` not offered). When a window passes `maxEvents`, attend drops its oldest consequence and context events and counts them in `window.dropped`. If the window is still too big, it settles with reason `overflow`. attend never drops an act. Consequence and context events that wait longer than `maxWindowMs` for an act are dropped and counted the same way.
+`closing`, `flush`, `continuous` and `passive` events are acts: things that happen in the scope and can call for the agent, whether the user did them or an outside party did. A window also settles when its first act is `maxWindowMs` old (reason `age`), or when you call `attend.flush(scope)` (reason `forced`, with `wait` not offered). When a window passes `maxEvents`, attend drops its oldest consequence and context events and counts them in `window.dropped`. If the window is still too big, it settles with reason `overflow`. attend never drops an act. Consequence and context events that wait longer than `maxWindowMs` for an act are dropped and counted the same way.
 
 A system event that should wake the agent on its own, such as a failed deploy or a fired alert, needs an act kind. `closing` is the usual choice.
 
@@ -132,13 +132,13 @@ A system event that should wake the agent on its own, such as a failed deploy or
 | `note` | Gets it as context for its next turn and does not respond to it. | Yes |
 | `ask` | Stays quiet. Your app offers the user a prompt to call the agent in. | Yes |
 | `skip` | Hears nothing. | No. The verdict joins the scope's recent verdicts. |
-| `wait` | Hears nothing yet. attend holds the window and judges it again with the next window that settles, or alone after `waitHorizonMs` with `wait` withheld. | No. A window waits at most `maxWaits` times. |
+| `wait` | Hears nothing yet. attend holds the window and judges it again with the next window that settles, or after `waitHorizonMs` together with everything that arrived meanwhile, with `wait` withheld. | No. A window waits at most `maxWaits` times. |
 
 attend picks the route, and your sink carries it out. `routes()` makes you write a handler for each of the four delivered routes.
 
 ## MCP Events
 
-`mcpEventsSource` from `attend/mcp` turns one MCP Events subscription into a source. Install the peer dependencies with `npm install @modelcontextprotocol/sdk zod`. This excerpt is from [`examples/mcp-events.ts`](examples/mcp-events.ts), with `attend` set up as in the quickstart and `controller` an `AbortController`:
+`mcpEventsSource` from `attend/mcp` turns one MCP Events subscription into a source. Install the peer dependencies with `npm install @modelcontextprotocol/sdk zod`; zod 3.25 or later and zod 4 both work. This excerpt is from [`examples/mcp-events.ts`](examples/mcp-events.ts), with `attend` set up as in the quickstart and `controller` an `AbortController`:
 
 ```ts
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -163,13 +163,15 @@ await Promise.all([
 The source covers these parts of the draft:
 
 - In the default `auto` mode it reads `events/list`, streams with `events/stream` when the event lists `push` delivery, and polls with `events/poll` otherwise. A `-32026` (Unsupported) reply to a stream falls back to polling.
-- Every batch carries the server's cursor, and attend commits it in the same write as the events. After a restart, `attach` resumes from the committed cursor.
+- Every batch carries the server's cursor, and attend commits it in the same write as the events, under the source's key (`mcp:<name>:<arguments>`). After a restart, `attach` resumes from the committed cursor.
 - `eventId` becomes `Event.id`, so the scope drops redelivered events.
 - `truncated: true` sets `window.gap`. The judge sees it, and `defaultNotice` says that events were lost.
 - When a poll result sets `hasMore`, the source polls again at once. Otherwise it waits `nextPollMs`, or `pollMs` (default 10000) when the server sends none.
-- A terminated stream reopens from the committed cursor. A `-32025` (ResourceExhausted) reply or a request timeout retries with backoff. Any other error ends the subscription, and `attach` rejects with it.
-- `onError` receives each `notifications/events/error`, each payload that fails validation and each retry. None of them ends the subscription.
-- Several streams can share one `Client`. attend records the JSON-RPC id of each `events/stream` request and routes notifications by `_meta["io.modelcontextprotocol/subscriptionId"]`.
+- A terminated stream reopens from the committed cursor. So does a stream with more than `maxBuffered` (default 1000) notifications waiting on a slow store, which is reported as `overflow`, and a stream that sends nothing, heartbeats included, for `idleTimeoutMs` (default 300000), which is reported as `idle`.
+- A `-32025` (ResourceExhausted) reply or a request timeout is thrown as a plain error, so `attach` backs off through `retryBackoffMs` and resubscribes from the committed cursor. Any other error ends the subscription: `attach` rejects with a `PermanentError` whose `cause` is the SDK error.
+- When the Client's transport closes, `attach` rejects with a `PermanentError` that says the Client closed. Reconnect the Client and attach again.
+- `onError` receives each `notifications/events/error`, each payload that fails validation, each `overflow`, each `idle`, and each `unrouted` notification, one that names a subscription no stream here opened. None of them ends the subscription.
+- Several streams can share one `Client`. attend installs one handler for each of the five `notifications/events/*` methods on the Client, records the JSON-RPC id of each `events/stream` request and routes notifications by `_meta["io.modelcontextprotocol/subscriptionId"]`. Do not replace those handlers.
 
 MCP events carry no one-line summary, so `Event.text` stays unset and `defaultNotice` prints each event's name and JSON data.
 
@@ -240,7 +242,7 @@ To ask the judge yes-or-no questions beside the route, pass `predicates` to `cre
 
 ## Sinks
 
-A sink delivers decisions to the agent. attend calls `sink.deliver(decision, signal)` at least once per decision, one decision at a time per scope, oldest first. After a crash it can deliver the same decision again with the same id, so make the sink idempotent on `decision.scope` and `decision.id` together. Throw to retry, or throw a `PermanentError` to dead-letter at once.
+A sink delivers decisions to the agent. attend calls `sink.deliver(decision, signal)` at least once per decision, one decision at a time per scope, oldest first. After a crash it can deliver the same decision again with the same id, so make the sink idempotent on `decision.id`, which is unique across scopes. Throw to retry, or throw a `PermanentError` to dead-letter at once.
 
 `routes()` builds a sink from one handler per delivered route. A sink never sees `skip` or `wait`. This excerpt from [`examples/postgres-worker.ts`](examples/postgres-worker.ts) writes every decision to an inbox table that the agent's runtime reads:
 
@@ -256,7 +258,7 @@ async function enqueue(decision: Decision): Promise<void> {
 
 const attend = createAttend({
   store: postgresStore(pool),
-  kind: (event) => (event.name === 'message.created' ? { kind: 'flush' } : event.name === 'job.completed' ? { kind: 'closing' } : { kind: 'consequence' }),
+  kind: (event) => (event.name === 'message.created' ? 'flush' : event.name === 'job.completed' ? 'closing' : 'consequence'),
   judge: async ({ window }) => ({ route: window.reason === 'flush' ? 'interrupt' : 'queue' }),
   sink: routes({ interrupt: enqueue, queue: enqueue, note: enqueue, ask: enqueue }),
   deadLetter: async (letter) => {
@@ -265,28 +267,28 @@ const attend = createAttend({
 });
 ```
 
-`deadLetter` is required. It receives a window that no judge or sink could take, with the stage that gave up, the error message and the attempt count. attend retries a dead letter with capped backoff until the handler succeeds, so write it to durable storage and keep the handler simple.
+`deadLetter` is required. It receives a window that no judge or sink could take, with the stage that gave up, the error message and the attempt count. attend retries a dead letter with capped backoff until the handler succeeds, so write it to durable storage and keep the handler simple. Dead letters travel in their own lane, so a failing handler never holds back decisions; once the lane holds `maxDeadLetters` of them, `push` and a source's `emit` reject with `OutboxFullError` until it drains, and nothing is dropped.
 
 ## Storage
 
 | Store | Create it | Guarantees | Caveats |
 |---|---|---|---|
 | Memory | `memoryStore()` from `attend` | Compare-and-swap within one process. | State is lost when the process exits. Use it for tests, demos and browser apps. |
-| SQLite | `sqliteStore(db)` from `attend/sqlite`, with `db` a `node:sqlite` `DatabaseSync` or any object with the same `exec` and `prepare` | Compare-and-swap with a versioned `UPDATE`. Durable on a file. Creates its table and index on construction. | Calls are synchronous and block the event loop for their duration. Processes that share the file must run on one host. |
+| SQLite | `sqliteStore(db)` from `attend/sqlite`, with `db` a `node:sqlite` `DatabaseSync`, a `bun:sqlite` `Database`, or any object with the same `exec` and `prepare` | Compare-and-swap with a versioned `UPDATE`. Durable on a file. Creates its table and index on construction. | Calls are synchronous and block the event loop for their duration. Processes that share the file must run on one host. |
 | Postgres | `postgresStore(pool)` from `attend/postgres`, after `await migrate(pool)` | Compare-and-swap with a versioned `UPDATE`, or `INSERT ... ON CONFLICT DO NOTHING` for a new scope. Durable. Safe for many replicas. | Run `migrate()` at deploy with a role that can create tables. The store needs only `SELECT`, `INSERT`, `UPDATE` and `DELETE`. The table prefix must be lowercase. |
 | Redis | `redisStore((args) => client.sendCommand(args))` from `attend/redis` | Compare-and-swap and the due index change together in one Lua script. Redis 6.2 or later. | Durable only as far as your Redis persistence settings. On Redis Cluster, the script touches each record key and the shared due key, so all of them must hash to one slot. Put a hash tag in the prefix, such as `redisStore(send, { prefix: 'attend:{app}:' })`. That puts every scope on one shard. |
 
-Several processes can share one store. Any of them can `push`, and any number can `run`, because compare-and-swap lets one writer win each write and the others reload and try again. Give every process the same `kind` function, because the process that ingests an event is the one that kinds it. Attach each scope's source in one process, so one subscription owns the scope's cursor.
+Several processes can share one store. Any of them can `push`, and any number can `run`, because compare-and-swap lets one writer win each write and the others reload and try again. Give every process the same `kind` function, because the process that ingests an event is the one that kinds it. A scope can take several sources at once; the record keeps one cursor per `Source.key`. Attach a given source to a scope from one process only, since two processes running the same source would overwrite each other's cursor, and a second `attach` of the same key in one process throws.
 
 Each adapter also has an `EventLog`: `memoryLog`, `sqliteLog`, `postgresLog` and `redisLog`. When producers live in other processes and you want a durable shared log in front of attend, append to the log and attach `logSource(log, scope)` instead of calling `push`.
 
 ## Guarantees
 
-- **One record per scope.** It holds the source's cursor, the open window, the judge slot and the outbox. A source's cursor commits in the same write as the events it covers.
-- **Compare-and-swap on every write.** Each write names the record version it read. A writer that loses reloads and applies its input again. Every input is idempotent, so a retry is safe. After 8 losses in a row it gives up. Then `push` rejects, and work in flight recovers when its lease expires.
-- **Effects only after a won write.** attend calls the judge and the sink only for state it has persisted. If a process crashes after a write and before its effect, the work stays in the record, and a runner retries it when its lease expires.
-- **At-least-once delivery with stable ids.** A decision's id is a hash of its window's event ids, so a redelivery carries the same id. Deliveries in one scope run one at a time, oldest first.
-- **Dead letters are never dropped.** The judge and the sink each get `retryBackoffMs.length` retries. A window that still fails becomes a dead letter, which attend retries with capped backoff until `deadLetter` accepts it.
+- **One record per scope.** It holds a cursor per attached source, the open window, the judge slot and the outbox. A source's cursor commits in the same write as the events it covers.
+- **Compare-and-swap on every write.** Each write names the record version it read. A writer that loses waits a few jittered milliseconds, reloads and applies its input again. Every input is idempotent, so a retry is safe. After 8 losses in a row it gives up: `push` and `flush` reject with `ConflictError`, and work in flight recovers when its lease expires.
+- **Effects only after a won write.** attend calls the judge and the sink only for state it has persisted. `push` and `flush` persist and return; the runner settles, judges and delivers. If a process crashes after a write and before its effect, the work stays in the record, and a runner retries it when its lease expires.
+- **At-least-once delivery with stable ids.** A decision's id is a hash of the scope and its window's event ids, so a redelivery carries the same id and no two scopes share one. Deliveries in one scope run one at a time, oldest first.
+- **Dead letters are never dropped.** The judge and the sink each get `retryBackoffMs.length` retries. A window that still fails becomes a dead letter, which attend retries with capped backoff until `deadLetter` accepts it. A lane that fills to its cap (`maxOutbox` decisions, `maxDeadLetters` dead letters) makes `push` and a source's `emit` reject until it drains.
 - **Crash-tested at every commit boundary.** `crashSuite` runs a scripted session once, then once more for each commit with a crash just before it and again just after it. Every run must deliver the same decision ids and dead-letter ids. CI runs it against the memory, SQLite, Postgres and Redis stores.
 
 ## Testing with a fake clock
@@ -296,13 +298,13 @@ Each adapter also has an `EventLog`: `memoryLog`, `sqliteLog`, `postgresLog` and
 ```ts
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createAttend, memoryStore, type DeadLetter, type Event, type Kinded } from 'attend';
+import { createAttend, memoryStore, type DeadLetter, type Event, type Kind } from 'attend';
 import { fakeClock, recordingSink, scriptedJudge, type ScriptedAnswer } from 'attend/testing';
 
-const kind = (event: Event): Kinded => {
-  if (event.name === 'user.message') return { kind: 'flush' };
-  if (event.name === 'build.finished') return { kind: 'closing' };
-  return { kind: 'consequence' };
+const kind = (event: Event): Kind => {
+  if (event.name === 'user.message') return 'flush';
+  if (event.name === 'build.finished') return 'closing';
+  return 'consequence';
 };
 
 function setup(script: ScriptedAnswer[]) {
@@ -386,12 +388,13 @@ These are round starting points, not tuned values. Override any of them with `se
 | `maxWaits` | 2 | How many times one window may wait |
 | `maxEvents` | 250 | Events one window holds. Past it, attend drops consequence and context events, then settles. |
 | `maxWindowMs` | 60000 | Age of the first act at which the window settles |
-| `retryBackoffMs` | `[1000, 4000, 16000]` | Backoff before each retry of a judge call or a delivery. Its length is the retry budget. |
+| `retryBackoffMs` | `[1000, 4000, 16000]` | Backoff before each retry of a judge call, a delivery or a source. Its length is the retry budget for judges and sinks; a source repeats the last rung. |
 | `judgeTimeoutMs` | 15000 | Aborts a judge call. The judge's lease is twice this. |
 | `deliveryTimeoutMs` | 10000 | Lease on one delivery. An expired lease counts as a failed attempt. |
 | `recentCount` | 8 | Recent verdicts the judge sees |
 | `seenCount` | 500 | Event ids each scope remembers for dedup |
-| `maxOutbox` | 1000 | Undelivered items per scope before `push` rejects with `OutboxFullError` |
+| `maxOutbox` | 1000 | Undelivered decisions per scope before `push` and a source's `emit` reject with `OutboxFullError` |
+| `maxDeadLetters` | 1000 | Undelivered dead letters per scope before `push` and a source's `emit` reject with `OutboxFullError` |
 | `deadLetterBackoffMaxMs` | 60000 | Cap on the backoff between dead-letter attempts |
 
 `run()` sweeps the store for due scopes every `sweepMs` (1000), up to `sweepLimit` (100) scopes per sweep.

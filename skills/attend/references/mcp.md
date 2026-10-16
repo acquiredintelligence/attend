@@ -1,6 +1,6 @@
 # MCP Events sources
 
-`mcpEventsSource(client, options)` from `attend/mcp` turns one MCP Events subscription into a `Source`. It needs the peer dependencies `@modelcontextprotocol/sdk` and `zod`.
+`mcpEventsSource(client, options)` from `attend/mcp` turns one MCP Events subscription into a `Source`. It needs the peer dependencies `@modelcontextprotocol/sdk` and `zod` (3.25 or later, or 4).
 
 ## Wire it
 
@@ -15,7 +15,7 @@ await client.connect(new StdioClientTransport({ command: 'node', args: ['./ci-ev
 
 const attend = createAttend({
   store: memoryStore(),
-  kind: (event) => (event.name === 'comment.created' ? { kind: 'flush' } : { kind: 'consequence' }),
+  kind: (event) => (event.name === 'comment.created' ? 'flush' : 'consequence'),
   judge: async () => ({ route: 'queue' }),
   sink: routes({ interrupt: async () => {}, queue: async () => {}, note: async () => {}, ask: async () => {} }),
   deadLetter: async () => {},
@@ -26,9 +26,9 @@ const source = mcpEventsSource(client, { name: 'repo.activity', arguments: { rep
 await Promise.all([attend.run({ signal: controller.signal }), attend.attach('repo:acme/shop', source, { signal: controller.signal })]);
 ```
 
-- One subscription feeds one scope. Pick the scope from the subscription's `arguments`, such as one scope per repo.
-- Several subscriptions can share one `Client`. attend routes each stream's notifications by its JSON-RPC request id.
-- Attach each scope in one process. Every batch commits the server's cursor with its events, and `attach` resumes from the committed cursor after a restart.
+- One subscription feeds one scope. Pick the scope from the subscription's `arguments`, such as one scope per repo. A scope can take several sources; each keeps its own cursor under its `Source.key`, which for this source is `mcp:<name>:<arguments as sorted JSON>`.
+- Several subscriptions can share one `Client`. attend installs one notification handler for each of the five `notifications/events/*` methods the first time it uses a Client, records the JSON-RPC id of each `events/stream` request, and routes by `_meta["io.modelcontextprotocol/subscriptionId"]`. Do not replace those handlers.
+- Attach a given subscription to a scope from one process. Every batch commits the server's cursor with its events, and `attach` resumes from the committed cursor after a restart.
 
 ## Options
 
@@ -40,8 +40,10 @@ await Promise.all([attend.run({ signal: controller.signal }), attend.attach('rep
 | `maxAgeMs` | none | Passed through. Bounds replay when resuming from a cursor. |
 | `maxEvents` | none | Passed through as the poll page size |
 | `pollMs` | 10000 | Poll interval when the server sends no `nextPollMs` |
+| `maxBuffered` | 1000 | Stream notifications that may wait while an earlier one persists. Past it, the source drops what it holds, reports `overflow`, and reopens from the committed cursor so the server resends them. |
+| `idleTimeoutMs` | 300000 | How long a stream may go without any notification, heartbeats included. Past it, the source reports `idle` and reopens from the committed cursor. |
 | `clock` | the system clock | Pass the test's fake clock here too |
-| `onError` | ignore | Receives `{ kind: 'stream' }` for `notifications/events/error`, `{ kind: 'malformed' }` for a payload that failed validation, and `{ kind: 'retry' }` before each retry |
+| `onError` | ignore | Receives `{ kind: 'stream' }` for `notifications/events/error`, `{ kind: 'malformed' }` for a payload that failed validation, `{ kind: 'overflow' }`, `{ kind: 'idle' }`, and `{ kind: 'unrouted' }` for a notification under a subscription id no stream here opened |
 
 ## What the source does with the protocol
 
@@ -49,26 +51,30 @@ await Promise.all([attend.run({ signal: controller.signal }), attend.attach('rep
 - `truncated: true` on a poll result or on `notifications/events/active` sets `window.gap`.
 - A poll result with `hasMore` polls again at once. Otherwise the source waits `nextPollMs`, or `pollMs`.
 - A malformed occurrence goes to `onError` and is skipped. Its cursor still advances.
-- A `notifications/events/terminated`, or a stream request that returns, reopens the stream from the committed cursor after one second.
+- A `notifications/events/terminated`, a stream request that returns, an overflow or an idle stream reopens the stream from the committed cursor after one second.
 
 ## Errors
 
+`events/list`, `events/poll` and `events/stream` errors all follow this table.
+
 | Error | The source |
 |---|---|
-| `-32025` ResourceExhausted, or a request timeout | Reports `retry` to `onError` and tries again with backoff |
-| `-32026` Unsupported on `events/stream` | Switches to `events/poll` in `auto` mode. In `stream` mode it ends the subscription. |
-| `-32023` NotFound, `-32024` Forbidden, `-32027`, any other code | Ends the subscription. `attach` rejects with the error. |
+| `-32025` ResourceExhausted, or a request timeout | Throws it as a plain error. `attach` backs off through `retryBackoffMs` (the last rung repeated), traces `retrying` with stage `source`, and resubscribes from the committed cursor. |
+| `-32026` Unsupported on `events/stream` | Switches to `events/poll` in `auto` mode. In `stream` mode it ends the subscription with a `PermanentError`. |
+| `-32000` ConnectionClosed | The Client's transport closed. `attach` rejects with a `PermanentError` that says to reconnect the Client and attach again. |
+| `-32023` NotFound, `-32024` Forbidden, `-32027`, any other code | Ends the subscription. `attach` rejects with a `PermanentError` whose `cause` is the SDK error. |
 
-A rejected `attach` means the server refused the subscription. Log it and alert. Retrying the same subscription gets the same answer.
+A rejected `attach` means the server refused the subscription or the Client closed. Reconnecting the Client and attaching again fixes the second; retrying the first gets the same answer, so log it and alert.
 
 ## Filter events before they reach the scope
 
-`kind` cannot drop an event. To drop noise such as heartbeats, wrap the source:
+`kind` cannot drop an event. To drop noise such as heartbeats, wrap the source and keep its key:
 
 ```ts
 import type { Event, Source } from 'attend';
 
 export const only = (source: Source, keep: (event: Event) => boolean): Source => ({
+  key: source.key,
   subscribe: (cursor, emit, signal) => source.subscribe(cursor, (batch) => emit({ ...batch, events: batch.events.filter(keep) }), signal),
 });
 ```
@@ -84,7 +90,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import type { ServerCapabilities } from '@modelcontextprotocol/sdk/types.js';
-import { z } from 'zod';
+import { z } from 'zod/v4';
 
 export type Occurrence = { eventId: string; name: string; timestamp: string; data: Record<string, string | number | boolean> };
 

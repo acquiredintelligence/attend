@@ -15,7 +15,7 @@ const tell = (decision: Decision) => console.log(`[${decision.route}]\n${default
 
 const attend = createAttend({
   store: memoryStore(),
-  kind: (event) => (event.name === 'comment.created' ? { kind: 'flush' } : event.name === 'ci.finished' ? { kind: 'closing' } : { kind: 'consequence' }),
+  kind: (event) => (event.name === 'comment.created' ? 'flush' : event.name === 'ci.finished' ? 'closing' : 'consequence'),
   judge: async ({ window }) => ({ route: window.reason === 'flush' ? 'interrupt' : 'note' }),
   sink: routes({ interrupt: tell, queue: tell, note: tell, ask: tell }),
   deadLetter: (letter) => console.error('dead letter', letter.id, letter.message),

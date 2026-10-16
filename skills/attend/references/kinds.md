@@ -2,6 +2,8 @@
 
 How a scope's open window settles, exactly. All times are on attend's clock at ingest (`entry.seenAt`), never the source's `event.at`. Defaults are in `DEFAULT_POLICY`, exported from `attend`.
 
+`closing`, `flush`, `continuous` and `passive` are acts: things that happen in the scope and can call for the agent, whether the user did them or an outside party did. `consequence` is output that followed from an act, and `context` is the agent's own earlier output.
+
 ## Deadlines
 
 Every event in the open window can set a deadline. The window settles at the earliest one, with that deadline's reason.
@@ -10,13 +12,13 @@ Every event in the open window can set a deadline. The window settles at the ear
 |---|---|---|
 | A `flush` event | Its arrival | `flush` |
 | The last `closing` event | Its arrival plus `closingGraceMs` | `closing` |
-| The last `continuous` event, on any stream | Its arrival plus `streamGapMs` | `stream_quiet` |
+| The last `continuous` event | Its arrival plus `streamGapMs` | `stream_quiet` |
 | The last `passive` event | Its arrival plus `passiveQuietMs` | `passive_quiet` |
 | The first act (`closing`, `continuous` or `passive`) | Its arrival plus `maxWindowMs` | `age` |
 | `attend.flush(scope)` | The call | `forced` |
 | More than `maxEvents` events left after shedding | The last arrival | `overflow` |
 
-- A later closing, continuous or passive event moves its own deadline later. A steady stream of continuous events holds the window open until the streams go quiet, or until the `age` deadline.
+- A later closing, continuous or passive event moves its own deadline later. A steady run of continuous events holds the window open until they stop, or until the `age` deadline.
 - A window with no flush and no act has no deadline. It never settles.
 - After a `flush` or `forced` settle, the judge is not offered `wait`.
 
@@ -34,15 +36,15 @@ Each scope has one judge slot. While a judge call runs, new events collect in th
 
 - `wait` moves the settled window into a held state until `waitHorizonMs` from the answer.
 - If the open window settles before the horizon, the held window and the new one merge, held events first. The merged window has a new id, because the id is a hash of all its event ids, and it keeps the held window's `waits` count. The judge is offered `wait` again only while `waits` is below `maxWaits` and the reason is neither `flush` nor `forced`.
-- At the horizon, attend judges the held window alone, with `wait` withheld.
-- `attend.flush(scope)` on a scope that holds only a waiting window judges it at once, with `wait` withheld.
+- At the horizon, attend judges the held window together with everything in the open window, consequences included, with `wait` withheld. The merged window has a new id.
+- `attend.flush(scope)` on a scope that holds only a waiting window judges it at the runner's next tick, with `wait` withheld.
 
 ## What the judge sees
 
 `input.window` carries:
 
-- `id`, which becomes the decision id;
-- `events`, oldest first, each with its `kind`, its `stream` when continuous, and `seenAt`;
+- `id`, a hash of the scope and the event ids, which becomes the decision id;
+- `events`, oldest first, each with its `kind` and `seenAt`;
 - `reason`, the settle reason from the table above;
 - `waits`, how many times this window was held;
 - `dropped`, how many consequence and context events were shed;
@@ -54,7 +56,7 @@ Each scope has one judge slot. While a judge call runs, new events collect in th
 These are starting points. Run the question sequence in `SKILL.md` on your own event names.
 
 - **Coding agent on a repo.** A comment that names the agent is `flush`. A merged pull request, a failed build and a finished deploy are `closing`. CI log lines and status changes are `consequence`. The agent's own commits and messages are `context`.
-- **Voice agent.** A final transcript is `flush`. Partial transcripts are `continuous` on stream `speech`. Tool results are `consequence`. The agent's own speech is `context`.
+- **Voice agent.** A final transcript is `flush`. Partial transcripts are `continuous`. Tool results are `consequence`. The agent's own speech is `context`.
 - **Inbox agent.** A message to the agent's address is `flush`. A new email that the agent should triage with no user act is `closing`. The user opening an email is `passive`, and the user sending a reply is `closing`. Delivery receipts are `consequence`.
 - **On-call agent.** A page or a fired alert is `closing`. Metric samples and log lines are `consequence`. An incident-channel message that mentions the agent is `flush`.
-- **Gesture app.** Hand and pointer motion are `continuous`, one stream per hand or pointer. A gaze dwell is `passive`. Grabbing or releasing an object is `closing`. Physics and render results are `consequence`.
+- **Gesture app.** Hand and pointer motion are `continuous`. A gaze dwell is `passive`. Grabbing or releasing an object is `closing`. Physics and render results are `consequence`.

@@ -30,7 +30,7 @@ async function enqueue(decision: Decision): Promise<void> {
 
 const attend = createAttend({
   store: postgresStore(pool),
-  kind: (event) => (event.name === 'message.created' ? { kind: 'flush' } : event.name === 'job.completed' ? { kind: 'closing' } : { kind: 'consequence' }),
+  kind: (event) => (event.name === 'message.created' ? 'flush' : event.name === 'job.completed' ? 'closing' : 'consequence'),
   judge: async ({ window }) => ({ route: window.reason === 'flush' ? 'interrupt' : 'queue' }),
   sink: routes({ interrupt: enqueue, queue: enqueue, note: enqueue, ask: enqueue }),
   deadLetter: async (letter) => {

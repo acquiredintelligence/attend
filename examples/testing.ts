@@ -4,13 +4,13 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createAttend, memoryStore, type DeadLetter, type Event, type Kinded } from 'attend';
+import { createAttend, memoryStore, type DeadLetter, type Event, type Kind } from 'attend';
 import { fakeClock, recordingSink, scriptedJudge, type ScriptedAnswer } from 'attend/testing';
 
-const kind = (event: Event): Kinded => {
-  if (event.name === 'user.message') return { kind: 'flush' };
-  if (event.name === 'build.finished') return { kind: 'closing' };
-  return { kind: 'consequence' };
+const kind = (event: Event): Kind => {
+  if (event.name === 'user.message') return 'flush';
+  if (event.name === 'build.finished') return 'closing';
+  return 'consequence';
 };
 
 function setup(script: ScriptedAnswer[]) {

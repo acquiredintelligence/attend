@@ -33,7 +33,7 @@ Ask these questions of each event name, in order. The first yes decides the kind
 
 1. Did the agent itself produce it: its reply, its tool call, its own status? Use `context`. It joins the window as context for the judge and never settles one.
 2. Is a person addressing the agent and waiting for it: a message to the agent, an @mention of it, a final voice transcript? Use `flush`. The window settles at once, and `wait` is not offered to the judge.
-3. Is it one sample of a gesture that keeps sending while the user keeps going: typing, scrolling, dragging, a partial transcript, a hand pose? Use `{ kind: 'continuous', stream }`, with `stream` naming the gesture. The window settles once every stream is quiet for `streamGapMs`.
+3. Is it one step of something that keeps sending while the user keeps going: typing, scrolling, dragging, a partial transcript, a hand pose? Use `continuous`. The window settles once no continuous event has arrived for `streamGapMs`.
 4. Is the user lingering on something without acting: a hover, a focus, a page view? Use `passive`. The window settles `passiveQuietMs` after the last one.
 5. Does it end something: the user finishing an act (submit, save, send, merge, close), or a run reaching an outcome the agent should hear about even when nobody acted (a failed build, a finished deploy, a fired alert)? Use `closing`. The window settles `closingGraceMs` after it, so the output it causes can join the window.
 6. Otherwise it reports what followed: a log line, progress, a status change, a tool result. Use `consequence`. It joins the open window and never settles one on its own.
@@ -43,15 +43,15 @@ The order matters. `context` comes first so the agent's own output never settles
 | Event names | Kind |
 |---|---|
 | `message.created` from the user to the agent, `mention.created`, `transcript.final` | `flush` |
-| `transcript.partial` | `continuous`, stream `speech` |
-| `text.changed`, `cursor.moved`, `scroll.moved`, `hand.moved` | `continuous`, one stream per gesture: `typing`, `cursor`, `scroll`, `hand` |
+| `transcript.partial` | `continuous` |
+| `text.changed`, `cursor.moved`, `scroll.moved`, `hand.moved` | `continuous` |
 | `page.viewed`, `item.hovered`, `panel.focused` | `passive` |
 | `form.submitted`, `file.saved`, `pr.merged`, `issue.closed`, a reply the user sent to someone else | `closing` |
 | `build.failed`, `deploy.finished`, `alert.fired`, `job.completed` | `closing` if the agent should hear it with no user act, else `consequence` |
 | `ci.log`, `job.progress`, `status.changed`, `tool.result`, `email.delivered` | `consequence` |
 | `agent.message`, `agent.tool_call`, `agent.status` | `context` |
 
-Write `kind` as a pure function over the event, most often a lookup table keyed by `name` with `consequence` as the fallback. attend stores the kind on the event at ingest.
+Write `kind` as a pure function from the event to a `Kind` string, most often a lookup table keyed by `name` with `consequence` as the fallback. attend stores the kind on the event at ingest. `closing`, `flush`, `continuous` and `passive` are acts: things that happen in the scope and can call for the agent, whether the user did them or an outside party did.
 
 **Check.** `kind` returns a kind for every event name from step 1, and each scope has at least one event that settles a window: `flush`, `closing`, `continuous` or `passive`. A scope fed only consequences never wakes the agent. [references/kinds.md](references/kinds.md) has the exact settle rules.
 
@@ -90,18 +90,18 @@ Build the sink with `routes({ interrupt, queue, note, ask })`. attend decides th
 - `note`: add context for the next turn. The agent does not respond to it.
 - `ask`: show the user a prompt to call the agent in. The agent stays quiet unless the user accepts.
 
-Make every handler idempotent on `decision.scope` and `decision.id` together. attend delivers at least once, and after a crash it redelivers the same decision with the same id. Build the agent's text with `defaultNotice(decision)` or from `decision.window.events`. The judge writes no text.
+Make every handler idempotent on `decision.id`, which is unique across scopes. attend delivers at least once, and after a crash it redelivers the same decision with the same id. Build the agent's text with `defaultNotice(decision)` or from `decision.window.events`. The judge writes no text.
 
-Write `deadLetter` to durable storage with the same idempotency key. attend retries it until it succeeds and never drops it.
+Write `deadLetter` to durable storage keyed on `letter.id`. attend retries it until it succeeds and never drops it.
 
 **Check.** Running any handler twice with the same decision changes nothing the second time. [references/sinks.md](references/sinks.md) has a full wiring template and the host mapping for each route.
 
 ## 6. Run it
 
 ```ts
-import { createAttend, memoryStore, routes, type Event, type Kinded } from 'attend';
+import { createAttend, memoryStore, routes, type Event, type Kind } from 'attend';
 
-const kind = (event: Event): Kinded => (event.name === 'message.created' ? { kind: 'flush' } : { kind: 'consequence' });
+const kind = (event: Event): Kind => (event.name === 'message.created' ? 'flush' : 'consequence');
 
 const attend = createAttend({
   store: memoryStore(),
@@ -119,9 +119,9 @@ await attend.run({ signal: controller.signal });
 
 Replace the stub judge, handlers and dead-letter handler with the ones from steps 4 and 5.
 
-- `run()` judges and delivers. `push` and `attach` only persist. Start `run()` in at least one long-lived process. Several processes may run it over one shared store.
+- `run()` judges and delivers. `push`, `attach` and `flush` only persist. Start `run()` in at least one long-lived process. Several processes may run it over one shared store.
 - Give every process that feeds a scope the same `kind`. The process that ingests an event is the one that kinds it.
-- Attach each scope's source in one process, so one subscription owns the scope's cursor.
+- A scope can take several sources; the record keeps one cursor per `Source.key`. Attach a given source to a scope from one process only, and never twice in one process: the second `attach` throws.
 - `observe` receives every trace: `settled`, `judged`, `waiting`, `retrying`, `deadLettered` and more. Log them while you wire attend in.
 
 **Check.** An end-to-end run on real events delivers at least one decision to the sink, and the traces show `settled`, `judging`, `judged` and `delivered` for it.
@@ -139,12 +139,17 @@ Turn on `observe` first. Its traces name each step a window took. Then match the
 | Symptom | Causes |
 |---|---|
 | The agent never hears anything | No process runs `run()`. The scope gets only `consequence` and `context` events. The producer that pushed the events uses a different `kind`. |
-| The agent hears the same thing twice | The sink is not idempotent on `decision.scope` plus `decision.id`. The source sends a new event id when it retries. |
+| The agent hears the same thing twice | The sink is not idempotent on `decision.id`. The source sends a new event id when it retries. |
 | A direct message reaches the agent late | `kind` maps it to `closing` or `consequence` instead of `flush`. The judge chose `queue`. A judge call was in flight, and the message waited for the next window. |
 | Dead letters with the message `route not offered: wait` | The judge answered `wait` when `input.routes` did not offer it: after a flush, after `attend.flush(scope)`, after `maxWaits` waits, or at the wait horizon. |
 | Dead letters with `attend: judge timed out` or `judge lease expired` | The judge ignores `signal` or takes longer than `judgeTimeoutMs`. |
 | Dead letters with `attend: delivery timed out` or `delivery lease expired` | The sink ignores `signal` or takes longer than `deliveryTimeoutMs`. |
-| `push` rejects with `OutboxFullError` | The sink is failing and the scope holds `maxOutbox` undelivered items. Fix the sink, then retry the push. `attach` backs off on its own. |
+| `push` rejects with `OutboxFullError` | Its `lane` says which handler is failing: `decisions` means the sink, and the scope holds `maxOutbox` undelivered decisions; `deadLetters` means the dead-letter handler, and it holds `maxDeadLetters`. Fix the handler, then retry the push. `attach` backs off on its own. |
+| `push` or `flush` rejects with `ConflictError` | Eight compare-and-swaps in a row lost to other writers on one scope. Retry; every input is idempotent. If it persists, too many producers write one scope directly: put a log in front of it and `attach` `logSource`. |
+| `attach` rejects with `attend/mcp: the Client closed` | The MCP Client's transport closed. Reconnect the Client, or make a new one, and attach again. |
+| `attach` throws `already attached to scope` | The process attached the same `Source.key` to the same scope twice. Attach each source once per scope per process. |
+| `onError` reports `unrouted` | The server sends notifications under subscription ids attend did not open, or the app replaced the `notifications/events/*` handlers attend installed on the Client. |
+| `onError` reports `idle` or `overflow` | The stream went quiet for `idleTimeoutMs`, or more than `maxBuffered` notifications waited on a slow store. attend reopened from the committed cursor; nothing is lost when the server can replay from a cursor. |
 | `run()` rejects with `attend: already running` | The process called `run()` twice on one instance. Create one `Attend` per process and share it. |
 | A test hangs or settles at the wrong time | `run()` started after the push, or `mcpEventsSource` or `logSource` runs on the real clock. Pass the fake clock as their `clock` option. |
 | Redis Cluster replies `CROSSSLOT` | The prefix has no hash tag. Use one such as `attend:{app}:`. |

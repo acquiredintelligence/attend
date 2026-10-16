@@ -7,13 +7,13 @@
 ```ts
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createAttend, DEFAULT_POLICY, memoryStore, type DeadLetter, type Event, type Kinded } from 'attend';
+import { createAttend, DEFAULT_POLICY, memoryStore, type DeadLetter, type Event, type Kind } from 'attend';
 import { fakeClock, recordingSink, scriptedJudge, type ScriptedAnswer } from 'attend/testing';
 
-const kind = (event: Event): Kinded => {
-  if (event.name === 'user.message') return { kind: 'flush' };
-  if (event.name === 'build.finished') return { kind: 'closing' };
-  return { kind: 'consequence' };
+const kind = (event: Event): Kind => {
+  if (event.name === 'user.message') return 'flush';
+  if (event.name === 'build.finished') return 'closing';
+  return 'consequence';
 };
 
 function setup(script: ScriptedAnswer[]) {
@@ -77,10 +77,10 @@ Assert on `calls[i].window.events`, `calls[i].window.reason` and `calls[i].route
 ```ts
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { DEFAULT_POLICY, type Event, type Kinded } from 'attend';
+import { DEFAULT_POLICY, type Event, type Kind } from 'attend';
 import { CrashError, harness, recordingSink, scriptedJudge } from 'attend/testing';
 
-const kind = (event: Event): Kinded => (event.name === 'build.finished' ? { kind: 'closing' } : { kind: 'consequence' });
+const kind = (event: Event): Kind => (event.name === 'build.finished' ? 'closing' : 'consequence');
 
 test('a decision stranded by a crash is delivered once after the restart', async () => {
   const { deliveryTimeoutMs, retryBackoffMs: [firstRetry = 0] } = DEFAULT_POLICY;
@@ -97,7 +97,7 @@ test('a decision stranded by a crash is delivered once after the restart', async
 });
 ```
 
-- `h.push`, `h.advance` and `h.flush` wait until the runner is idle, and throw `CrashError` when a scheduled crash strikes.
+- `h.push` and `h.advance` wait until the runner is idle, and `h.flush` also lets the runner's tick settle the flush. All three throw `CrashError` when a scheduled crash strikes.
 - `h.crashAt(n, 'before' | 'after')` crashes at the nth commit from now. `before` writes nothing. `after` writes the record but runs none of its effects.
 - `h.crash()` kills the runner now. `h.restart()` starts a fresh runner over the same store and lets it recover.
 - The judge, the sink and `context` must resolve without real time, or `h.idle()` cannot see them finish.

@@ -6,8 +6,8 @@ A sink is `{ deliver(decision, signal) }`. attend calls it at least once per dec
 
 | Field | Holds |
 |---|---|
-| `id` | The window id: a hash of the window's event ids. The same window redelivered has the same id. A merged window has a new one. |
-| `scope` | The scope key. Ids are unique within a scope only. |
+| `id` | The window id: a hash of the scope and the window's event ids, so it is unique across scopes. The same window redelivered has the same id. A merged window has a new one. |
+| `scope` | The scope key |
 | `route` | `interrupt`, `queue`, `note` or `ask`. A sink never sees `skip` or `wait`. |
 | `probabilities` | One number per route, summing to 1. Routes that were not offered are 0. |
 | `predicates` | The judge's answer to each predicate, by name |
@@ -16,10 +16,10 @@ A sink is `{ deliver(decision, signal) }`. attend calls it at least once per dec
 
 ## Wiring template
 
-Map each route to an operation in the host. The key `${scope}/${id}` makes each operation idempotent.
+Map each route to an operation in the host. The decision id makes each operation idempotent.
 
 ```ts
-import { createAttend, defaultNotice, routes, type DeadLetter, type Decision, type Event, type Judge, type Kinded, type StateStore } from 'attend';
+import { createAttend, defaultNotice, routes, type DeadLetter, type Decision, type Event, type Judge, type Kind, type StateStore } from 'attend';
 
 export interface Host {
   /** Deliver now, even mid-turn: steer or cancel the current turn. */
@@ -33,20 +33,18 @@ export interface Host {
   saveDeadLetter(key: string, letter: DeadLetter): Promise<void>;
 }
 
-const keyOf = (d: { scope: string; id: string }) => `${d.scope}/${d.id}`;
-
-export function wire(host: Host, store: StateStore, judge: Judge, kind: (event: Event) => Kinded) {
+export function wire(host: Host, store: StateStore, judge: Judge, kind: (event: Event) => Kind) {
   return createAttend({
     store,
     judge,
     kind,
     sink: routes({
-      interrupt: (d: Decision) => host.interrupt(keyOf(d), defaultNotice(d)),
-      queue: (d: Decision) => host.enqueue(keyOf(d), defaultNotice(d)),
-      note: (d: Decision) => host.addContext(keyOf(d), defaultNotice(d)),
-      ask: (d: Decision) => host.offer(keyOf(d), defaultNotice(d)),
+      interrupt: (d: Decision) => host.interrupt(d.id, defaultNotice(d)),
+      queue: (d: Decision) => host.enqueue(d.id, defaultNotice(d)),
+      note: (d: Decision) => host.addContext(d.id, defaultNotice(d)),
+      ask: (d: Decision) => host.offer(d.id, defaultNotice(d)),
     }),
-    deadLetter: (letter) => host.saveDeadLetter(keyOf(letter), letter),
+    deadLetter: (letter) => host.saveDeadLetter(letter.id, letter),
   });
 }
 ```
@@ -68,7 +66,8 @@ Each `Host` method records `key` and returns early when it has seen the key befo
 - Throw `PermanentError` from `attend` to dead-letter at once, for a decision the host can never take.
 - Each delivery holds a lease of `deliveryTimeoutMs`. attend aborts `signal` when it expires and counts it as a failed attempt. Stop when `signal` aborts.
 - One stuck delivery holds back later decisions in the same scope, because delivery is in order. Dead letters go through their own lane, so a failing `deadLetter` never holds back decisions.
+- Nothing is dropped. A scope whose sink stays down fills its decision lane to `maxOutbox`, and one whose dead-letter handler stays down fills its dead-letter lane to `maxDeadLetters`. Either cap makes `push` and a source's `emit` reject with `OutboxFullError` until the lane drains, and `attach` backs off and resubscribes on its own.
 
 ## Dead letters
 
-`deadLetter(letter, signal)` is required. A `DeadLetter` has `stage` (`judge` or `sink`), `window`, `decision` (null when the judge gave up), `message`, `permanent` and `attempts`. attend retries the handler with capped backoff until it succeeds and never drops a letter. Write the letter to durable storage, keyed on `scope` and `id`, and alert on it from there.
+`deadLetter(letter, signal)` is required. A `DeadLetter` has `stage` (`judge` or `sink`), `window`, `decision` (null when the judge gave up), `message`, `permanent` and `attempts`. attend retries the handler with capped backoff until it succeeds and never drops a letter. Write the letter to durable storage, keyed on its `id`, and alert on it from there.

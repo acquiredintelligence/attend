@@ -110,7 +110,7 @@ Options:
 
 - `system` replaces `DEFAULT_SYSTEM`. attend appends the offered routes and their criteria either way.
 - `criteria` sets per-route criteria. A criterion from `AttendConfig.criteria` wins, and `DEFAULT_CRITERIA` fills the rest.
-- `render(input)` replaces `renderState`, which builds the user prompt.
+- `render(input)` replaces the default user prompt, which is compact JSON of the guidance, the window, the facts, the recent routes and the predicate questions.
 
 ## decisionsJudge
 
@@ -157,7 +157,7 @@ import { createAttend, memoryStore, routes } from 'attend';
 
 export const attend = createAttend({
   store: memoryStore(),
-  kind: () => ({ kind: 'closing' }),
+  kind: () => 'closing',
   judge: async () => ({ route: 'queue' }),
   sink: routes({ interrupt: async () => {}, queue: async () => {}, note: async () => {}, ask: async () => {} }),
   deadLetter: async () => {},

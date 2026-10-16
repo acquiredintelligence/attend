@@ -21,7 +21,7 @@ import { sqliteStore } from 'attend/sqlite';
 export const store = sqliteStore(new DatabaseSync('attend.db'));
 ```
 
-- Takes a `node:sqlite` `DatabaseSync` or any object with the same `exec` and `prepare`, so importing `attend/sqlite` loads no driver.
+- Takes a `node:sqlite` `DatabaseSync`, a `bun:sqlite` `Database`, or any object with the same `exec` and `prepare`, so importing `attend/sqlite` loads no driver. The conformance and crash suites pass under Bun 1.4 on `bun:sqlite`.
 - Creates its table and index on construction. A second store over the same file uses what the first created.
 - `prefix` (default `attend_`) sets the table names. Letters, digits and underscores only.
 - Calls are synchronous and block the event loop for their duration.
@@ -69,7 +69,7 @@ import { createAttend, logSource, memoryLog, memoryStore, routes } from 'attend'
 const log = memoryLog();
 const attend = createAttend({
   store: memoryStore(),
-  kind: () => ({ kind: 'closing' }),
+  kind: () => 'closing',
   judge: async () => ({ route: 'queue' }),
   sink: routes({ interrupt: async () => {}, queue: async () => {}, note: async () => {}, ask: async () => {} }),
   deadLetter: async () => {},
@@ -86,4 +86,4 @@ await Promise.all([attend.run({ signal: controller.signal }), attend.attach('inb
 
 ## Choosing between push and a log
 
-`push` writes the record directly with compare-and-swap from any process. It needs no log, and it contends when many producers write one scope at a high rate. A log takes those writes off the record, and one attached source moves them in.
+`push` writes the record directly with compare-and-swap from any process. It needs no log, and it contends when many producers write one scope at a high rate: a writer that loses backs off a few milliseconds and tries again, and after eight losses `push` rejects with `ConflictError`. A log takes those writes off the record, and one attached source moves them in.

@@ -6,8 +6,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import type { ServerCapabilities } from '@modelcontextprotocol/sdk/types.js';
-import { z } from 'zod';
-import { createAttend, defaultNotice, memoryStore, routes, type Decision, type Event, type Judge, type Kinded, type Trace } from 'attend';
+import { z } from 'zod/v4';
+import { createAttend, defaultNotice, memoryStore, routes, type Decision, type Event, type Judge, type Kind, type Trace } from 'attend';
 import { mcpEventsSource } from 'attend/mcp';
 
 const SCOPE = 'repo:acme/shop';
@@ -24,13 +24,13 @@ const STORY: { pauseMs: number; name: string; data: Record<string, string | numb
   { pauseMs: 800, name: 'deploy.finished', data: { env: 'staging', sha: '9f3c2e1' } },
 ];
 
-const KIND_BY_NAME: Record<string, Kinded> = {
-  'comment.created': { kind: 'flush' },
-  'ci.test_failed': { kind: 'closing' },
-  'deploy.finished': { kind: 'closing' },
+const KIND_BY_NAME: Record<string, Kind> = {
+  'comment.created': 'flush',
+  'ci.test_failed': 'closing',
+  'deploy.finished': 'closing',
 };
 
-const kind = (event: Event): Kinded => KIND_BY_NAME[event.name] ?? { kind: 'consequence' };
+const kind = (event: Event): Kind => KIND_BY_NAME[event.name] ?? 'consequence';
 
 /** A direct comment interrupts. A failure waits for the user to react, then queues. A deploy is background. */
 const judge: Judge = async ({ window, routes: offered }) => {

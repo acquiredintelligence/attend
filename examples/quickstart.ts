@@ -4,7 +4,7 @@ const tell = (decision: Decision) => console.log(`[${decision.route}]\n${default
 
 const attend = createAttend({
   store: memoryStore(),
-  kind: (event) => (event.name === 'user.message' ? { kind: 'flush' } : { kind: 'consequence' }),
+  kind: (event) => (event.name === 'user.message' ? 'flush' : 'consequence'),
   judge: async ({ window }) => ({ route: window.reason === 'flush' ? 'interrupt' : 'note' }),
   sink: routes({ interrupt: tell, queue: tell, note: tell, ask: tell }),
   deadLetter: (letter) => console.error('dead letter', letter.id, letter.message),
