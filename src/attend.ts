@@ -4,6 +4,7 @@
  */
 import { initialRecord, step, type StepConfig } from './step.js';
 import { isPermanent, OutboxFullError } from './errors.js';
+import { sleep, systemClock } from './internal/clock.js';
 import type {
   Clock,
   DeadLetter,
@@ -31,6 +32,7 @@ import type {
 import { DEFAULT_POLICY, ROUTES } from './types.js';
 
 export { OutboxFullError, PermanentError } from './errors.js';
+export { systemClock } from './internal/clock.js';
 
 /** Live context fetched when the judge is called, and again on every retry. */
 export interface JudgeContext {
@@ -309,25 +311,6 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Resolve after `ms` on `clock`, or at once on abort. */
-function sleep(clock: Clock, ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) {
-      resolve();
-      return;
-    }
-    const onAbort = () => {
-      cancel();
-      resolve();
-    };
-    const cancel = clock.at(clock.now() + ms, () => {
-      signal.removeEventListener('abort', onAbort);
-      resolve();
-    });
-    signal.addEventListener('abort', onAbort, { once: true });
-  });
-}
-
 function assertNever(value: never): never {
   throw new Error(`attend: unexpected ${JSON.stringify(value)}`);
 }
@@ -406,17 +389,6 @@ export function logSource(log: EventLog, scope: string, options?: { limit?: numb
           await sleep(clock, pollMs, signal);
         }
       }
-    },
-  };
-}
-
-export function systemClock(): Clock {
-  const MAX_DELAY = 2 ** 31 - 1;
-  return {
-    now: () => Date.now(),
-    at(at, fn) {
-      const timer = setTimeout(fn, Math.min(Math.max(0, at - Date.now()), MAX_DELAY));
-      return () => clearTimeout(timer);
     },
   };
 }
