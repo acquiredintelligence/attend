@@ -6,7 +6,7 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/asher-aqi/attend.git"
+    "url": "git+https://github.com/acquiredintelligence/attend.git"
   },
   "keywords": [
     "agents",
@@ -87,5 +87,10 @@
     "typescript": "7.0.2",
     "vitest": "5.0.5",
     "zod": "^4.6.7"
-  }
+  },
+  "homepage": "https://github.com/acquiredintelligence/attend#readme",
+  "bugs": {
+    "url": "https://github.com/acquiredintelligence/attend/issues"
+  },
+  "author": "Acquired Intelligence"
 }
