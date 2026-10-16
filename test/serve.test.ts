@@ -126,6 +126,18 @@ test('serve() answers once ready, is guarded by its principal, and closes with a
   await expect(fetch(`${base}/v1/ingest`, { method: 'POST', body: '' })).rejects.toThrow();
 }, 30_000);
 
+test('--token answers 401 to ingest and MCP without the bearer, and accepts it with', async () => {
+  const { child, url, exited } = start(['--token', 'test-token', '--kinds', '{"user.said":"flush"}']);
+  const base = await url;
+  expect((await ingest(base, pair)).status).toBe(401);
+  const initialize = { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '0' } } };
+  const mcp = await fetch(`${base}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' }, body: JSON.stringify(initialize) });
+  expect(mcp.status).toBe(401);
+  expect(await ingest(base, pair, { authorization: 'Bearer test-token' })).toEqual({ status: 200, body: { accepted: 2, duplicates: 0, rejected: [] } });
+  child.kill('SIGTERM');
+  expect(await exited).toBe(0);
+}, 60_000);
+
 test('usage errors exit 2 and never print a key', async () => {
   const run = async (argv: string[], env: NodeJS.ProcessEnv = {}) => {
     let text = '';

@@ -187,6 +187,7 @@ export async function cli(argv: string[], env: NodeJS.ProcessEnv, io: CliIo = {}
     const port = flags.port === undefined ? 8787 : Number(flags.port);
     if (!Number.isInteger(port) || port < 0 || port > 65535) throw new UsageError('--port must be an integer from 0 to 65535');
     const judge = await judgeFor(flags, env);
+    await import('@modelcontextprotocol/server').catch(() => { throw new Error('attend serve needs the MCP server package: npm install @modelcontextprotocol/server zod'); });
     store = await storeFor(flags.store ?? 'memory', env, cleanup);
     const token = flags.token;
     const principal: PrincipalResolver | undefined = token ? (req) => (req.headers.authorization === `Bearer ${token}` ? { id: 'attend', scopes: [''] } : null) : undefined;
