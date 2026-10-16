@@ -2,9 +2,14 @@ import { describe, expect, test } from 'vitest';
 import { memoryLog, memoryStore } from '../src/memory.js';
 import { initialRecord } from '../src/step.js';
 import { logConformance, storeConformance } from '../src/testing.js';
+import { aliasingCases } from './support/aliasing.js';
 
 describe('memoryStore conformance', () => {
   for (const c of storeConformance(() => memoryStore())) test(c.name, c.run);
+});
+
+describe('aliasing through memoryStore', () => {
+  for (const c of aliasingCases(() => memoryStore())) test(c.name, c.run);
 });
 
 describe('memoryLog conformance', () => {

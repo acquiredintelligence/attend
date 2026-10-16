@@ -5,6 +5,7 @@ import { migrate, postgresLog, postgresStore } from '../src/postgres.js';
 import { initialRecord } from '../src/step.js';
 import { crashSuite, logConformance, storeConformance } from '../src/testing.js';
 import type { Event, ScopeRecord } from '../src/types.js';
+import { aliasingCases } from './support/aliasing.js';
 
 const url = process.env.ATTEND_POSTGRES_URL ?? 'postgres://postgres:attend@127.0.0.1:15432/attend';
 const schema = `attend_test_${randomUUID().replaceAll('-', '').slice(0, 12)}`;
@@ -48,6 +49,7 @@ describe('postgresStore conformance', () => {
   const make = async () => postgresStore(await pool(), { prefix: await fresh() });
   for (const c of storeConformance(make)) test(c.name, c.run);
   for (const c of crashSuite(make)) test(c.name, c.run, 120_000);
+  for (const c of aliasingCases(make)) test(c.name, c.run);
 });
 
 describe('postgresLog conformance', () => {
