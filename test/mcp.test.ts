@@ -502,6 +502,60 @@ describe('mcpEventsSource over a real Client and Server', () => {
     await h.stop();
   });
 
+  test('an aborted stream stops draining its backlog and the next attach resumes in order without duplicates', async () => {
+    const server = mcpEventsTestServer(ALPHA);
+    server.burst = true;
+    const client = await server.connect();
+    const slow = heldStore();
+    const first = setup([{ route: 'queue' }], slow.store);
+    const source = first.source(client, { mode: 'stream', maxBuffered: 3000 });
+    let release: () => void = () => undefined;
+    const active = new Promise<void>((resolve) => {
+      release = () => resolve();
+    });
+    const emitted: (string | null | undefined)[] = [];
+    const attached = first.attend.attach('s', {
+      key: source.key,
+      subscribe: (cursor, emit, signal) =>
+        source.subscribe(cursor, async (batch) => {
+          emitted.push(batch.cursor);
+          await emit(batch);
+          if (batch.cursor === '0') await active;
+        }, signal),
+    });
+    await settle();
+    await server.append('alpha', ...BACKLOG.map((id) => occ(id)));
+    slow.hold();
+    release();
+    await settle();
+    const stopping = first.stop();
+    expect(await Promise.race([stopping.then(() => 'resolved'), settle().then(() => 'pending')])).toBe('pending');
+    slow.release();
+    await stopping;
+    for (let turn = 0; turn < 3; turn += 1) {
+      const record = await slow.store.get('s');
+      expect({ version: record?.version, cursors: record?.cursors, count: record?.buffer.entries.length }).toEqual({ version: 2, cursors: { [KEY]: '500' }, count: 500 });
+      await settle();
+      await first.clock.advance(1000);
+    }
+    await attached;
+    expect(emitted).toEqual(['0', '500']);
+    expect(ingestedTotals(first)).toEqual({ count: 500, duplicates: 0 });
+
+    const second = setup([{ route: 'queue' }], slow.store);
+    void second.attach('s', client, { mode: 'stream', maxBuffered: 3000 });
+    await settle();
+    await second.clock.advance(500);
+    expect(second.streamRequests(server)).toEqual([
+      { name: 'alpha', cursor: null },
+      { name: 'alpha', cursor: '500' },
+    ]);
+    expect((await slow.store.get('s'))?.cursors).toEqual({ [KEY]: '2500' });
+    expect(ingestedTotals(second)).toEqual({ count: 2000, duplicates: 0 });
+    expect(deliveredIds(second)).toEqual(BACKLOG);
+    await second.stop();
+  });
+
   test('a burst backlog past maxBuffered on a slow store catches up: each overflow persists what it holds before reopening', async () => {
     const server = mcpEventsTestServer(ALPHA);
     server.burst = true;

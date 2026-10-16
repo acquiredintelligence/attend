@@ -28,11 +28,11 @@ const kind = (e: Event): Kind => {
   }
 };
 
-const cfg: StepConfig = { kind, policy: DEFAULT_POLICY };
+const cfg: StepConfig = { policy: DEFAULT_POLICY };
 const scope = 's';
 
 const base = (): ScopeRecord => initialRecord(scope);
-const ev = (id: string, name: string): Event => ({ id, at: 0, name, data: {} });
+const ev = (id: string, name: string): Event & { kind: Kind } => ({ id, at: 0, name, data: {}, kind: kind({ id, at: 0, name, data: {} }) });
 const closing = (id: string, seenAt: number): Entry => ({ id, at: 0, name: 'close', data: {}, kind: 'closing', seenAt });
 const consequence = (id: string, seenAt: number): Entry => ({ id, at: 0, name: 'out', data: {}, kind: 'consequence', seenAt });
 const continuous = (id: string, seenAt: number): Entry => ({ id, at: 0, name: 'drag', data: {}, kind: 'continuous', seenAt });
@@ -123,14 +123,14 @@ describe('ingest', () => {
   });
 
   test('overflow drops the oldest non-act first and never an act', () => {
-    const small: StepConfig = { kind, policy: { ...DEFAULT_POLICY, maxEvents: 2 } };
+    const small: StepConfig = { policy: { ...DEFAULT_POLICY, maxEvents: 2 } };
     const { record, effects } = step(small, base(), { kind: 'events', events: [ev('a', 'close'), ev('b', 'out'), ev('c', 'close')] }, 100);
     expect(record.buffer).toEqual({ entries: [A, closing('c', 100)], dropped: 1, gap: false, forcedAt: null });
     expect(effects[0]).toEqual({ kind: 'trace', trace: { kind: 'dropped', scope, entries: [consequence('b', 100)], why: 'overflow' } });
   });
 
   test('the seen ring is bounded by seenCount, oldest out', () => {
-    const tiny: StepConfig = { kind, policy: { ...DEFAULT_POLICY, seenCount: 2 } };
+    const tiny: StepConfig = { policy: { ...DEFAULT_POLICY, seenCount: 2 } };
     const { record } = step(tiny, base(), { kind: 'events', events: [ev('a', 'out'), ev('b', 'out'), ev('c', 'out')] }, 100);
     expect(record.seen).toEqual(['b', 'c']);
   });
@@ -231,7 +231,7 @@ describe('settling', () => {
   });
 
   test('an all-act window past maxEvents settles as overflow', () => {
-    const small: StepConfig = { kind, policy: { ...DEFAULT_POLICY, maxEvents: 2 } };
+    const small: StepConfig = { policy: { ...DEFAULT_POLICY, maxEvents: 2 } };
     const entries = [closing('a', 100), closing('b', 100), closing('c', 100)];
     const before: ScopeRecord = { ...base(), buffer: { entries, dropped: 0, gap: false, forcedAt: null } };
     const { record } = step(small, before, { kind: 'tick' }, 100);

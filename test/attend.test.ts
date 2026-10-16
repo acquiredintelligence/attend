@@ -1058,6 +1058,37 @@ describe('createAttend', () => {
     await attached;
   });
 
+  test('an aborted run prevents a source from writing after it resolves, without waiting for source I/O', async () => {
+    const h = setup([]);
+    let release: () => void = () => undefined;
+    const pending = new Promise<void>((resolve) => {
+      release = () => resolve();
+    });
+    const source: Source = {
+      key: 'k',
+      async subscribe(_cursor, emit, signal) {
+        await emit({ events: [ev('x', 'out')], cursor: '1' });
+        await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
+        await pending;
+        for (const id of ['y', 'z']) {
+          await emit({ events: [ev(id, 'out')], cursor: id });
+          await realTick();
+        }
+      },
+    };
+    const attached = h.attend.attach('s', source);
+    await drain();
+    await h.stop();
+    expect(await h.store.get('s')).toMatchObject({ version: 1, cursors: { k: '1' }, buffer: { entries: [{ id: 'x' }] } });
+    release();
+    for (let turn = 0; turn < 3; turn += 1) {
+      await realTick();
+      await h.clock.advance(1000);
+      expect(await h.store.get('s')).toMatchObject({ version: 1, cursors: { k: '1' }, buffer: { entries: [{ id: 'x' }] } });
+    }
+    await attached;
+  });
+
   test('an aborted run resolves while a producer keeps pushing on the same instance, and those pushes still persist', async () => {
     const h = setup([], { store: pacedStore() });
     let pushes = 0;

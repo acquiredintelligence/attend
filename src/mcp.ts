@@ -412,14 +412,15 @@ export function mcpEventsSource(client: Client, options: McpEventsOptions): Sour
       let folded: Event[] = [];
       let foldedCursor: string | undefined;
       const flush = async () => {
-        if (folded.length === 0 && foldedCursor === undefined) return;
+        if (signal.aborted || (folded.length === 0 && foldedCursor === undefined)) return;
         const out = batch(folded, foldedCursor);
         folded = [];
         foldedCursor = undefined;
         await deliver(out);
       };
-      for (;;) {
+      while (!signal.aborted) {
         for (const item of await items.take(EMIT_BATCH)) {
+          if (signal.aborted) return { kind: 'ended' };
           if (item.kind === 'event') {
             const parsed = parseOccurrence(item.params);
             if (parsed.ok) folded.push(parsed.event);
@@ -429,6 +430,7 @@ export function mcpEventsSource(client: Client, options: McpEventsOptions): Sour
             continue;
           }
           await flush();
+          if (signal.aborted) return { kind: 'ended' };
           switch (item.kind) {
             case 'done':
             case 'terminated':
@@ -464,6 +466,7 @@ export function mcpEventsSource(client: Client, options: McpEventsOptions): Sour
         }
         await flush();
       }
+      return { kind: 'ended' };
     } finally {
       cancelIdle();
       signal.removeEventListener('abort', onAbort);

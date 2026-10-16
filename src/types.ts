@@ -265,7 +265,7 @@ export interface Judgment {
 
 export interface EventsInput {
   kind: 'events';
-  events: Event[];
+  events: (Event & { kind: Kind })[];
   /** The `Source.key` these came from. A push has none, and then `cursor` is ignored. */
   source?: string;
   /** Absent: leave the source's cursor as it is. Present (string or null): replace it. */

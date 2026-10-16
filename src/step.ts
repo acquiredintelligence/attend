@@ -2,7 +2,7 @@
  * The core: `step(config, record, input, now) -> { record, effects }`.
  *
  * Pure, synchronous, deterministic. Reads no clock (now is an argument), does no I/O,
- * and depends only on JSON and the config's kind function. Three invariants:
+ * and depends only on JSON. Three invariants:
  *
  * 1. Every input is idempotent against the record: a replayed `events` dedups, a stale
  *    `judged`, `judgeFailed`, `delivered` or `deliveryFailed` is ignored, a `tick` re-derives.
@@ -24,7 +24,6 @@ import type {
   Delivery,
   Effect,
   Entry,
-  Event,
   EventsInput,
   FlushInput,
   InFlightDelivery,
@@ -44,9 +43,8 @@ import type {
 } from './types.js';
 import { ROUTES } from './types.js';
 
-/** What the reducer needs from the config: the kind function and the policy. Nothing async. */
+/** What the reducer needs from the config: the policy. */
 export interface StepConfig {
-  kind: (event: Event) => Kind;
   policy: SettlePolicy;
 }
 
@@ -150,7 +148,7 @@ function ingest(ctx: Ctx, r: ScopeRecord, input: EventsInput): ScopeRecord {
       duplicates += 1;
       continue;
     }
-    entries.push({ ...e, kind: ctx.config.kind(e), seenAt: ctx.now });
+    entries.push({ ...e, seenAt: ctx.now });
     seen.push(e.id);
   }
   r.seen = keepLast(seen, ctx.config.policy.seenCount);
