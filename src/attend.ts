@@ -139,7 +139,7 @@ export function createAttend(config: AttendConfig): Attend {
 
   function observe(trace: Trace): void {
     try {
-      config.observe?.(trace);
+      config.observe?.(trace.kind === 'deadLettered' || trace.kind === 'dropped' ? structuredClone(trace) : trace);
     } catch {
       // An observer that throws must not take the runner down with it.
     }

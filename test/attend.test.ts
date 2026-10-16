@@ -395,6 +395,58 @@ describe('createAttend', () => {
     await h.stop();
   });
 
+  test('an observer that mutates trace payloads does not change the stored record', async () => {
+    const observed: string[] = [];
+    const h = setup([{ route: 'queue' }], {
+      settle: { maxEvents: 1 },
+      config: {
+        sink: {
+          deliver: () => {
+            throw new PermanentError('refused');
+          },
+        },
+        deadLetter: () => {
+          throw new Error('handler down');
+        },
+        observe: (trace) => {
+          if (trace.kind === 'deadLettered') {
+            observed.push(trace.kind);
+            trace.letter.message = 'changed';
+            const entry = trace.letter.window.events[0];
+            if (entry) entry.data['handled'] = true;
+            if (trace.letter.decision) trace.letter.decision.route = 'interrupt';
+            trace.letter.window.events.length = 0;
+          }
+          if (trace.kind === 'dropped') {
+            observed.push(trace.kind);
+            const entry = trace.entries[0];
+            if (entry) entry.data['handled'] = true;
+            trace.entries.length = 0;
+          }
+        },
+      },
+    });
+    await h.attend.push('s', [ev('a')]);
+    await h.clock.advance(500);
+    await h.attend.push('s', [ev('b', 'out'), ev('c', 'out')]);
+    expect(observed).toEqual(['deadLettered', 'dropped']);
+    expect(await h.attend.inspect('s')).toMatchObject({
+      buffer: { entries: [{ id: 'c', data: {} }], dropped: 1 },
+      outbox: {
+        deadLetters: [{
+          item: {
+            letter: {
+              message: 'refused',
+              window: { events: [{ id: 'a', data: {} }] },
+              decision: { route: 'queue', window: { events: [{ id: 'a', data: {} }] } },
+            },
+          },
+        }],
+      },
+    });
+    await h.stop();
+  });
+
   test('a malformed judgment is a retryable failure', async () => {
     const answers = ['{"nonsense":true}', '{"route":"queue"}'];
     const judge: Judge = async () => JSON.parse(answers.shift() ?? '{"route":"skip"}');
