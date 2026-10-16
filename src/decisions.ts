@@ -1,7 +1,9 @@
 /**
  * `attend/decisions`: a judge on the OpenAI Decisions API. One `choice` question named `route`
  * picks among the offered routes, with the criteria as the choice descriptions, and one
- * `predicate` question answers each ride-along predicate. The rendered state is the `input`.
+ * `predicate` question answers each ride-along predicate. Predicate questions are named by
+ * position (`predicate_0`, `predicate_1`, …) so no predicate name can collide with `route`, and
+ * the answers come back under the predicates' own names. The rendered state is the `input`.
  * Runs anywhere `fetch` does.
  *
  * ```ts
@@ -44,7 +46,7 @@ export function decisionsJudge(options: DecisionsJudgeOptions): Judge {
       input: renderState(input),
       questions: [
         { type: 'choice', name: 'route', instructions, choices: routes.map((r) => ({ value: r.route, description: r.criterion })) },
-        ...input.predicates.map((p) => ({ type: 'predicate', name: p.name, instructions: p.question })),
+        ...input.predicates.map((p, index) => ({ type: 'predicate', name: predicateQuestion(index), instructions: p.question })),
       ],
     };
     let res: Response;
@@ -66,6 +68,10 @@ export function decisionsJudge(options: DecisionsJudgeOptions): Judge {
       input.predicates.map((p) => p.name),
     );
   };
+}
+
+function predicateQuestion(index: number): string {
+  return `predicate_${index}`;
 }
 
 async function statusError(res: Response): Promise<Error> {
@@ -90,8 +96,8 @@ function parseAnswers(body: unknown, routes: Route[], predicates: string[]): Jud
     if (value !== undefined && isFiniteNumber(entry.probability)) probabilities[value] = entry.probability;
   }
   const answered: Record<string, number> = {};
-  for (const name of predicates) {
-    const answer = answers.find((a) => a.type === 'predicate' && a.name === name);
+  for (const [index, name] of predicates.entries()) {
+    const answer = answers.find((a) => a.type === 'predicate' && a.name === predicateQuestion(index));
     if (answer !== undefined && isFiniteNumber(answer.probability)) answered[name] = answer.probability;
   }
   return { route, probabilities, predicates: answered };

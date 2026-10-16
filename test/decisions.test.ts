@@ -89,7 +89,7 @@ describe('decisionsJudge', () => {
               { value: 'skip', description: DEFAULT_CRITERIA.skip },
             ],
           },
-          { type: 'predicate', name: 'asked', instructions: 'Did the user ask for this?' },
+          { type: 'predicate', name: 'predicate_0', instructions: 'Did the user ask for this?' },
         ],
       },
     });
@@ -99,7 +99,7 @@ describe('decisionsJudge', () => {
     const fake = fakeFetch(
       json({
         answers: [
-          { type: 'predicate', name: 'asked', probability: 0.4 },
+          { type: 'predicate', name: 'predicate_0', probability: 0.4 },
           {
             type: 'choice',
             name: 'route',
@@ -111,7 +111,8 @@ describe('decisionsJudge', () => {
               { value: 'skip', probability: 'low' },
             ],
           },
-          { type: 'predicate', name: 'unasked', probability: 0.9 },
+          { type: 'predicate', name: 'asked', probability: 0.9 },
+          { type: 'predicate', name: 'predicate_1', probability: 0.9 },
         ],
       }),
     );
@@ -120,10 +121,50 @@ describe('decisionsJudge', () => {
     expect(fake.calls.map((c) => c.url)).toEqual(['https://proxy.example.com/v1/decisions']);
   });
 
-  test('a predicate named route is read from its predicate answer, not the route choice', async () => {
-    const fake = fakeFetch(json({ answers: [ROUTE_ANSWER, { type: 'predicate', name: 'route', probability: 0.3 }] }));
-    const judgment = await decisionsJudge({ apiKey: 'k', model: 'm', fetch: fake.fetch })({ ...input, predicates: [{ name: 'route', question: 'Is a route obvious?' }] }, signal);
-    expect(judgment).toEqual({ route: 'note', probabilities: { note: 1 }, predicates: { route: 0.3 } });
+  test('a predicate named route is asked under its index, so it cannot collide with the route question', async () => {
+    const fake = fakeFetch(
+      json({
+        answers: [
+          ROUTE_ANSWER,
+          { type: 'predicate', name: 'route', probability: 0.9 },
+          { type: 'predicate', name: 'predicate_0', probability: 0.3 },
+          { type: 'predicate', name: 'predicate_1', probability: 0.6 },
+        ],
+      }),
+    );
+    const judge = decisionsJudge({ apiKey: 'k', model: 'm', fetch: fake.fetch, instructions: 'Pick one.' });
+    const judgment = await judge(
+      {
+        ...input,
+        routes: [{ route: 'note', criterion: 'option note' }, { route: 'skip', criterion: 'option skip' }],
+        predicates: [
+          { name: 'route', question: 'Is a route obvious?' },
+          { name: 'asked', question: 'Did the user ask for this?' },
+        ],
+      },
+      signal,
+    );
+    const body = fake.calls[0]?.init?.body;
+    expect(typeof body === 'string' ? JSON.parse(body) : body).toEqual({
+      model: 'm',
+      input:
+        '{"window":{"reason":"closing","waits":0,"dropped":0,"gap":false,"events":[{"kind":"closing","name":"deploy","data":{"env":"prod"},"ago":"1.0s"}]},' +
+        '"facts":{},"recent":[],"predicates":{"route":"Is a route obvious?","asked":"Did the user ask for this?"}}',
+      questions: [
+        {
+          type: 'choice',
+          name: 'route',
+          instructions: 'Pick one.',
+          choices: [
+            { value: 'note', description: 'option note' },
+            { value: 'skip', description: 'option skip' },
+          ],
+        },
+        { type: 'predicate', name: 'predicate_0', instructions: 'Is a route obvious?' },
+        { type: 'predicate', name: 'predicate_1', instructions: 'Did the user ask for this?' },
+      ],
+    });
+    expect(judgment).toEqual({ route: 'note', probabilities: { note: 1 }, predicates: { route: 0.3, asked: 0.6 } });
   });
 
   test('a reply without an offered route is a retryable failure', async () => {
