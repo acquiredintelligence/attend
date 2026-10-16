@@ -48,6 +48,10 @@ A declared judge budget supplies `maxWindowBytes` unless explicitly configured. 
 
 `sink: 'log'` and `deadLetter: 'log'` append final rows without a delivery lane. `log modes append final rows and leave both delivery lanes empty` pins the modes. Decision-subscription tests pin copying, cursors, filters, gaps, and uninterrupted pagination.
 
+## Delivery order
+
+Delivered copies are sliced: up to 64 entries copy synchronously, and a larger copy yields between slices. Under a fake clock that fires deadlines before returning, a window of more than 64 entries is therefore delivered at a different point, relative to later work, than in the frozen shell. Dead letters for different scopes that fall due at the same fake instant can also reach the handler in a different order. Order within a scope is unchanged. The shell differential compares letters per scope and generates windows of at most 6 events, so it pins neither case.
+
 ## Policy snapshots
 
 A load under a changed policy forces a snapshot on the next input, even when that input is a no-op. `a changed policy snapshots even a no-op tick and recomputes the exact deadline` pins the extra write.
