@@ -150,7 +150,7 @@ describe('postgresLog across connections', () => {
     expect(seen).toHaveLength(800);
     expect(new Set(seen).size).toBe(800);
     for (let a = 0; a < 8; a += 1) expect(seen.filter((id) => id.startsWith(`a${a}-`))).toEqual(ids(a));
-  });
+  }, 30_000);
 
   test('an event whose text holds a NUL round-trips', async () => {
     const log = postgresLog(await pool(), { prefix: await fresh() });

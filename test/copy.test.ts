@@ -5,6 +5,8 @@ import type { Event } from '../src/types.js';
 
 const event = (data: unknown): Event => ({ id: 'e', at: 0, name: 'n', data: data as Event['data'] });
 const viaJson = (data: unknown): unknown => JSON.parse(JSON.stringify(data));
+// What a database store returns after persisting the copy: a raw JSON 1e400 parses to Infinity on the first trip and is stored as null.
+const persisted = (data: unknown): unknown => viaJson(viaJson(data));
 
 function prototypes(value: unknown, out: unknown[] = []): unknown[] {
   if (typeof value === 'object' && value !== null) {
@@ -44,14 +46,17 @@ const cases: [string, unknown][] = [
   ['Map, Set, RegExp and Error become {}', { map: new Map([[1, 2]]), set: new Set([1]), re: /x/, error: new Error('e') }],
   ['a typed array and a Buffer', { typed: new Uint8Array([1, 2]), buffer: Buffer.from('hi') }],
   ['a symbol-keyed property', { [Symbol('k')]: 1, a: 1 }],
-  ...(raw ? ([['JSON.rawJSON', { big: raw('12345678901234567890') }]] as [string, unknown][]) : []),
+  ...(raw ? ([['JSON.rawJSON', { big: raw('12345678901234567890'), huge: raw('1e400'), negativeZero: raw('-0') }]] as [string, unknown][]) : []),
+  ['a function and a class with toJSON', { f: Object.assign(() => 1, { toJSON: () => 'f' }), c: Object.assign(class {}, { toJSON: () => 'c' }) }],
+  ['a property named rawJSON on a plain object', { rawJSON: '1', other: { rawJSON: 2 } }],
 ];
 
 describe('copyEvent copies data exactly as JSON.parse(JSON.stringify(data))', () => {
   test.each(cases)('%s', (_name, data) => {
     const copied = copyEvent(event(data)).data;
-    const expected = viaJson(data);
+    const expected = persisted(data);
     expect(isDeepStrictEqual(copied, expected)).toBe(true);
+    expect(isDeepStrictEqual(viaJson(copied), copied)).toBe(true);
     expect(JSON.stringify(copied)).toBe(JSON.stringify(expected));
     expect(prototypes(copied)).toEqual(prototypes(expected));
   });
@@ -98,6 +103,30 @@ describe('copyEvent copies data exactly as JSON.parse(JSON.stringify(data))', ()
     ['a cycle in an extra field', (() => { const extra: Record<string, unknown> = {}; extra.self = extra; return { id: 'e', at: 0, name: 'n', data: {}, extra }; })()],
   ])('rejects %s outside data', (_name, value) => {
     expect(() => copyEvent(value as Event)).toThrow(TypeError);
+  });
+
+  test('an array an element shortens while it is copied keeps its first length, as JSON does', () => {
+    const shrinking = () => {
+      const list: unknown[] = [1, { toJSON: () => { list.length = 1; return 2; } }, 3, 4];
+      return { list };
+    };
+    expect(viaJson(shrinking())).toEqual({ list: [1, 2, null, null] });
+    expect(copyEvent(event(shrinking())).data).toStrictEqual({ list: [1, 2, null, null] });
+  });
+
+  test('data nested 999 levels copies, and past 1,000 levels rejects', () => {
+    const nest = (levels: number) => {
+      let value: unknown = 'leaf';
+      for (let i = 0; i < levels; i += 1) value = { v: value };
+      return value;
+    };
+    expect(viaJson(copyEvent(event(nest(998))).data)).toEqual(viaJson(nest(998)));
+    expect(() => copyEvent(event(nest(1000)))).toThrow(/cycle or nests deeper than 1000/);
+  });
+
+  test('an event whose top-level fields are not plain takes the full copy', () => {
+    const at = Object(5);
+    expect(copyEvent({ id: 'e', at, name: 'n', data: {}, text: undefined } as unknown as Event)).toStrictEqual({ id: 'e', at: 5, name: 'n', data: {} });
   });
 
   test('a repeated object that is not a cycle is copied twice', () => {
