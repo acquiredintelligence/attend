@@ -11,7 +11,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import type { RequestId, ServerCapabilities } from '@modelcontextprotocol/sdk/types.js';
-import { z } from 'zod';
+import { z } from 'zod/v4';
 
 const SUBSCRIPTION_KEY = 'io.modelcontextprotocol/subscriptionId';
 
@@ -43,6 +43,8 @@ export interface McpEventsTestServer {
   heartbeat(name: string, cursor?: string): Promise<void>;
   /** Answer the next request for `method` with this error instead. */
   failNext(method: Method, code: number, message?: string): void;
+  /** Send a stream notification under a subscription id of your choosing, or none, outside any live stream. */
+  stray(kind: string, subscriptionId: string | number | null, params: Record<string, unknown>): Promise<void>;
   /** `nextPollMs` in poll results; null leaves the field out. Default 1000. */
   nextPollMs: number | null;
 }
@@ -213,6 +215,9 @@ export function mcpEventsTestServer(events: EventSpec[]): McpEventsTestServer {
     },
     failNext(method, code, message = `error ${code}`) {
       failures.set(method, { code, message });
+    },
+    async stray(kind, subscriptionId, params) {
+      await server.notification({ method: `notifications/events/${kind}`, params: { ...params, _meta: subscriptionId === null ? {} : { [SUBSCRIPTION_KEY]: subscriptionId } } });
     },
   };
   return api;

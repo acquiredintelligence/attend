@@ -2,15 +2,26 @@
  * `attend/mcp`: an MCP Events subscription (`events/stream` or `events/poll`) as a
  * `Source`. Peer dependency: `@modelcontextprotocol/sdk`. The draft's wire shapes stay
  * inside this module; the public surface takes an SDK `Client` and emits domain events.
+ *
+ * The source installs one notification handler on the Client for each of the five
+ * `notifications/events/*` methods (`active`, `event`, `heartbeat`, `error`, `terminated`)
+ * the first time it is used on that Client, and routes by subscription id from there. The
+ * app must not replace those handlers.
+ *
+ * When the Client's transport closes, the SDK fails every open request with
+ * `ConnectionClosed` (-32000). The source turns that into a `PermanentError`, so `attach`
+ * rejects: the app must reconnect the Client (or make a new one) and attach again.
  */
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 import { ErrorCode } from '@modelcontextprotocol/sdk/types.js';
-import { z } from 'zod';
+import { z } from 'zod/v4';
+import { PermanentError } from './errors.js';
 import { sleep, systemClock } from './internal/clock.js';
+import { stableJson } from './internal/json.js';
+import { assertNever, messageOf } from './internal/shared.js';
 import type { Clock, Event, JsonObject, Source, SourceBatch } from './types.js';
-import { DEFAULT_POLICY } from './types.js';
 
 export interface McpEventsOptions {
   /** An event name from `events/list`. */
@@ -31,8 +42,14 @@ export interface McpEventsOptions {
    * type the server cannot replay from a cursor. Default 1000.
    */
   maxBuffered?: number;
+  /**
+   * How long a stream may go without any notification, heartbeats included, before the source
+   * treats it as dead: it reports `idle`, aborts the stream and reopens from the committed
+   * cursor. Default 300000.
+   */
+  idleTimeoutMs?: number;
   clock?: Clock;
-  /** Everything the source survives: a server error notification, a skipped payload, a retry, an overflow. */
+  /** Everything the source survives: a server error notification, a skipped payload, an overflow, an idle stream, a stray notification. */
   onError?: (error: McpEventsError) => void;
 }
 
@@ -41,13 +58,15 @@ export type McpEventsError =
   | { kind: 'stream'; code: number; message: string; data: unknown }
   /** A payload that failed validation and was skipped, with its cursor kept. */
   | { kind: 'malformed'; method: string; message: string; payload: unknown }
-  /** A request failed with a retryable error; the source retries after `delayMs`. */
-  | { kind: 'retry'; message: string; code: number | null; delayMs: number }
   /** `buffered` notifications were waiting on `emit`; the stream reopens from the committed cursor. */
-  | { kind: 'overflow'; buffered: number };
+  | { kind: 'overflow'; buffered: number }
+  /** Nothing arrived for `idleTimeoutMs`; the stream reopens from the committed cursor. */
+  | { kind: 'idle' }
+  /** A notification on this Client named a subscription that no live stream here opened. */
+  | { kind: 'unrouted'; method: string; subscriptionId: string | null };
 
 type Delivery = 'stream' | 'poll';
-type Policy = 'permanent' | 'retry' | 'fallback';
+type Policy = 'permanent' | 'retry' | 'fallback' | 'closed';
 
 /** What a request error means to the subscription. Codes not listed are permanent. */
 const ERROR_POLICY: Readonly<Record<number, Policy>> = {
@@ -57,10 +76,15 @@ const ERROR_POLICY: Readonly<Record<number, Policy>> = {
   [-32026]: 'fallback',
   [-32027]: 'permanent',
   [ErrorCode.RequestTimeout]: 'retry',
+  [ErrorCode.ConnectionClosed]: 'closed',
 };
 
 /** The longest delay `setTimeout` honours; past it the SDK's timeout fires at once. */
 const STREAM_TIMEOUT_MS = 2 ** 31 - 1;
+/** Pause before reopening a stream the server ended or the source closed, so a server that ends every stream at once never spins. */
+const REOPEN_MS = 1000;
+/** Closed subscription ids remembered, so a straggling notification from a stream this Client just closed is dropped rather than reported. */
+const CLOSED_REMEMBERED = 256;
 const SUBSCRIPTION_KEY = 'io.modelcontextprotocol/subscriptionId';
 const STREAM_METHODS = ['active', 'event', 'heartbeat', 'error', 'terminated'] as const;
 type StreamMethod = (typeof STREAM_METHODS)[number];
@@ -95,11 +119,12 @@ const envelope = <M extends string>(method: M) => z.object({ method: z.literal(m
 // ─── the per-Client demux ────────────────────────────────────────────────────
 
 type Note = { kind: StreamMethod; params: unknown };
-type Item = Note | { kind: 'done' } | { kind: 'failed'; error: unknown } | { kind: 'overflow'; buffered: number };
+type Item = Note | { kind: 'done' } | { kind: 'failed'; error: unknown } | { kind: 'overflow'; buffered: number } | { kind: 'idle' };
 
 interface Subscription {
   id: string | null;
   push(note: Note): void;
+  report(error: McpEventsError): void;
 }
 
 interface Demux {
@@ -107,6 +132,8 @@ interface Demux {
   live: Map<string, Subscription>;
   /** Streams whose request has not been sent yet, by the params object the request will carry. */
   pending: WeakMap<object, Subscription>;
+  /** Ids of streams closed here lately, oldest first. */
+  closed: Set<string>;
 }
 
 const demuxes = new WeakMap<Client, Demux>();
@@ -121,13 +148,17 @@ const wrappedTransports = new WeakSet<Transport>();
 function demuxFor(client: Client): Demux {
   let demux = demuxes.get(client);
   if (!demux) {
-    demux = { live: new Map(), pending: new WeakMap() };
+    demux = { live: new Map(), pending: new WeakMap(), closed: new Set() };
     demuxes.set(client, demux);
     for (const kind of STREAM_METHODS) {
       const d = demux;
-      client.setNotificationHandler(envelope(`notifications/events/${kind}`), (notification) => {
-        const id = notification.params?._meta?.[SUBSCRIPTION_KEY];
-        if (id !== undefined) d.live.get(String(id))?.push({ kind, params: notification.params });
+      const method = `notifications/events/${kind}` as const;
+      client.setNotificationHandler(envelope(method), (notification) => {
+        const raw = notification.params?._meta?.[SUBSCRIPTION_KEY];
+        const id = raw === undefined ? null : String(raw);
+        const subscription = id === null ? undefined : d.live.get(id);
+        if (subscription) subscription.push({ kind, params: notification.params });
+        else if (id === null || !d.closed.has(id)) for (const live of d.live.values()) live.report({ kind: 'unrouted', method, subscriptionId: id });
       });
     }
   }
@@ -153,6 +184,14 @@ function demuxFor(client: Client): Demux {
 
 function isStreamRequest(message: JSONRPCMessage): message is JSONRPCMessage & { id: string | number; method: 'events/stream'; params: object } {
   return 'id' in message && 'method' in message && message.method === 'events/stream' && typeof message.params === 'object' && message.params !== null;
+}
+
+function forget(demux: Demux, id: string): void {
+  demux.live.delete(id);
+  demux.closed.add(id);
+  if (demux.closed.size <= CLOSED_REMEMBERED) return;
+  const oldest = demux.closed.values().next().value;
+  if (oldest !== undefined) demux.closed.delete(oldest);
 }
 
 /**
@@ -198,28 +237,32 @@ function inbox(max: number, onOverflow: () => void): { push(note: Note): void; c
 type Outcome = { kind: 'ended' } | { kind: 'failed'; error: unknown };
 
 /**
- * One subscription (name + arguments) as a `Source`. It holds no cursor of its own: every
- * emit carries the server's cursor, the record persists it, and every open resumes from the
- * committed one. `eventId` becomes `Event.id`, so the record's seen ring dedups redelivery.
- * `truncated` becomes the batch's `truncated`, which marks the window as a gap.
+ * One subscription (name + arguments) as a `Source`, keyed `mcp:<name>:<arguments as sorted
+ * JSON>`. It holds no cursor of its own: every emit carries the server's cursor, the record
+ * persists it, and every open resumes from the committed one. `eventId` becomes `Event.id`, so
+ * the record's seen ring dedups redelivery. `truncated` becomes the batch's `truncated`, which
+ * marks the window as a gap.
  *
- * The subscription runs until `signal` aborts. A terminated or overflowed stream reopens
- * from the last committed cursor; a retryable error backs off through the core's retry
- * ladder; a permanent one rejects, and `attach` rejects with it.
+ * The subscription runs until `signal` aborts. A terminated, overflowed or idle stream reopens
+ * from the last committed cursor after a short pause. A request error that the server says to
+ * retry (-32025, a request timeout) is thrown as a plain Error, so `attach` backs off through the
+ * app's `retryBackoffMs` and resubscribes; any other error, and a closed Client, is thrown as a
+ * `PermanentError` with the SDK error as its `cause`, and `attach` rejects.
  */
 export function mcpEventsSource(client: Client, options: McpEventsOptions): Source {
   const mode = options.mode ?? 'auto';
   const pollMs = options.pollMs ?? 10_000;
   const maxBuffered = options.maxBuffered ?? 1000;
   if (!Number.isInteger(maxBuffered) || maxBuffered < 1) throw new RangeError(`attend/mcp: maxBuffered must be a positive integer, got ${maxBuffered}`);
+  const idleTimeoutMs = options.idleTimeoutMs ?? 300_000;
   const clock = options.clock ?? systemClock();
   const report = options.onError ?? (() => undefined);
-  const backoff = DEFAULT_POLICY.retryBackoffMs;
   const base: { name: string; arguments?: JsonObject; maxAgeMs?: number } = { name: options.name };
   if (options.arguments !== undefined) base.arguments = options.arguments;
   if (options.maxAgeMs !== undefined) base.maxAgeMs = options.maxAgeMs;
 
   return {
+    key: `mcp:${options.name}:${stableJson(options.arguments ?? {})}`,
     async subscribe(cursor, emit, signal) {
       const position = { cursor };
       const deliver = async (batch: SourceBatch) => {
@@ -230,29 +273,18 @@ export function mcpEventsSource(client: Client, options: McpEventsOptions): Sour
       };
 
       let delivery = mode === 'auto' ? await listedDelivery(signal) : mode;
-      let failures = 0;
       while (delivery !== null && !signal.aborted) {
         const outcome = delivery === 'stream' ? await runStream(position.cursor, deliver, signal) : await runPoll(position, deliver, signal);
         if (signal.aborted) return;
         if (outcome.kind === 'ended') {
-          failures = 0;
-          await sleep(clock, backoff[0] ?? pollMs, signal);
+          await sleep(clock, REOPEN_MS, signal);
           continue;
         }
-        const code = codeOf(outcome.error);
-        const policy = code === null ? 'permanent' : (ERROR_POLICY[code] ?? 'permanent');
-        if (policy === 'fallback' && mode === 'auto' && delivery === 'stream') {
+        if (policyOf(outcome.error) === 'fallback' && mode === 'auto' && delivery === 'stream') {
           delivery = 'poll';
           continue;
         }
-        if (policy === 'retry') {
-          const delayMs = backoff[Math.min(failures, backoff.length - 1)] ?? pollMs;
-          failures += 1;
-          report({ kind: 'retry', message: messageOf(outcome.error), code, delayMs });
-          await sleep(clock, delayMs, signal);
-          continue;
-        }
-        throw outcome.error;
+        throw classify(outcome.error);
       }
     },
   };
@@ -266,7 +298,7 @@ export function mcpEventsSource(client: Client, options: McpEventsOptions): Sour
         page = await client.request({ method: 'events/list', params: cursor === undefined ? {} : { cursor } }, ListResult, { signal });
       } catch (error) {
         if (signal.aborted) return null;
-        throw error;
+        throw classify(error);
       }
       const listed = page.events.find((e) => e.name === options.name);
       if (listed) return listed.delivery?.includes('push') ? 'stream' : 'poll';
@@ -299,10 +331,23 @@ export function mcpEventsSource(client: Client, options: McpEventsOptions): Sour
   }
 
   async function runStream(cursor: string | null, deliver: (batch: SourceBatch) => Promise<void>, signal: AbortSignal): Promise<Outcome> {
+    if (!client.transport) throw new PermanentError('attend/mcp: the Client is not connected; connect it and attach again');
     const demux = demuxFor(client);
     const controller = new AbortController();
     const items = inbox(maxBuffered, () => controller.abort(new Error('attend: stream inbox overflowed')));
-    const subscription: Subscription = { id: null, push: items.push };
+    let cancelIdle: () => void = () => undefined;
+    const armIdle = () => {
+      cancelIdle();
+      cancelIdle = clock.at(clock.now() + idleTimeoutMs, () => items.close({ kind: 'idle' }));
+    };
+    const subscription: Subscription = {
+      id: null,
+      push(note) {
+        armIdle();
+        items.push(note);
+      },
+      report,
+    };
     const params = { ...base, cursor };
     const onAbort = () => controller.abort(signal.reason);
     signal.addEventListener('abort', onAbort, { once: true });
@@ -319,6 +364,12 @@ export function mcpEventsSource(client: Client, options: McpEventsOptions): Sour
       },
     );
     try {
+      if (subscription.id === null) {
+        throw new PermanentError(
+          'attend/mcp: the events/stream request left the Client without the demux seeing its id, so its notifications cannot be routed. Please report this at https://github.com/acquiredintelligence/attend/issues',
+        );
+      }
+      armIdle();
       for (;;) {
         const item = await items.next();
         switch (item.kind) {
@@ -329,6 +380,9 @@ export function mcpEventsSource(client: Client, options: McpEventsOptions): Sour
             return signal.aborted ? { kind: 'ended' } : { kind: 'failed', error: item.error };
           case 'overflow':
             report({ kind: 'overflow', buffered: item.buffered });
+            return { kind: 'ended' };
+          case 'idle':
+            report({ kind: 'idle' });
             return { kind: 'ended' };
           case 'active': {
             const active = parsePayload(Active, item.params, 'notifications/events/active');
@@ -359,8 +413,10 @@ export function mcpEventsSource(client: Client, options: McpEventsOptions): Sour
         }
       }
     } finally {
+      cancelIdle();
       signal.removeEventListener('abort', onAbort);
-      if (subscription.id !== null) demux.live.delete(subscription.id);
+      demux.pending.delete(params);
+      if (subscription.id !== null) forget(demux, subscription.id);
       if (!settled) controller.abort(new Error('attend: stream closed'));
     }
   }
@@ -395,14 +451,19 @@ function batch(events: Event[], cursor: string | null | undefined, truncated?: b
   return out;
 }
 
-function codeOf(error: unknown): number | null {
-  return typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'number' ? error.code : null;
+function policyOf(error: unknown): Policy {
+  const code = typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'number' ? error.code : null;
+  return code === null ? 'permanent' : (ERROR_POLICY[code] ?? 'permanent');
 }
 
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function assertNever(value: never): never {
-  throw new Error(`attend: unexpected ${JSON.stringify(value)}`);
+/** A retryable error passes through as it is, for `attach` to back off on; anything else ends the subscription for good. */
+function classify(error: unknown): Error {
+  switch (policyOf(error)) {
+    case 'retry':
+      return error instanceof Error ? error : new Error(messageOf(error));
+    case 'closed':
+      return new PermanentError('attend/mcp: the Client closed; reconnect it and attach again', { cause: error });
+    default:
+      return new PermanentError(`attend/mcp: ${messageOf(error)}`, { cause: error });
+  }
 }
