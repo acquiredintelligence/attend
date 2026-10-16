@@ -179,6 +179,7 @@ describe('createAttend', () => {
         route: 'queue',
         probabilities: { interrupt: 0, queue: 0.8, note: 0.2, ask: 0, skip: 0, wait: 0 },
         predicates: { asked: 0.1 },
+        confidence: null,
         window: { id: ID_A, events: [{ ...ev('a'), kind: 'closing', seenAt: 1000 }], reason: 'closing', waits: 0, dropped: 0, gap: false, settledAt: 1500 },
         at: 1500,
       },
@@ -1035,6 +1036,7 @@ describe('routes and defaultNotice', () => {
     route,
     probabilities: { interrupt: 0, queue: 0, note: 0, ask: 0, skip: 0, wait: 0 },
     predicates: {},
+    confidence: null,
     window: {
       id: ID_A,
       events: [

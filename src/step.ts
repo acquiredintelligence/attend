@@ -424,6 +424,7 @@ function onJudged(ctx: Ctx, r: ScopeRecord, input: Extract<Input, { kind: 'judge
       route: verdict.route,
       probabilities: verdict.probabilities,
       predicates: verdict.predicates,
+      confidence: verdict.confidence,
       window,
       at: ctx.now,
     };
@@ -434,7 +435,7 @@ function onJudged(ctx: Ctx, r: ScopeRecord, input: Extract<Input, { kind: 'judge
 }
 
 /** A judgment after validation: the decision's vectors, with the route still allowed to be `wait`. */
-type Validated = Pick<Decision, 'probabilities' | 'predicates'> & { route: Route };
+type Validated = Pick<Decision, 'probabilities' | 'predicates' | 'confidence'> & { route: Route };
 
 function unit(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1 ? value : null;
@@ -443,7 +444,8 @@ function unit(value: unknown): number | null {
 /**
  * Validate the judge's answer at the boundary. The route must be offered, or the answer is
  * null. Probabilities outside [0, 1] or for routes not offered count as 0 and the vector is
- * renormalised; when it sums to 0 the chosen route gets 1. Predicates outside [0, 1] are dropped.
+ * renormalised; when it sums to 0 the chosen route gets 1. Predicates and a confidence outside
+ * [0, 1] are dropped.
  */
 export function validate(judgment: Judgment, offered: Route[]): Validated | null {
   const route = offered.find((candidate) => candidate === judgment.route);
@@ -465,7 +467,7 @@ export function validate(judgment: Judgment, offered: Route[]): Validated | null
     const p = unit(value);
     if (p !== null) predicates[name] = p;
   }
-  return { route, probabilities, predicates };
+  return { route, probabilities, predicates, confidence: unit(judgment.confidence) };
 }
 
 function failJudge(ctx: Ctx, r: ScopeRecord, window: Window, phase: Judging['phase'], message: string, permanent: boolean): ScopeRecord {

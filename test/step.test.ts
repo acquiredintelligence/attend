@@ -64,6 +64,7 @@ const decisionA: Decision = {
   route: 'queue',
   probabilities: { interrupt: 0, queue: 1, note: 0, ask: 0, skip: 0, wait: 0 },
   predicates: {},
+  confidence: null,
   window: windowA,
   at: 700,
 };
@@ -727,7 +728,14 @@ describe('validate', () => {
       route: 'queue',
       probabilities: { interrupt: 0, queue: 0.5, note: 0.5, ask: 0, skip: 0, wait: 0 },
       predicates: {},
+      confidence: null,
     });
+  });
+
+  test('keeps a confidence in [0, 1] and drops any other', () => {
+    expect(validate({ route: 'queue', confidence: 0.83 }, all)?.confidence).toBe(0.83);
+    expect(validate({ route: 'queue', confidence: 1.5 }, all)?.confidence).toBeNull();
+    expect(validate({ route: 'queue' }, all)?.confidence).toBeNull();
   });
 
   test('gives the chosen route everything when no probability is usable', () => {

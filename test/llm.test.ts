@@ -216,6 +216,7 @@ describe('llmJudge inside createAttend', () => {
         route: 'interrupt',
         probabilities: { interrupt: 0.625, queue: 0.25, note: 0.125, ask: 0, skip: 0, wait: 0 },
         predicates: { asked: 0.75 },
+        confidence: null,
         window,
         at: 1500,
       },

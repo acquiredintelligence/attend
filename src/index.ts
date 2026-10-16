@@ -13,6 +13,7 @@ export type {
   Event,
   EventLog,
   Judge,
+  JudgeImage,
   JudgeInput,
   Judgment,
   JsonObject,
