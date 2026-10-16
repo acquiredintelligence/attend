@@ -141,18 +141,15 @@ function keepLast<T>(list: T[], n: number): T[] {
 // ─── ingest ──────────────────────────────────────────────────────────────────
 
 function ingest(ctx: Ctx, r: ScopeRecord, input: EventsInput): ScopeRecord {
-  const known = new Set<string>(r.seen);
-  for (const e of r.buffer.entries) known.add(e.id);
-  for (const e of r.batch?.window.events ?? []) known.add(e.id);
   const entries = [...r.buffer.entries];
   const seen = [...r.seen];
+  const known = knownIds(r, seen, input.events.length);
   let duplicates = 0;
   for (const e of input.events) {
-    if (known.has(e.id)) {
+    if (known(e.id)) {
       duplicates += 1;
       continue;
     }
-    known.add(e.id);
     entries.push({ ...e, kind: ctx.config.kind(e), seenAt: ctx.now });
     seen.push(e.id);
   }
@@ -168,6 +165,24 @@ function ingest(ctx: Ctx, r: ScopeRecord, input: EventsInput): ScopeRecord {
   }
   trace(ctx, { kind: 'ingested', scope: r.scope, count: input.events.length - duplicates, duplicates });
   return r;
+}
+
+/**
+ * Whether an id was already ingested: it is in `seen`, the open window or the held window. `seen`
+ * is the growing copy, so a batch that repeats an id sees its own first copy. A set over the
+ * thousand or so ids costs more than scanning them for the few events a batch usually holds.
+ */
+function knownIds(r: ScopeRecord, seen: string[], incoming: number): (id: string) => boolean {
+  const held = r.batch?.window.events ?? [];
+  if (incoming < 8) return (id) => seen.includes(id) || r.buffer.entries.some((e) => e.id === id) || held.some((e) => e.id === id);
+  const set = new Set<string>(seen);
+  for (const e of r.buffer.entries) set.add(e.id);
+  for (const e of held) set.add(e.id);
+  return (id) => {
+    if (set.has(id)) return true;
+    set.add(id);
+    return false;
+  };
 }
 
 /** Act-less entries older than `maxWindowMs` that precede the first act never join a window: they are pruned. */
