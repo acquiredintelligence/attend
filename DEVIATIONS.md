@@ -50,7 +50,7 @@ A declared judge budget supplies `maxWindowBytes` unless explicitly configured. 
 
 ## Delivery order
 
-Delivered copies are sliced: up to 64 entries copy synchronously, and a larger copy yields between slices. Under a fake clock that fires deadlines before returning, a window of more than 64 entries is therefore delivered at a different point, relative to later work, than in the frozen shell. Dead letters for different scopes that fall due at the same fake instant can also reach the handler in a different order. Order within a scope is unchanged. The shell differential compares letters per scope and generates windows of at most 6 events, so it pins neither case.
+Delivered copies are sliced: up to 64 entries copy synchronously, and a larger copy yields between slices. Under a fake clock that fires deadlines before returning, a window of more than 64 entries is therefore delivered at a different point, relative to later work, than in the frozen shell. Dead letters for different scopes that fall due at the same fake instant can also reach the handler in a different order. Order within a scope is unchanged except for windows above 64 entries under a fake clock. The shell differential compares letters per scope and generates windows of at most 6 events, so it pins neither case.
 
 ## Policy snapshots
 

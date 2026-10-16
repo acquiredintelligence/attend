@@ -119,3 +119,13 @@ Attach `mcpEventsSource(client, { name, clock })` with the same fake clock as `c
 ## Typing note
 
 With `exactOptionalPropertyTypes` on, SDK 1.32's `StreamableHTTPClientTransport` does not typecheck as a `Transport`, because its `sessionId` getter can return `undefined`. `StdioClientTransport` and `InMemoryTransport` typecheck.
+
+## Serving decisions: attend serve
+
+`npx attend serve` runs attend as a sidecar. Events go in as NDJSON on `POST /v1/ingest`, and judged decisions come out on `/mcp` as MCP Events. Raw events never cross MCP.
+
+```sh
+npx attend serve --store sqlite:attend.db --judge jev --kinds kinds.json --act-threshold 0.4
+```
+
+`kinds.json` maps event names to kinds, such as `{"message.created":"flush","build.failed":"closing"}`. Flags and their environment variables are in the README. Subscribe to `attention.decision` with `events/stream`, poll it with `events/poll`, or call the `attend_wait` tool in a loop from a host that cannot subscribe. In TypeScript, `decisionFeed` from `attend/mcp` keeps the cursor. Use `serve(attend, store, { listen })` from `attend/server` to run the same thing inside your own process.
