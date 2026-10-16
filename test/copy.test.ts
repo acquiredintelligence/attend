@@ -156,6 +156,19 @@ describe('copyEvent copies data exactly as JSON.parse(JSON.stringify(data))', ()
     }
   });
 
+  test('an array length is read once, as JSON reads it', () => {
+    const withLength = (length: unknown) => new Proxy([1, 2], { get: (target, key) => (key === 'length' ? length : Reflect.get(target, key)) });
+    expect(() => JSON.stringify({ list: withLength(0n) })).toThrow(TypeError);
+    expect(() => copyEvent(event({ list: withLength(0n) }))).toThrow(TypeError);
+    expect(copyEvent(event({ list: withLength(undefined) })).data).toStrictEqual(viaJson({ list: withLength(undefined) }));
+    const kept = { valueOf: () => 1 };
+    const copied = copyEvent(event({ list: withLength(kept) })).data;
+    kept.valueOf = () => 2;
+    expect(copied).toStrictEqual({ list: [1] });
+    expect(() => copyEvent(event({ list: withLength(new Date(0)) }))).not.toThrow();
+    expect(() => copyEvent(event({ list: withLength(2 ** 40) }))).toThrow(RangeError);
+  });
+
   test('a repeated object that is not a cycle is copied twice', () => {
     const shared = { x: 1 };
     expect(copyEvent(event({ a: shared, b: [shared, shared] })).data).toEqual({ a: { x: 1 }, b: [{ x: 1 }, { x: 1 }] });

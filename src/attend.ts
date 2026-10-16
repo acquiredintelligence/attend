@@ -5,7 +5,7 @@
 import { initialRecord, step, type StepConfig } from './step.js';
 import { ConflictError, isPermanent, OutboxFullError } from './errors.js';
 import { sleep, systemClock } from './internal/clock.js';
-import { assertNever, copyEvent, messageOf } from './internal/shared.js';
+import { arrayLength, assertNever, copyEvent, messageOf } from './internal/shared.js';
 import type {
   Clock,
   DeadLetter,
@@ -158,8 +158,9 @@ export function createAttend(config: AttendConfig): Attend {
 
   function classify(events: Event[]): EventsInput['events'] {
     if (!Array.isArray(events)) throw new TypeError('attend: events must be an array');
-    const classified: EventsInput['events'] = new Array(events.length);
-    for (let i = 0; i < events.length; i += 1) {
+    const length = arrayLength(events.length);
+    const classified: EventsInput['events'] = new Array(length);
+    for (let i = 0; i < length; i += 1) {
       const event: Event & { kind?: Kind } = copyEvent(events[i] as Event);
       const kind = config.kind(event);
       if (!KINDS.includes(kind)) throw new TypeError('attend: invalid event kind');

@@ -95,6 +95,31 @@ for (const [name, makeStore] of stores) describe(`ingest through ${name}`, () =>
     expect(puts).toBe(2);
   });
 
+  test('a toJSON that empties the caller\'s events rejects only its own push', async () => {
+    const inner = makeStore();
+    const held = gate();
+    let puts = 0;
+    const store: StateStore = { ...inner, async put(record, version) {
+      puts += 1;
+      if (puts === 1) await held.promise;
+      return inner.put(record, version);
+    } };
+    const { attend } = setup(store);
+    const writing = attend.push('s', []);
+    await drain();
+    const first = attend.push('s', [event('a')]);
+    const events: Event[] = [];
+    events.push({ ...event('b'), data: { x: { toJSON: () => { events.length = 0; return 1; } } } } as unknown as Event, event('b2'));
+    const middle = attend.push('s', events);
+    const last = attend.push('s', [event('c')]);
+    const results = Promise.allSettled([first, middle, last]);
+    held.release();
+    await writing;
+    const settled = await results;
+    expect(settled.map((r) => r.status)).toEqual(['fulfilled', 'rejected', 'fulfilled']);
+    expect((await attend.inspect('s'))?.buffer.entries).toEqual([entries[0], entries[2]]);
+  });
+
   test.each(['kind', 'put', 'committed put'] as const)('a pipelined source resumes without loss or duplicates after a failed %s', async (failure) => {
     const inner = makeStore();
     const held = gate();
