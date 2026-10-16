@@ -617,7 +617,7 @@ async function session(store: StateStore, crash: { put: number; point: CrashPoin
   await advance(4100);
   await push('d', 'close');
   await advance(600);
-  await advance(20_000);
+  await advance(25_000);
   await push('e', 'say');
   await advance(1500);
   await advance(8000);
