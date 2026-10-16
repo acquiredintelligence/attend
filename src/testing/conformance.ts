@@ -170,12 +170,12 @@ export function scopeStoreConformance(make: () => Promise<ScopeStore> | ScopeSto
     }],
     ['a conflicting write in a group leaves the other writes committed, with outcomes in order', async (store) => {
       await store.commit([write('a'), write('b')]);
-      const before = await store.load('b');
-      const a = write('a', 1);
+      const before = await store.load('a');
+      const b = write('b', 1);
       const c = write('c');
-      assertEqual(await store.commit([a, write('b', 0, { appends: [append('conflict', 'b')] }), c]), ['ok', 'conflict', 'ok'], 'outcomes');
-      assertEqual((await store.load('a'))?.version, 2, 'a committed');
-      assertEqual(await store.load('b'), before, 'b unchanged');
+      assertEqual(await store.commit([b, write('a', 0, { appends: [append('conflict', 'a')] }), c]), ['ok', 'conflict', 'ok'], 'outcomes');
+      assertEqual((await store.load('b'))?.version, 2, 'b committed');
+      assertEqual(await store.load('a'), before, 'a unchanged');
       assertEqual(await store.load('c'), { version: 1, snapshot: null, tail: c.inputs }, 'c committed');
       assertEqual(await store.log.find('decision', 'conflict'), null, 'no conflicting append');
     }],

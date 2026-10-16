@@ -58,7 +58,9 @@ export interface DueKey {
  * The store port. `commit` resolves once the group is durable, with one outcome per write, in
  * order. Writes for different scopes are independent: a conflict changes nothing for its scope,
  * and the others commit. A group that names one scope twice rejects. A rejected `commit` applied
- * nothing. Proven by `scopeStoreConformance` and `decisionLogConformance`.
+ * nothing. Every value a store returns is plain, cloneable data that it never changes afterwards,
+ * and a store never changes the writes or queries it is given. Proven by `scopeStoreConformance`
+ * and `decisionLogConformance`.
  */
 export interface ScopeStore {
   /** False for the memory store: snapshots and inputs survive the instance, not the process. */
