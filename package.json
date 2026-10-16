@@ -68,8 +68,9 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "check": "pnpm typecheck && pnpm test && pnpm build",
-    "demo": "pnpm build && node examples/demo.ts"
+    "check": "pnpm typecheck && pnpm test && pnpm build && pnpm check:docs",
+    "demo": "pnpm build && node --experimental-strip-types examples/demo.ts",
+    "check:docs": "node scripts/check-snippets.mjs"
   },
   "peerDependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
