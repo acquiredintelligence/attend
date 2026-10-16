@@ -5,7 +5,10 @@
  * index on construction if they are absent, so a second instance over the same file adopts
  * what the first wrote.
  */
-import type { Event, EventLog, LogEntry, ScopeRecord, StateStore } from './types.js';
+import { boundary } from './internal/adapter.js';
+import type { EventLog, LogEntry, StateStore } from './types.js';
+
+const { column, formatPosition, parseEvent, parsePosition, parseRecord, tablePrefix, text } = boundary('attend/sqlite');
 
 export type SqliteValue = string | number | bigint | null;
 
@@ -26,7 +29,7 @@ export interface SqliteOptions {
 }
 
 export function sqliteStore(db: SqliteDatabase, options?: SqliteOptions): StateStore {
-  const table = `${prefix(options)}records`;
+  const table = `${tablePrefix(options?.prefix)}records`;
   db.exec(`CREATE TABLE IF NOT EXISTS ${table} (scope TEXT PRIMARY KEY, version INTEGER NOT NULL, due_at REAL, record TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS ${table}_due ON ${table} (due_at) WHERE due_at IS NOT NULL;`);
   const select = db.prepare(`SELECT record FROM ${table} WHERE scope = ?`);
@@ -62,7 +65,7 @@ export function sqliteStore(db: SqliteDatabase, options?: SqliteOptions): StateS
  * cannot wait: with `blockMs` it returns at once and `logSource` paces the loop.
  */
 export function sqliteLog(db: SqliteDatabase, options?: SqliteOptions): EventLog {
-  const table = `${prefix(options)}log`;
+  const table = `${tablePrefix(options?.prefix)}log`;
   db.exec(`CREATE TABLE IF NOT EXISTS ${table} (position INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT NOT NULL, event TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS ${table}_scope ON ${table} (scope, position);`);
   const insert = db.prepare(`INSERT INTO ${table} (scope, event) VALUES (?, ?)`);
@@ -80,55 +83,9 @@ export function sqliteLog(db: SqliteDatabase, options?: SqliteOptions): EventLog
       }
     },
     async read(scope, after, { limit }) {
-      return select.all(scope, after === null ? 0 : parsePosition(after), limit).map(
+      return select.all(scope, after === null ? 0 : Number(parsePosition(after)), limit).map(
         (row): LogEntry => ({ position: formatPosition(column(row, 'position')), event: parseEvent(column(row, 'event')) }),
       );
     },
   };
-}
-
-function prefix(options: SqliteOptions | undefined): string {
-  const value = options?.prefix ?? 'attend_';
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) throw new Error(`attend/sqlite: prefix must be letters, digits and underscores, got "${value}"`);
-  return value;
-}
-
-function column(row: unknown, name: string): unknown {
-  if (typeof row !== 'object' || row === null) throw new Error(`attend/sqlite: expected a row, got ${typeof row}`);
-  return Reflect.get(row, name);
-}
-
-function text(value: unknown): string {
-  if (typeof value !== 'string') throw new Error(`attend/sqlite: expected text, got ${typeof value}`);
-  return value;
-}
-
-/** Twenty digits, so positions compare as strings the way they compare as numbers. */
-function formatPosition(value: unknown): string {
-  if (typeof value !== 'number' && typeof value !== 'bigint') throw new Error(`attend/sqlite: expected an integer position, got ${typeof value}`);
-  return String(value).padStart(20, '0');
-}
-
-function parsePosition(position: string): number {
-  if (!/^\d{1,20}$/.test(position)) throw new Error(`attend/sqlite: not a position from this log: "${position}"`);
-  return Number(position);
-}
-
-/** The adapter wrote this JSON from a `ScopeRecord`; past the identity checks, the shape is its own. */
-function parseRecord(value: unknown, scope: string): ScopeRecord {
-  const parsed: unknown = JSON.parse(text(value));
-  if (typeof parsed !== 'object' || parsed === null || Reflect.get(parsed, 'scope') !== scope || typeof Reflect.get(parsed, 'version') !== 'number') {
-    throw new Error(`attend/sqlite: corrupt record for scope "${scope}"`);
-  }
-  return parsed as ScopeRecord;
-}
-
-function parseEvent(value: unknown): Event {
-  const parsed: unknown = JSON.parse(text(value));
-  const field = (name: string): unknown => (typeof parsed === 'object' && parsed !== null ? Reflect.get(parsed, name) : undefined);
-  const data = field('data');
-  if (typeof field('id') !== 'string' || typeof field('name') !== 'string' || typeof field('at') !== 'number' || typeof data !== 'object' || data === null) {
-    throw new Error('attend/sqlite: corrupt log entry');
-  }
-  return parsed as Event;
 }

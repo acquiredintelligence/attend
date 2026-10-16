@@ -3,7 +3,10 @@
  * `query(text, values)`, such as a `pg` `Pool` or `Client`, so importing this module loads no
  * driver. Run `migrate()` once before using either adapter; neither runs DDL itself.
  */
-import type { Event, EventLog, LogEntry, ScopeRecord, StateStore } from './types.js';
+import { boundary } from './internal/adapter.js';
+import type { EventLog, LogEntry, StateStore } from './types.js';
+
+const { column, formatPosition, parseEvent, parsePosition, parseRecord, tablePrefix, text } = boundary('attend/postgres');
 
 export interface PostgresClient {
   query(text: string, values?: unknown[]): Promise<{ rows: unknown[]; rowCount: number | null }>;
@@ -104,53 +107,6 @@ export function postgresLog(client: PostgresClient, options?: PostgresOptions & 
 }
 
 function tables(options: PostgresOptions | undefined): { records: string; log: string } {
-  const prefix = options?.prefix ?? 'attend_';
-  if (!/^[a-z_][a-z0-9_]*$/.test(prefix)) throw new Error(`attend/postgres: prefix must be lowercase letters, digits and underscores, got "${prefix}"`);
+  const prefix = tablePrefix(options?.prefix, { lowercase: true });
   return { records: `${prefix}records`, log: `${prefix}log` };
-}
-
-function column(row: unknown, name: string): unknown {
-  if (typeof row !== 'object' || row === null) throw new Error(`attend/postgres: expected a row, got ${typeof row}`);
-  return Reflect.get(row, name);
-}
-
-function text(value: unknown): string {
-  if (typeof value !== 'string') throw new Error(`attend/postgres: expected text, got ${typeof value}`);
-  return value;
-}
-
-/** `pg` hands json columns back parsed; a driver that does not hands back text. */
-function json(value: unknown): unknown {
-  return typeof value === 'string' ? JSON.parse(value) : value;
-}
-
-/** Twenty digits, so positions compare as strings the way they compare as numbers. */
-function formatPosition(value: unknown): string {
-  const digits = typeof value === 'number' || typeof value === 'bigint' ? String(value) : text(value);
-  if (!/^\d{1,20}$/.test(digits)) throw new Error(`attend/postgres: expected an integer position, got "${digits}"`);
-  return digits.padStart(20, '0');
-}
-
-function parsePosition(position: string): string {
-  if (!/^\d{1,20}$/.test(position)) throw new Error(`attend/postgres: not a position from this log: "${position}"`);
-  return position;
-}
-
-/** The adapter wrote this JSON from a `ScopeRecord`; past the identity checks, the shape is its own. */
-function parseRecord(value: unknown, scope: string): ScopeRecord {
-  const parsed = json(value);
-  if (typeof parsed !== 'object' || parsed === null || Reflect.get(parsed, 'scope') !== scope || typeof Reflect.get(parsed, 'version') !== 'number') {
-    throw new Error(`attend/postgres: corrupt record for scope "${scope}"`);
-  }
-  return parsed as ScopeRecord;
-}
-
-function parseEvent(value: unknown): Event {
-  const parsed = json(value);
-  const field = (name: string): unknown => (typeof parsed === 'object' && parsed !== null ? Reflect.get(parsed, name) : undefined);
-  const data = field('data');
-  if (typeof field('id') !== 'string' || typeof field('name') !== 'string' || typeof field('at') !== 'number' || typeof data !== 'object' || data === null) {
-    throw new Error('attend/postgres: corrupt log entry');
-  }
-  return parsed as Event;
 }
