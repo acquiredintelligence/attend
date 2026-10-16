@@ -243,24 +243,6 @@ export function createAttend(config: AttendConfig): Attend {
     }
   }
 
-  function sleep(ms: number, signal: AbortSignal): Promise<void> {
-    return new Promise((resolve) => {
-      if (signal.aborted) {
-        resolve();
-        return;
-      }
-      const onAbort = () => {
-        cancel();
-        resolve();
-      };
-      const cancel = clock.at(clock.now() + ms, () => {
-        signal.removeEventListener('abort', onAbort);
-        resolve();
-      });
-      signal.addEventListener('abort', onAbort, { once: true });
-    });
-  }
-
   return {
     push: (scope, events) => apply(scope, { kind: 'events', events }),
     flush: (scope) => apply(scope, { kind: 'flush' }),
@@ -281,7 +263,7 @@ export function createAttend(config: AttendConfig): Attend {
           } catch (error) {
             if (!(error instanceof OutboxFullError) || controller.signal.aborted) throw error;
             observe({ kind: 'backpressure', scope, outbox: error.size });
-            await sleep(policy.retryBackoffMs[Math.min(failures, policy.retryBackoffMs.length - 1)] ?? policy.deliveryTimeoutMs, controller.signal);
+            await sleep(clock, policy.retryBackoffMs[Math.min(failures, policy.retryBackoffMs.length - 1)] ?? policy.deliveryTimeoutMs, controller.signal);
             failures += 1;
           }
         }
@@ -302,7 +284,7 @@ export function createAttend(config: AttendConfig): Attend {
           } catch (error) {
             observe({ kind: 'failed', scope: '*', input: 'tick', message: messageOf(error) });
           }
-          await sleep(sweepMs, signal);
+          await sleep(clock, sweepMs, signal);
         }
       } finally {
         running = null;
@@ -325,6 +307,25 @@ function isJudgment(value: unknown): value is Judgment {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Resolve after `ms` on `clock`, or at once on abort. */
+function sleep(clock: Clock, ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const onAbort = () => {
+      cancel();
+      resolve();
+    };
+    const cancel = clock.at(clock.now() + ms, () => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    });
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 function assertNever(value: never): never {
@@ -383,12 +384,14 @@ export function defaultNotice(decision: Decision, options?: { maxLines?: number 
 
 /**
  * A `Source` over an `EventLog`: reads after the cursor, emits, repeats. `blockMs` is passed
- * to the log; a log that cannot block returns at once, and `pollMs` then paces the loop.
+ * to the log; a log that cannot block returns at once, and `pollMs` then paces the loop on
+ * `clock`.
  */
-export function logSource(log: EventLog, scope: string, options?: { limit?: number; blockMs?: number; pollMs?: number }): Source {
+export function logSource(log: EventLog, scope: string, options?: { limit?: number; blockMs?: number; pollMs?: number; clock?: Clock }): Source {
   const limit = options?.limit ?? 100;
   const blockMs = options?.blockMs ?? 1000;
   const pollMs = options?.pollMs ?? 250;
+  const clock = options?.clock ?? systemClock();
   return {
     async subscribe(cursor, emit, signal) {
       let after = cursor;
@@ -400,17 +403,7 @@ export function logSource(log: EventLog, scope: string, options?: { limit?: numb
           await emit({ events: entries.map((e) => e.event), cursor: last.position });
           after = last.position;
         } else {
-          await new Promise<void>((resolve) => {
-            const timer = setTimeout(() => {
-              signal.removeEventListener('abort', onAbort);
-              resolve();
-            }, Math.max(0, pollMs));
-            const onAbort = () => {
-              clearTimeout(timer);
-              resolve();
-            };
-            signal.addEventListener('abort', onAbort, { once: true });
-          });
+          await sleep(clock, pollMs, signal);
         }
       }
     },

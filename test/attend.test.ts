@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { createAttend, defaultNotice, logSource, OutboxFullError, routes, type AttendConfig } from '../src/attend.js';
 import { memoryLog, memoryStore } from '../src/memory.js';
 import { fakeClock, recordingSink, scriptedJudge, type ScriptedAnswer } from '../src/testing.js';
-import type { DeadLetter, Decision, Event, Judge, Kinded, SettlePolicy, StateStore, Trace } from '../src/types.js';
+import type { DeadLetter, Decision, Event, EventLog, Judge, Kinded, SettlePolicy, SourceBatch, StateStore, Trace } from '../src/types.js';
 
 const kind = (e: Event): Kinded => {
   switch (e.name) {
@@ -396,6 +396,40 @@ describe('createAttend', () => {
     stopSecond.abort();
     await reattached;
     await second.stop();
+  });
+
+  test('logSource paces empty polls by pollMs on the injected clock', async () => {
+    const clock = fakeClock(0);
+    const log = memoryLog();
+    let reads = 0;
+    const counted: EventLog = {
+      append: (scope, events) => log.append(scope, events),
+      read: (scope, after, options) => {
+        reads += 1;
+        return log.read(scope, after, options);
+      },
+    };
+    const batches: SourceBatch[] = [];
+    const controller = new AbortController();
+    const done = logSource(counted, 's', { blockMs: 0, pollMs: 5000, clock }).subscribe(
+      null,
+      async (batch) => {
+        batches.push(batch);
+      },
+      controller.signal,
+    );
+    await clock.advance(0);
+    expect(reads).toBe(1);
+    await clock.advance(4999);
+    expect(reads).toBe(1);
+    await clock.advance(1);
+    expect(reads).toBe(2);
+    await log.append('s', [ev('a')]);
+    await clock.advance(5000);
+    expect(batches).toEqual([{ events: [ev('a')], cursor: '00000000000000000001' }]);
+    expect(reads).toBe(4);
+    controller.abort();
+    await done;
   });
 
   test('run resolves on abort and refuses to run twice', async () => {
