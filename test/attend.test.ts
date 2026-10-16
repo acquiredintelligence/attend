@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { ConflictError, createAttend, defaultNotice, logSource, OutboxFullError, PermanentError, routes, type AttendConfig } from '../src/attend.js';
 import { memoryLog, memoryStore } from '../src/memory.js';
 import { fakeClock, recordingSink, scriptedJudge, type ScriptedAnswer } from '../src/testing.js';
-import type { DeadLetter, Decision, Event, EventLog, Judge, Kind, SettlePolicy, Source, SourceBatch, StateStore, Trace } from '../src/types.js';
+import type { DeadLetter, Decision, Event, EventLog, Judge, JudgeInput, Judgment, Kind, SettlePolicy, Source, SourceBatch, StateStore, Trace } from '../src/types.js';
 
 const kind = (e: Event): Kind => {
   switch (e.name) {
@@ -23,6 +23,27 @@ const ev = (id: string, name = 'close'): Event => ({ id, at: 0, name, data: {}, 
 const ID_A = '3ecbd4f2ef91c78f';
 const ID_B = '3ecbd5f2ef91c942';
 const ID_AB = 'f9df8ba2df127ca6';
+const ID_AC = 'f9df8ca2df127e59';
+const ID_BC = 'aace44ab3ec7c91e';
+const ID_ABC = '1a353cc02182e85a';
+const NO_WAIT = ['interrupt', 'queue', 'note', 'ask', 'skip'];
+
+/** Takes `wait` whenever it is offered and `interrupt` otherwise, so a window that may wait is held to the horizon. */
+const eager = (input: JudgeInput): Judgment => ({ route: input.routes.some((r) => r.route === 'wait') ? 'wait' : 'interrupt' });
+
+/** An eager judge whose first call stays open until `release`. Records every input. */
+function heldJudge() {
+  const calls: JudgeInput[] = [];
+  let release: (judgment: Judgment) => void = () => undefined;
+  const first = new Promise<Judgment>((resolve) => {
+    release = resolve;
+  });
+  const judge: Judge = (input) => {
+    calls.push(input);
+    return calls.length === 1 ? first : Promise.resolve(eager(input));
+  };
+  return { judge, calls, release: (judgment: Judgment) => release(judgment) };
+}
 
 function setup(script: ScriptedAnswer[], extra?: { settle?: Partial<SettlePolicy>; judge?: Judge; store?: StateStore; config?: Partial<AttendConfig>; run?: boolean }) {
   const clock = fakeClock(1000);
@@ -130,6 +151,77 @@ describe('createAttend', () => {
     expect(h.judge.calls[0]?.routes.map((r) => r.route)).toEqual(['interrupt', 'queue', 'note', 'ask', 'skip']);
     expect(h.sink.delivered.map((d) => d.route)).toEqual(['note']);
     await h.stop();
+  });
+
+  test('a direct address that lands while the judge is busy is judged as flush with no wait, although an act deadline passed first', async () => {
+    const held = heldJudge();
+    const h = setup([], { judge: held.judge });
+    await h.attend.push('s', [ev('a')]);
+    await h.clock.advance(500);
+    await h.clock.advance(100);
+    await h.attend.push('s', [ev('b')]);
+    await h.clock.advance(600);
+    await h.attend.push('s', [ev('c', 'say')]);
+    held.release({ route: 'queue' });
+    await h.clock.advance(0);
+    expect(held.calls[1]).toMatchObject({ window: { id: ID_BC, reason: 'flush', events: [{ id: 'b' }, { id: 'c' }] } });
+    expect(held.calls[1]?.routes.map((r) => r.route)).toEqual(NO_WAIT);
+    expect(h.sink.delivered.map((d) => [d.id, d.route, d.at])).toEqual([
+      [ID_A, 'queue', 2200],
+      [ID_BC, 'interrupt', 2200],
+    ]);
+    await h.stop();
+  });
+
+  test('attend.flush() while the judge is busy settles the act whose deadline passed as forced with no wait', async () => {
+    const held = heldJudge();
+    const h = setup([], { judge: held.judge });
+    await h.attend.push('s', [ev('a')]);
+    await h.clock.advance(500);
+    await h.clock.advance(100);
+    await h.attend.push('s', [ev('b')]);
+    await h.clock.advance(600);
+    await h.attend.flush('s');
+    held.release({ route: 'queue' });
+    await h.clock.advance(0);
+    expect(held.calls[1]).toMatchObject({ window: { id: ID_B, reason: 'forced', events: [{ id: 'b' }] } });
+    expect(held.calls[1]?.routes.map((r) => r.route)).toEqual(NO_WAIT);
+    expect(h.sink.delivered.map((d) => [d.id, d.route, d.at])).toEqual([
+      [ID_A, 'queue', 2200],
+      [ID_B, 'interrupt', 2200],
+    ]);
+    await h.stop();
+  });
+
+  test('a direct address merged into a waiting window is judged at once with no wait', async () => {
+    const held = heldJudge();
+    const h = setup([], { judge: held.judge });
+    await h.attend.push('s', [ev('a')]);
+    await h.clock.advance(500);
+    await h.clock.advance(100);
+    await h.attend.push('s', [ev('b')]);
+    await h.clock.advance(600);
+    await h.attend.push('s', [ev('c', 'say')]);
+    held.release({ route: 'wait' });
+    await h.clock.advance(0);
+    expect(held.calls[1]).toMatchObject({ window: { id: ID_ABC, reason: 'flush', waits: 1, events: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] } });
+    expect(held.calls[1]?.routes.map((r) => r.route)).toEqual(NO_WAIT);
+    expect(h.sink.delivered.map((d) => [d.id, d.route, d.at])).toEqual([[ID_ABC, 'interrupt', 2200]]);
+    await h.stop();
+  });
+
+  test('an act whose deadline passed between sweeps and a flush from another replica are judged together with no wait', async () => {
+    const store = memoryStore();
+    const clock = fakeClock(1000);
+    const producer = setup([], { store, run: false, config: { clock } });
+    const runner = setup([], { store, judge: async (input) => eager(input), config: { clock } });
+    await producer.attend.push('s', [ev('a')]);
+    await clock.advance(700);
+    await producer.attend.push('s', [ev('c', 'say')]);
+    await clock.advance(300);
+    expect(runner.judge.calls).toEqual([]);
+    expect(runner.sink.delivered.map((d) => [d.id, d.window.reason, d.route, d.at])).toEqual([[ID_AC, 'flush', 'interrupt', 2000]]);
+    await runner.stop();
   });
 
   test('a wait carries the window into the next settle', async () => {
@@ -615,6 +707,7 @@ describe('createAttend', () => {
     await expect(h.attend.run({ signal: new AbortController().signal })).rejects.toThrow('already running');
     await h.stop();
   });
+
 });
 
 describe('routes and defaultNotice', () => {

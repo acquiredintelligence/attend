@@ -126,6 +126,11 @@ export interface Window {
   id: string;
   /** Oldest first, kinds included. */
   events: Entry[];
+  /**
+   * Why the judge sees it: `flush` when the window holds a direct address, `forced` when
+   * `flush()` forced it, else the deadline that fired. The first two never offer `wait` and
+   * survive a merge with later events.
+   */
   reason: SettleReason;
   waits: number;
   dropped: number;

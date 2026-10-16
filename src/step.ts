@@ -194,8 +194,9 @@ function shed(ctx: Ctx, scope: string, entries: Entry[], dropped: number): { ent
 // ─── deadlines ───────────────────────────────────────────────────────────────
 
 /**
- * The earliest instant the open window settles, with its reason, or null while it holds
- * no act and no flush. Uses `seenAt` (the local clock at ingest), never `event.at`.
+ * The earliest instant the open window settles, with the reason of that deadline, or null
+ * while it holds no act and no flush. Uses `seenAt` (the local clock at ingest), never
+ * `event.at`. The judged window's reason can be stronger: see `settleReason`.
  */
 export function deadline(policy: SettlePolicy, buffer: Buffer): { at: number; reason: SettleReason } | null {
   const entries = buffer.entries;
@@ -267,7 +268,21 @@ function settle(ctx: Ctx, r: ScopeRecord): ScopeRecord {
   if (r.batch?.phase.phase === 'judging') return r;
   const due = deadline(ctx.config.policy, r.buffer);
   if (!due || due.at > ctx.now) return r;
-  return settleBuffer(ctx, r, due.reason, due.reason !== 'flush' && due.reason !== 'forced');
+  return settleBuffer(ctx, r, due.reason, true);
+}
+
+/**
+ * Why a window is in front of the judge: a direct address beats a forced settle, which beats
+ * whichever deadline fired. Both outlive a merge, so a window that holds a flush or was forced
+ * stays so whatever joins it later, and neither ever offers `wait`.
+ */
+function settleReason(events: Entry[], forced: boolean, fired: SettleReason): SettleReason {
+  if (events.some((e) => e.kind === 'flush')) return 'flush';
+  return forced ? 'forced' : fired;
+}
+
+function isDirect(reason: SettleReason): boolean {
+  return reason === 'flush' || reason === 'forced';
 }
 
 /** The horizon judges the held window with everything that arrived meanwhile, consequences included, and wait withheld. */
@@ -282,12 +297,15 @@ interface Counters {
 }
 
 /** The buffer, merged with a waiting or retrying batch, becomes the one judged window. A forced empty buffer judges the held batch alone. */
-function settleBuffer(ctx: Ctx, r: ScopeRecord, reason: SettleReason, mayWait: boolean): ScopeRecord {
+function settleBuffer(ctx: Ctx, r: ScopeRecord, fired: SettleReason, mayWait: boolean): ScopeRecord {
   const held = r.batch;
   const buf = r.buffer;
+  let forced = buf.forcedAt !== null;
   if (buf.entries.length === 0) {
     r.buffer.forcedAt = null;
-    return held ? beginJudging(ctx, r, held.window, held.phase, false) : r;
+    if (!held) return r;
+    const window = { ...held.window, reason: settleReason(held.window.events, forced, held.window.reason) };
+    return beginJudging(ctx, r, window, held.phase, false);
   }
   let events = buf.entries;
   let dropped = buf.dropped;
@@ -300,8 +318,10 @@ function settleBuffer(ctx: Ctx, r: ScopeRecord, reason: SettleReason, mayWait: b
     gap = gap || held.window.gap;
     waits = held.window.waits;
     prior = held.phase;
+    forced = forced || held.window.reason === 'forced';
   }
   ({ entries: events, dropped } = shed(ctx, r.scope, events, dropped));
+  const reason = settleReason(events, forced, fired);
   const window: Window = {
     id: windowId(r.scope, events.map((e) => e.id)),
     events,
@@ -313,7 +333,7 @@ function settleBuffer(ctx: Ctx, r: ScopeRecord, reason: SettleReason, mayWait: b
   };
   r.buffer = emptyBuffer();
   trace(ctx, { kind: 'settled', scope: r.scope, batchId: window.id, reason, count: events.length, merged: held !== null });
-  return beginJudging(ctx, r, window, prior, mayWait && waits < ctx.config.policy.maxWaits);
+  return beginJudging(ctx, r, window, prior, mayWait && !isDirect(reason) && waits < ctx.config.policy.maxWaits);
 }
 
 function beginJudging(ctx: Ctx, r: ScopeRecord, window: Window, prior: Counters, offerWait: boolean): ScopeRecord {

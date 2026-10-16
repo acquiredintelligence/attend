@@ -36,7 +36,10 @@ const ID_A = '3ecbd4f2ef91c78f';
 const ID_B = '3ecbd5f2ef91c942';
 const ID_AB = 'f9df8ba2df127ca6';
 const ID_X = '3ecbcbf2ef91b844';
+const ID_AC = 'f9df8ca2df127e59';
+const ID_ABC = '1a353cc02182e85a';
 const ID_AC1 = '7dda02b866ecd347';
+const NO_WAIT = ['interrupt', 'queue', 'note', 'ask', 'skip'];
 
 const windowA: Window = { id: ID_A, events: [A], reason: 'closing', waits: 0, dropped: 0, gap: false, settledAt: 600 };
 
@@ -189,6 +192,28 @@ describe('settling', () => {
     expect(effects[1]).toMatchObject({ kind: 'judge', offered: ['interrupt', 'queue', 'note', 'ask', 'skip'] });
   });
 
+  test('a flush that lands after a closing deadline passed is judged as flush with wait withheld', () => {
+    const C = flush('c', 700);
+    const before: ScopeRecord = { ...base(), seen: ['a', 'c'], buffer: { entries: [A, C], dropped: 0, gap: false, forcedAt: null }, dueAt: 600 };
+    const { record, effects } = step(cfg, before, { kind: 'tick' }, 700);
+    expect(record.batch).toEqual({
+      window: { id: ID_AC, events: [A, C], reason: 'flush', waits: 0, dropped: 0, gap: false, settledAt: 700 },
+      phase: { phase: 'judging', attempt: 1, failures: 0, leaseUntil: 30_700, offerWait: false },
+    });
+    expect(effects[0]).toEqual({ kind: 'trace', trace: { kind: 'settled', scope, batchId: ID_AC, reason: 'flush', count: 2, merged: false } });
+    expect(effects[1]).toMatchObject({ kind: 'judge', offered: NO_WAIT });
+  });
+
+  test('a forced window whose closing deadline had already passed settles as forced with wait withheld', () => {
+    const before: ScopeRecord = { ...base(), seen: ['a'], buffer: { entries: [A], dropped: 0, gap: false, forcedAt: 700 }, dueAt: 600 };
+    const { record, effects } = step(cfg, before, { kind: 'tick' }, 700);
+    expect(record.batch).toEqual({
+      window: { ...windowA, reason: 'forced', settledAt: 700 },
+      phase: { phase: 'judging', attempt: 1, failures: 0, leaseUntil: 30_700, offerWait: false },
+    });
+    expect(effects[1]).toMatchObject({ kind: 'judge', offered: NO_WAIT });
+  });
+
   test('an act-less window never fires', () => {
     const before: ScopeRecord = { ...base(), buffer: { entries: [consequence('a', 100)], dropped: 0, gap: false, forcedAt: null } };
     const { record, effects } = step(cfg, before, { kind: 'tick' }, 50_000);
@@ -322,6 +347,39 @@ describe('judging', () => {
       phase: { phase: 'judging', attempt: 2, failures: 0, leaseUntil: 31_500, offerWait: true },
     });
     expect(effects[0]).toEqual({ kind: 'trace', trace: { kind: 'settled', scope, batchId: ID_AB, reason: 'closing', count: 2, merged: true } });
+  });
+
+  test('a flush merged into a waiting window withholds wait although the act deadline fired first', () => {
+    const B = closing('b', 1000);
+    const C = flush('c', 1600);
+    const before: ScopeRecord = {
+      ...base(),
+      seen: ['a', 'b', 'c'],
+      buffer: { entries: [B, C], dropped: 0, gap: false, forcedAt: null },
+      batch: { window: { ...windowA, waits: 1 }, phase: { phase: 'waiting', attempt: 1, until: 10_700 } },
+      dueAt: 1500,
+    };
+    const { record, effects } = step(cfg, before, { kind: 'tick' }, 1600);
+    expect(record.batch).toEqual({
+      window: { id: ID_ABC, events: [A, B, C], reason: 'flush', waits: 1, dropped: 0, gap: false, settledAt: 1600 },
+      phase: { phase: 'judging', attempt: 2, failures: 0, leaseUntil: 31_600, offerWait: false },
+    });
+    expect(effects[0]).toEqual({ kind: 'trace', trace: { kind: 'settled', scope, batchId: ID_ABC, reason: 'flush', count: 3, merged: true } });
+    expect(effects[1]).toMatchObject({ kind: 'judge', offered: NO_WAIT });
+  });
+
+  test('a forced window stays forced when a later act merges into its retry', () => {
+    const B = closing('b', 1000);
+    const before: ScopeRecord = {
+      ...base(),
+      buffer: { entries: [B], dropped: 0, gap: false, forcedAt: null },
+      batch: { window: { ...windowA, reason: 'forced' }, phase: { phase: 'retrying', attempt: 1, failures: 1, at: 4700, offerWait: false } },
+    };
+    const { record } = step(cfg, before, { kind: 'tick' }, 1500);
+    expect(record.batch).toEqual({
+      window: { id: ID_AB, events: [A, B], reason: 'forced', waits: 0, dropped: 0, gap: false, settledAt: 1500 },
+      phase: { phase: 'judging', attempt: 2, failures: 1, leaseUntil: 31_500, offerWait: false },
+    });
   });
 
   test('wait is withheld once waits reaches maxWaits', () => {
@@ -567,15 +625,15 @@ describe('flush', () => {
     const flushed = step(cfg, before, { kind: 'flush' }, 800);
     expect(flushed.record.dueAt).toBe(800);
     const { record } = step(cfg, flushed.record, { kind: 'tick' }, 800);
-    expect(record.batch).toEqual({ window: windowA, phase: { phase: 'judging', attempt: 3, failures: 2, leaseUntil: 30_800, offerWait: false } });
+    expect(record.batch).toEqual({ window: { ...windowA, reason: 'forced' }, phase: { phase: 'judging', attempt: 3, failures: 2, leaseUntil: 30_800, offerWait: false } });
     expect(record.buffer.forcedAt).toBeNull();
   });
 
-  test('judges a waiting batch at the next tick', () => {
+  test('judges a waiting batch at the next tick as forced', () => {
     const before: ScopeRecord = { ...base(), batch: { window: { ...windowA, waits: 1 }, phase: { phase: 'waiting', attempt: 1, until: 10_700 } } };
     const flushed = step(cfg, before, { kind: 'flush' }, 800);
     const { record } = step(cfg, flushed.record, { kind: 'tick' }, 800);
-    expect(record.batch).toEqual({ window: { ...windowA, waits: 1 }, phase: { phase: 'judging', attempt: 2, failures: 0, leaseUntil: 30_800, offerWait: false } });
+    expect(record.batch).toEqual({ window: { ...windowA, reason: 'forced', waits: 1 }, phase: { phase: 'judging', attempt: 2, failures: 0, leaseUntil: 30_800, offerWait: false } });
     expect(record.buffer.forcedAt).toBeNull();
   });
 });
