@@ -19,6 +19,11 @@ export function sleep(clock: Clock, ms: number, signal: AbortSignal): Promise<vo
   });
 }
 
+/** One macrotask: every microtask chain that does not wait on real I/O has drained after it. */
+export function drain(): Promise<void> {
+  return new Promise((resolve) => (typeof setImmediate === 'function' ? setImmediate(resolve) : setTimeout(resolve, 0)));
+}
+
 export function systemClock(): Clock {
   const MAX_DELAY = 2 ** 31 - 1;
   return {

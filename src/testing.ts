@@ -3,11 +3,15 @@
  * suites, the crash harness and the crash suite. Runner-agnostic: the suites return named
  * async cases that any test runner can register.
  */
-import type { Clock, DeadLetter, Decision, Event, EventLog, Judge, JudgeInput, Judgment, Kinded, ScopeRecord, SettlePolicy, Sink, StateStore, Trace } from './types.js';
-import { hashIds, initialRecord } from './step.js';
+import type { Clock, DeadLetter, Decision, Event, EventLog, Judge, JudgeInput, Judgment, Kind, ScopeRecord, SettlePolicy, Sink, StateStore, Trace } from './types.js';
+import { initialRecord } from './step.js';
 import { PermanentError } from './errors.js';
 import { createAttend, type Attend, type AttendConfig } from './attend.js';
 import { memoryStore } from './memory.js';
+import { assertEqual, assertOk } from './internal/assert.js';
+import { drain } from './internal/clock.js';
+
+export { drain } from './internal/clock.js';
 
 // ─── clock ───────────────────────────────────────────────────────────────────
 
@@ -18,11 +22,6 @@ export interface FakeClock extends Clock {
   set(at: number): Promise<void>;
   /** The earliest armed timer, or null. */
   nextAt(): number | null;
-}
-
-/** One macrotask: every microtask chain that does not wait on real I/O has drained after it. */
-export function drain(): Promise<void> {
-  return new Promise((resolve) => (typeof setImmediate === 'function' ? setImmediate(resolve) : setTimeout(resolve, 0)));
 }
 
 export function fakeClock(start = 0): FakeClock {
@@ -119,24 +118,6 @@ export interface ConformanceCase {
   run(): Promise<void>;
 }
 
-class ConformanceError extends Error {}
-
-function canonical(value: unknown): string {
-  return JSON.stringify(value, (_key, v: unknown) =>
-    typeof v === 'object' && v !== null && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : v,
-  );
-}
-
-export function assertEqual(actual: unknown, expected: unknown, message: string): void {
-  const a = canonical(actual);
-  const e = canonical(expected);
-  if (a !== e) throw new ConformanceError(`${message}\n  expected: ${e}\n  actual:   ${a}`);
-}
-
-export function assertOk(value: unknown, message: string): void {
-  if (!value) throw new ConformanceError(message);
-}
-
 const record = (scope: string, version: number, dueAt: number | null): ScopeRecord => ({ ...initialRecord(scope), version, dueAt });
 
 /**
@@ -157,7 +138,7 @@ export function storeConformance(make: () => Promise<StateStore> | StateStore): 
       async (store) => {
         const r: ScopeRecord = {
           ...record('s', 1, 42),
-          cursor: 'c1',
+          cursors: { 'log:s': 'c1', 'mcp:alpha:{}': null },
           seen: ['a', 'b'],
           buffer: { entries: [{ id: 'a', at: 1, name: 'n', data: { nested: { list: [1, 'two', null, true] }, text: 'héllo 🌍' }, kind: 'closing', seenAt: 5 }], dropped: 1, gap: true, forcedAt: null },
           recent: [{ id: 'x', route: 'note', at: 3 }],
@@ -377,6 +358,7 @@ export interface Harness {
   push(events: Event[]): Promise<void>;
   /** Advance the clock, firing timers one at a time and draining after each. Throws `CrashError` at the instant a crash struck. */
   advance(ms: number): Promise<void>;
+  /** Flush the scope and let the runner's tick settle it. */
   flush(): Promise<void>;
   /** Resolve once no store call is in flight. Work that waits on real time is invisible to it. */
   idle(): Promise<void>;
@@ -485,6 +467,20 @@ export function harness(config: HarnessConfig, options?: HarnessOptions): Harnes
     if (crashed) throw new CrashError();
   }
 
+  async function advance(ms: number): Promise<void> {
+    const target = clock.now() + ms;
+    await idle();
+    check();
+    for (let next = clock.nextAt(); next !== null && next <= target; next = clock.nextAt()) {
+      await clock.set(next);
+      await idle();
+      check();
+    }
+    await clock.set(target);
+    await idle();
+    check();
+  }
+
   return {
     clock,
     store: inner,
@@ -507,22 +503,9 @@ export function harness(config: HarnessConfig, options?: HarnessOptions): Harnes
     },
     async flush() {
       await current.attend.flush(scope);
-      await idle();
-      check();
+      await advance(0);
     },
-    async advance(ms) {
-      const target = clock.now() + ms;
-      await idle();
-      check();
-      for (let next = clock.nextAt(); next !== null && next <= target; next = clock.nextAt()) {
-        await clock.set(next);
-        await idle();
-        check();
-      }
-      await clock.set(target);
-      await idle();
-      check();
-    },
+    advance,
     idle,
     crash() {
       die(current);
@@ -547,16 +530,16 @@ export function harness(config: HarnessConfig, options?: HarnessOptions): Harnes
 
 // ─── crash suite ─────────────────────────────────────────────────────────────
 
-const sessionKind = (e: Event): Kinded => {
+const sessionKind = (e: Event): Kind => {
   switch (e.name) {
     case 'close':
-      return { kind: 'closing' };
+      return 'closing';
     case 'say':
-      return { kind: 'flush' };
+      return 'flush';
     case 'look':
-      return { kind: 'passive' };
+      return 'passive';
     default:
-      return { kind: 'consequence' };
+      return 'consequence';
   }
 };
 
@@ -631,6 +614,10 @@ async function session(store: StateStore, crash: { put: number; point: CrashPoin
   return { decisions: [...delivered].sort(), letters: [...new Set(h.deadLetters.map((l) => l.id))].sort(), puts: h.puts };
 }
 
+/** The window ids the session produces in scope `scope`: `a` and `e` are delivered, `b,d` and `f` are dead letters. */
+const SESSION_DECISIONS = ['cf8923dfae84f930', 'cf8927dfae84fffc'];
+const SESSION_LETTERS = ['cf892adfae850515', 'eaf0348d05594776'];
+
 /**
  * Whole-runtime guarantee over a real adapter: the scripted session runs once cleanly, then
  * once per commit boundary with a crash injected there, restarting over the same store.
@@ -650,8 +637,8 @@ export function crashSuite(make: () => Promise<StateStore> | StateStore): Confor
       name: 'the scripted session delivers two decisions and two dead letters',
       async run() {
         const clean = await session(await make(), null);
-        assertEqual(clean.decisions, [hashIds(['a']), hashIds(['e'])].sort(), 'decisions');
-        assertEqual(clean.letters, [hashIds(['b', 'd']), hashIds(['f'])].sort(), 'dead letters');
+        assertEqual(clean.decisions, SESSION_DECISIONS, 'decisions');
+        assertEqual(clean.letters, SESSION_LETTERS, 'dead letters');
       },
     },
     { name: 'the same ids survive a crash before every commit', run: survives('before') },

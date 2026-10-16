@@ -1,12 +1,12 @@
 import { describe, expect, test } from 'vitest';
 import { memoryStore } from '../src/memory.js';
 import { CrashError, crashSuite, harness, recordingSink, scriptedJudge, type ScriptedAnswer } from '../src/testing.js';
-import type { Event, Kinded } from '../src/types.js';
+import type { Event, Kind } from '../src/types.js';
 
-const kind = (e: Event): Kinded => (e.name === 'close' ? { kind: 'closing' } : { kind: 'consequence' });
+const kind = (e: Event): Kind => (e.name === 'close' ? 'closing' : 'consequence');
 const ev = (id: string): Event => ({ id, at: 0, name: 'close', data: {} });
-const ID_A = 'af63dc4c8601ec8c';
-const ID_AB = 'e5beb1190415e670';
+const ID_A = 'cf8923dfae84f930';
+const ID_AB = 'dc811072354ed32b';
 
 function setup(script: ScriptedAnswer[]) {
   const judge = scriptedJudge(script);
@@ -46,7 +46,7 @@ describe('restart regressions', () => {
     const { h, judge, sink } = setup([{ route: 'wait' }, { route: 'queue' }]);
     await h.push([ev('a')]);
     await h.advance(500);
-    expect(await h.inspect()).toMatchObject({ batch: { phase: 'waiting', waits: 1 } });
+    expect(await h.inspect()).toMatchObject({ batch: { window: { waits: 1 }, phase: { phase: 'waiting' } } });
     await h.restart();
     await h.push([ev('b')]);
     await h.advance(500);
@@ -61,14 +61,14 @@ describe('restart regressions', () => {
     h.crashAt(2, 'after');
     await expect(h.advance(500)).rejects.toBeInstanceOf(CrashError);
     expect(sink.delivered).toEqual([]);
-    expect(await h.inspect()).toMatchObject({ outbox: [{ id: ID_A, kind: 'decision', phase: 'inFlight', attempt: 1, leaseUntil: 10_500 }] });
+    expect(await h.inspect()).toMatchObject({ outbox: { decisions: [{ item: { id: ID_A, kind: 'decision' }, phase: { phase: 'inFlight', attempt: 1, leaseUntil: 10_500 } }], deadLetters: [] } });
     await h.restart();
     expect(sink.delivered).toEqual([]);
     await h.advance(10_000);
     expect(h.traces).toContainEqual(expect.objectContaining({ kind: 'retrying', stage: 'sink', message: 'delivery lease expired' }));
     await h.advance(1000);
     expect(sink.delivered.map((d) => d.id)).toEqual([ID_A]);
-    expect(await h.inspect()).toMatchObject({ outbox: [] });
+    expect(await h.inspect()).toMatchObject({ outbox: { decisions: [], deadLetters: [] } });
     await h.stop();
   });
 
@@ -82,7 +82,15 @@ describe('restart regressions', () => {
     expect(judge.calls).toHaveLength(4);
     expect(h.deadLetters.map((l) => [l.id, l.stage, l.attempts])).toEqual([[ID_A, 'judge', 4]]);
     expect(sink.delivered).toEqual([]);
-    expect(await h.inspect()).toMatchObject({ batch: null, outbox: [] });
+    expect(await h.inspect()).toMatchObject({ batch: null, outbox: { decisions: [], deadLetters: [] } });
+    await h.stop();
+  });
+
+  test('a flush through the harness settles at the next tick', async () => {
+    const { h, judge } = setup([{ route: 'note' }]);
+    await h.push([{ id: 'x', at: 0, name: 'out', data: {} }]);
+    await h.flush();
+    expect(judge.calls[0]?.window).toMatchObject({ reason: 'forced', events: [{ id: 'x' }] });
     await h.stop();
   });
 });
@@ -100,7 +108,7 @@ describe('harness', () => {
     await after.h.push([ev('a')]);
     await expect(after.h.advance(500)).rejects.toBeInstanceOf(CrashError);
     expect(after.judge.calls).toHaveLength(0);
-    expect(await after.h.inspect()).toMatchObject({ version: 2, batch: { phase: 'judging' } });
+    expect(await after.h.inspect()).toMatchObject({ version: 2, batch: { phase: { phase: 'judging' } } });
     await after.h.restart();
     expect(after.h.crashed).toBe(false);
     await after.h.stop();

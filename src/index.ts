@@ -1,4 +1,4 @@
-export { createAttend, defaultNotice, logSource, routes, OutboxFullError, PermanentError } from './attend.js';
+export { createAttend, defaultNotice, logSource, routes, ConflictError, OutboxFullError, PermanentError } from './attend.js';
 export type { Attend, AttendConfig, JudgeContext, RouteHandlers, RunOptions } from './attend.js';
 export { memoryLog, memoryStore } from './memory.js';
 export { DEFAULT_POLICY, KINDS, ROUTES } from './types.js';
@@ -18,9 +18,10 @@ export type {
   JsonObject,
   JsonValue,
   Kind,
-  Kinded,
   LogEntry,
   OfferedRoute,
+  Outbox,
+  OutboxLane,
   Route,
   ScopeRecord,
   SettlePolicy,

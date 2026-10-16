@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { memoryLog, memoryStore } from '../src/memory.js';
+import { initialRecord } from '../src/step.js';
 import { logConformance, storeConformance } from '../src/testing.js';
 
 describe('memoryStore conformance', () => {
@@ -25,7 +26,7 @@ describe('memoryLog retention', () => {
 describe('memoryStore isolation', () => {
   test('a stored record is not aliased by the caller', async () => {
     const store = memoryStore();
-    const record = { version: 1, scope: 's', cursor: null, seen: ['a'], buffer: { entries: [], dropped: 0, gap: false, forcedAt: null }, batch: null, outbox: [], recent: [], dueAt: null };
+    const record = { ...initialRecord('s'), version: 1, seen: ['a'] };
     await store.put(record, 0);
     record.seen.push('b');
     expect((await store.get('s'))?.seen).toEqual(['a']);
@@ -33,7 +34,7 @@ describe('memoryStore isolation', () => {
 
   test('a record returned by get is not aliased by the store', async () => {
     const store = memoryStore();
-    await store.put({ version: 1, scope: 's', cursor: null, seen: ['a'], buffer: { entries: [], dropped: 0, gap: false, forcedAt: null }, batch: null, outbox: [], recent: [], dueAt: null }, 0);
+    await store.put({ ...initialRecord('s'), version: 1, seen: ['a'] }, 0);
     (await store.get('s'))?.seen.push('b');
     expect((await store.get('s'))?.seen).toEqual(['a']);
   });

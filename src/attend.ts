@@ -3,8 +3,9 @@
  * effects, feed results back as inputs. All policy is in ./step.ts.
  */
 import { initialRecord, step, type StepConfig } from './step.js';
-import { isPermanent, OutboxFullError } from './errors.js';
+import { ConflictError, isPermanent, OutboxFullError } from './errors.js';
 import { sleep, systemClock } from './internal/clock.js';
+import { assertNever, messageOf } from './internal/shared.js';
 import type {
   Clock,
   DeadLetter,
@@ -20,19 +21,19 @@ import type {
   JudgeInput,
   Judgment,
   JsonObject,
-  Kinded,
+  Kind,
   Route,
   ScopeRecord,
   SettlePolicy,
   Sink,
   Source,
+  SourceBatch,
   StateStore,
   Trace,
 } from './types.js';
 import { DEFAULT_POLICY, ROUTES } from './types.js';
 
-export { OutboxFullError, PermanentError } from './errors.js';
-export { systemClock } from './internal/clock.js';
+export { ConflictError, OutboxFullError, PermanentError } from './errors.js';
 
 /** Live context fetched when the judge is called, and again on every retry. */
 export interface JudgeContext {
@@ -46,7 +47,7 @@ export interface AttendConfig {
   judge: Judge;
   sink: Sink;
   /** Pure. Called once per event at ingest; the result is stored on the entry. */
-  kind: (event: Event) => Kinded;
+  kind: (event: Event) => Kind;
   /** Receives windows no judge or sink could take. Required: there is no silent default. */
   deadLetter: (letter: DeadLetter, signal: AbortSignal) => void | Promise<void>;
   settle?: Partial<SettlePolicy>;
@@ -74,15 +75,23 @@ export interface Attend {
   /**
    * Ingest from a producer in this process. Persists with compare-and-swap and resolves
    * once persisted; never judges or delivers (the runner does, via `dueAt`). Safe from any
-   * replica; idempotent on event ids. Rejects with `OutboxFullError` at `maxOutbox`.
+   * replica; idempotent on event ids. Rejects with `OutboxFullError` when either outbox lane
+   * is at its cap, and with `ConflictError` after eight lost compare-and-swaps.
    */
   push(scope: string, events: Event[]): Promise<void>;
   /**
-   * Run a source into a scope from the record's cursor until `signal` or the run aborts.
-   * Resumes after `OutboxFullError` with backoff; rejects on any other source error.
+   * Run a source into a scope from that source's committed cursor until `signal` or the run
+   * aborts. Any error from the source, `OutboxFullError` included, backs off through
+   * `retryBackoffMs` (the last rung repeated) and resubscribes from the committed cursor; a
+   * `PermanentError` rejects. A normal return from `subscribe` resolves. Throws if the same
+   * `Source.key` is already attached to the scope in this process.
    */
   attach(scope: string, source: Source, options?: { signal?: AbortSignal }): Promise<void>;
-  /** Settle the open window now, reason `forced`. */
+  /**
+   * Settle the open window at the runner's next tick, reason `forced`. Persists the request
+   * and resolves at once, like `push`; rejects with `ConflictError` after eight lost
+   * compare-and-swaps.
+   */
   flush(scope: string): Promise<void>;
   /** The record as stored, for operators and tests. */
   inspect(scope: string): Promise<ScopeRecord | null>;
@@ -92,8 +101,10 @@ export interface Attend {
 
 const MAX_CAS_ATTEMPTS = 8;
 
-/** Thrown once the compare-and-swap budget is spent. Safe to drop: every input is idempotent and leases recover in-flight work. */
-class AbandonedError extends Error {}
+/** A few milliseconds, growing with each lost compare-and-swap and jittered so two losers do not collide again. */
+function conflictBackoffMs(attempt: number): number {
+  return 2 * attempt + Math.random() * 4;
+}
 
 export function createAttend(config: AttendConfig): Attend {
   const policy: SettlePolicy = { ...DEFAULT_POLICY, ...config.settle };
@@ -102,6 +113,7 @@ export function createAttend(config: AttendConfig): Attend {
   const lanes = new Map<string, Promise<void>>();
   const timers = new Map<string, () => void>();
   const sources = new Set<AbortController>();
+  const attached = new Set<string>();
   let running: { signal: AbortSignal } | null = null;
 
   function observe(trace: Trace): void {
@@ -126,13 +138,16 @@ export function createAttend(config: AttendConfig): Attend {
   async function applyNow(scope: string, input: Input): Promise<void> {
     for (let attempt = 1; attempt <= MAX_CAS_ATTEMPTS; attempt += 1) {
       const current = (await config.store.get(scope)) ?? initialRecord(scope);
-      if (input.kind === 'events' && input.events.length > 0 && current.outbox.length >= policy.maxOutbox) {
-        throw new OutboxFullError(scope, current.outbox.length);
+      if (input.kind === 'events' && input.events.length > 0) {
+        if (current.outbox.decisions.length >= policy.maxOutbox) throw new OutboxFullError(scope, 'decisions', current.outbox.decisions.length);
+        if (current.outbox.deadLetters.length >= policy.maxDeadLetters) throw new OutboxFullError(scope, 'deadLetters', current.outbox.deadLetters.length);
       }
       const { record, effects } = step(stepConfig, current, input, clock.now());
       const next = { ...record, version: current.version + 1 };
       if ((await config.store.put(next, current.version)) === 'conflict') {
         observe({ kind: 'conflict', scope, version: current.version });
+        // Real time, not the injected clock: the contention is with another process, and a fake clock would never advance for it.
+        await new Promise((resolve) => setTimeout(resolve, conflictBackoffMs(attempt)));
         continue;
       }
       arm(scope, next.dueAt);
@@ -140,7 +155,7 @@ export function createAttend(config: AttendConfig): Attend {
       return;
     }
     observe({ kind: 'abandoned', scope, input: input.kind });
-    throw new AbandonedError(`attend: gave up on scope "${scope}" after ${MAX_CAS_ATTEMPTS} conflicts`);
+    throw new ConflictError(scope, MAX_CAS_ATTEMPTS);
   }
 
   function arm(scope: string, dueAt: number | null): void {
@@ -162,7 +177,7 @@ export function createAttend(config: AttendConfig): Attend {
 
   function background(scope: string, input: Input['kind'], work: () => Promise<void>): void {
     void work().catch((error: unknown) => {
-      if (!(error instanceof AbandonedError)) observe({ kind: 'failed', scope, input, message: messageOf(error) });
+      if (!(error instanceof ConflictError)) observe({ kind: 'failed', scope, input, message: messageOf(error) });
     });
   }
 
@@ -215,16 +230,16 @@ export function createAttend(config: AttendConfig): Attend {
   }
 
   async function runDeliver(scope: string, effect: DeliverEffect): Promise<void> {
-    const delivery = effect.delivery;
+    const { item, phase } = effect.delivery;
     const controller = new AbortController();
-    const cancel = clock.at(delivery.leaseUntil, () => controller.abort(new Error('attend: delivery timed out')));
+    const cancel = clock.at(phase.leaseUntil, () => controller.abort(new Error('attend: delivery timed out')));
     let result: Input;
     try {
-      if (delivery.kind === 'decision') await config.sink.deliver(delivery.decision, controller.signal);
-      else await config.deadLetter(delivery.letter, controller.signal);
-      result = { kind: 'delivered', deliveryId: delivery.id, attempt: delivery.attempt };
+      if (item.kind === 'decision') await config.sink.deliver(item.decision, controller.signal);
+      else await config.deadLetter(item.letter, controller.signal);
+      result = { kind: 'delivered', deliveryId: item.id, attempt: phase.attempt };
     } catch (error) {
-      result = { kind: 'deliveryFailed', deliveryId: delivery.id, attempt: delivery.attempt, message: messageOf(error), permanent: isPermanent(error) };
+      result = { kind: 'deliveryFailed', deliveryId: item.id, attempt: phase.attempt, message: messageOf(error), permanent: isPermanent(error) };
     } finally {
       cancel();
     }
@@ -251,25 +266,36 @@ export function createAttend(config: AttendConfig): Attend {
     inspect: (scope) => config.store.get(scope),
 
     async attach(scope, source, options) {
+      const slot = `${scope}\n${source.key}`;
+      if (attached.has(slot)) throw new Error(`attend: source "${source.key}" is already attached to scope "${scope}"`);
+      attached.add(slot);
       const controller = new AbortController();
       const abort = () => controller.abort();
       options?.signal?.addEventListener('abort', abort, { once: true });
+      if (options?.signal?.aborted) abort();
       sources.add(controller);
+      let failures = 0;
+      const emit = async (batch: SourceBatch) => {
+        await apply(scope, { kind: 'events', source: source.key, ...batch });
+        failures = 0;
+      };
       try {
-        let failures = 0;
         while (!controller.signal.aborted) {
-          const cursor = (await config.store.get(scope))?.cursor ?? null;
           try {
-            await source.subscribe(cursor, (batch) => apply(scope, { kind: 'events', ...batch }), controller.signal);
+            const cursor = (await config.store.get(scope))?.cursors[source.key] ?? null;
+            await source.subscribe(cursor, emit, controller.signal);
             return;
           } catch (error) {
-            if (!(error instanceof OutboxFullError) || controller.signal.aborted) throw error;
-            observe({ kind: 'backpressure', scope, outbox: error.size });
-            await sleep(clock, policy.retryBackoffMs[Math.min(failures, policy.retryBackoffMs.length - 1)] ?? policy.deliveryTimeoutMs, controller.signal);
+            if (controller.signal.aborted) return;
+            if (isPermanent(error)) throw error;
             failures += 1;
+            const delay = policy.retryBackoffMs[Math.min(failures, policy.retryBackoffMs.length) - 1] ?? policy.deliveryTimeoutMs;
+            observe({ kind: 'retrying', scope, stage: 'source', id: source.key, attempt: failures, at: clock.now() + delay, message: messageOf(error) });
+            await sleep(clock, delay, controller.signal);
           }
         }
       } finally {
+        attached.delete(slot);
         sources.delete(controller);
         options?.signal?.removeEventListener('abort', abort);
       }
@@ -305,14 +331,6 @@ function isJudgment(value: unknown): value is Judgment {
   const predicates = 'predicates' in value ? value.predicates : undefined;
   const optionalObject = (v: unknown) => v === undefined || (typeof v === 'object' && v !== null);
   return optionalObject(probabilities) && optionalObject(predicates);
-}
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function assertNever(value: never): never {
-  throw new Error(`attend: unexpected ${JSON.stringify(value)}`);
 }
 
 // ─── helpers that ship in the main export ────────────────────────────────────
@@ -366,9 +384,9 @@ export function defaultNotice(decision: Decision, options?: { maxLines?: number 
 }
 
 /**
- * A `Source` over an `EventLog`: reads after the cursor, emits, repeats. `blockMs` is passed
- * to the log; a log that cannot block returns at once, and `pollMs` then paces the loop on
- * `clock`.
+ * A `Source` over an `EventLog`, keyed `log:<scope>`: reads after the cursor, emits, repeats.
+ * `blockMs` is passed to the log; a log that cannot block returns at once, and `pollMs` then
+ * paces the loop on `clock`.
  */
 export function logSource(log: EventLog, scope: string, options?: { limit?: number; blockMs?: number; pollMs?: number; clock?: Clock }): Source {
   const limit = options?.limit ?? 100;
@@ -376,6 +394,7 @@ export function logSource(log: EventLog, scope: string, options?: { limit?: numb
   const pollMs = options?.pollMs ?? 250;
   const clock = options?.clock ?? systemClock();
   return {
+    key: `log:${scope}`,
     async subscribe(cursor, emit, signal) {
       let after = cursor;
       while (!signal.aborted) {

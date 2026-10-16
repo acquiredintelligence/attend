@@ -23,21 +23,20 @@ export interface Event {
 export const KINDS = ['closing', 'flush', 'continuous', 'passive', 'consequence', 'context'] as const;
 
 /**
- * The settle role of an event.
+ * The settle role of an event. The first four are acts: things that happen in the scope and
+ * can call for the agent, whether the user did them or an outside party did, such as a deploy
+ * that failed. The last two never settle a window on their own.
  * - closing: ends an act; the window settles after a short grace so consequences land.
  * - flush: direct address; settles at once, with wait not offered.
- * - continuous: a gesture on a named stream; settles when every driven stream is quiet for a gap.
+ * - continuous: one step of an ongoing act; settles once no further step has arrived for a gap.
  * - passive: a dwell or look; settles after a quiet period.
- * - consequence: system output; attaches to the act that caused it, never settles alone.
- * - context: the agent's own output; rides along, never settles.
+ * - consequence: output that follows from an act; attaches to the act that caused it.
+ * - context: the agent's own earlier output; rides along.
  */
 export type Kind = (typeof KINDS)[number];
 
-/** What `kind(event)` returns. Stored on the entry at ingest, so a changed kind function never reinterprets an open window. */
-export type Kinded = { kind: Exclude<Kind, 'continuous'> } | { kind: 'continuous'; stream: string };
-
-/** An event in a window: the event, its kind, and the local clock at ingest. */
-export type Entry = Event & Kinded & { seenAt: number };
+/** An event in a window: the event, the kind it was given at ingest, and the local clock then. */
+export type Entry = Event & { kind: Kind; seenAt: number };
 
 // ─── routes ──────────────────────────────────────────────────────────────────
 
@@ -72,7 +71,7 @@ export interface SettlePolicy {
   maxEvents: number;
   /** A window settles this long after its first act however busy it is; older act-less entries are pruned. */
   maxWindowMs: number;
-  /** Backoff before each retry of a judge call or a delivery; its length is the retry budget. */
+  /** Backoff before each retry of a judge call, a delivery or a source; its length is the retry budget for the first two. */
   retryBackoffMs: number[];
   /** Aborts a judge call. Its lease is twice this, so a slow call is never duplicated while live. */
   judgeTimeoutMs: number;
@@ -82,8 +81,10 @@ export interface SettlePolicy {
   recentCount: number;
   /** Event ids kept for dedup. */
   seenCount: number;
-  /** Undelivered items per scope before `push` rejects. */
+  /** Undelivered decisions per scope before `push` and a source's `emit` reject. */
   maxOutbox: number;
+  /** Undelivered dead letters per scope before `push` and a source's `emit` reject. */
+  maxDeadLetters: number;
   /** Cap on the backoff between dead-letter deliveries, which never give up. */
   deadLetterBackoffMaxMs: number;
 }
@@ -102,6 +103,7 @@ export const DEFAULT_POLICY: SettlePolicy = {
   recentCount: 8,
   seenCount: 500,
   maxOutbox: 1000,
+  maxDeadLetters: 1000,
   deadLetterBackoffMaxMs: 60_000,
 };
 
@@ -114,13 +116,13 @@ export interface Buffer {
   dropped: number;
   /** The source reported lost events while this window was open, or before it opened. */
   gap: boolean;
-  /** Set by `flush`; the window settles at the next step whatever its deadline says. */
+  /** Set by `flush`; the window settles at the next tick whatever its deadline says. */
   forcedAt: number | null;
 }
 
 /** A settled window: what the judge sees and what a decision carries. */
 export interface Window {
-  /** Hash of the event ids; it becomes the decision id. */
+  /** Hash of the scope and the event ids; it becomes the decision id. */
   id: string;
   /** Oldest first, kinds included. */
   events: Entry[];
@@ -131,13 +133,21 @@ export interface Window {
   settledAt: number;
 }
 
+/**
+ * `attempt` numbers the judge calls for this window and only grows, across a wait and across a
+ * merge, so a result from an earlier call never matches a later one. `failures` counts the
+ * failed calls since the last wait and indexes the backoff; a wait resets it.
+ */
 export type BatchPhase =
-  | { phase: 'judging'; attempt: number; leaseUntil: number; offerWait: boolean }
-  | { phase: 'waiting'; until: number }
-  | { phase: 'retrying'; attempt: number; at: number; offerWait: boolean };
+  | { phase: 'judging'; attempt: number; failures: number; leaseUntil: number; offerWait: boolean }
+  | { phase: 'waiting'; attempt: number; until: number }
+  | { phase: 'retrying'; attempt: number; failures: number; at: number; offerWait: boolean };
 
 /** The one settled window. One slot: that is single-flight. */
-export type Batch = Window & BatchPhase;
+export interface Batch {
+  window: Window;
+  phase: BatchPhase;
+}
 
 /** One routed verdict, kept as judge context. */
 export interface Verdict {
@@ -177,18 +187,35 @@ export interface DeadLetter {
   at: number;
 }
 
-/** A retry is its own phase, never a lease, so a backoff is never counted as a failed attempt. */
+/**
+ * `attempt` numbers the delivery attempts for this id and only grows, across the escalation to
+ * a dead letter too. `failures` counts the failed attempts in the current lane and indexes the
+ * backoff, so a fresh dead letter starts at the first rung. A retry is its own phase, never a
+ * lease, so a backoff is never counted as a failed attempt.
+ */
 export type DeliveryPhase =
-  | { phase: 'inFlight'; attempt: number; leaseUntil: number }
-  | { phase: 'retrying'; attempt: number; at: number };
+  | { phase: 'inFlight'; attempt: number; failures: number; leaseUntil: number }
+  | { phase: 'retrying'; attempt: number; failures: number; at: number };
 
 export type DeliveryItem = { id: string } & (
   | { kind: 'decision'; decision: Decision }
   | { kind: 'deadLetter'; letter: DeadLetter }
 );
 
-/** An outbox entry. Attempt numbers only grow for one id, so a stale ack never matches a later attempt. */
-export type Delivery = DeliveryItem & DeliveryPhase;
+/** An outbox entry. */
+export interface Delivery {
+  item: DeliveryItem;
+  phase: DeliveryPhase;
+}
+
+export type OutboxLane = 'decisions' | 'deadLetters';
+
+/**
+ * Two lanes, each delivered one at a time, oldest first, so a dead-letter handler that is
+ * down never holds a decision back. A decision that gives up leaves `decisions` and joins the
+ * end of `deadLetters`.
+ */
+export type Outbox = Record<OutboxLane, Delivery[]>;
 
 /**
  * A scope's entire durable state. The store indexes `scope`, `version` and `dueAt` and
@@ -198,14 +225,13 @@ export interface ScopeRecord {
   /** Compare-and-swap token; 0 before the first put. */
   version: number;
   scope: string;
-  /** The source's position after the last ingested event; null when the source has none. */
-  cursor: string | null;
+  /** Each attached source's position after its last ingested event, by `Source.key`; null when that source has none. */
+  cursors: Record<string, string | null>;
   /** Recent event ids, oldest first, bounded by `seenCount`. */
   seen: string[];
   buffer: Buffer;
   batch: Batch | null;
-  /** Oldest first. Decisions and dead letters are separate lanes by `kind`; each lane delivers one at a time. */
-  outbox: Delivery[];
+  outbox: Outbox;
   /** Oldest first, bounded by `recentCount`. */
   recent: Verdict[];
   /** The next instant the record wants a tick; null when nothing is pending. */
@@ -227,21 +253,27 @@ export interface Judgment {
 export interface EventsInput {
   kind: 'events';
   events: Event[];
-  /** Absent: leave the cursor as it is. Present (string or null): replace it. */
+  /** The `Source.key` these came from. A push has none, and then `cursor` is ignored. */
+  source?: string;
+  /** Absent: leave the source's cursor as it is. Present (string or null): replace it. */
   cursor?: string | null;
   /** The source reported a gap before these events. */
   truncated?: boolean;
 }
 
+/** Settle the open window at the next tick, reason `forced`. */
+export interface FlushInput {
+  kind: 'flush';
+}
+
 export type Input =
   | EventsInput
+  | FlushInput
   | { kind: 'tick' }
   | { kind: 'judged'; batchId: string; attempt: number; judgment: Judgment }
   | { kind: 'judgeFailed'; batchId: string; attempt: number; message: string; permanent: boolean }
   | { kind: 'delivered'; deliveryId: string; attempt: number }
-  | { kind: 'deliveryFailed'; deliveryId: string; attempt: number; message: string; permanent: boolean }
-  /** Settle the open window now, reason `forced`. */
-  | { kind: 'flush' };
+  | { kind: 'deliveryFailed'; deliveryId: string; attempt: number; message: string; permanent: boolean };
 
 // ─── effects ─────────────────────────────────────────────────────────────────
 
@@ -257,7 +289,10 @@ export interface JudgeEffect {
   leaseUntil: number;
 }
 
-export type InFlightDelivery = DeliveryItem & Extract<DeliveryPhase, { phase: 'inFlight' }>;
+export interface InFlightDelivery {
+  item: DeliveryItem;
+  phase: Extract<DeliveryPhase, { phase: 'inFlight' }>;
+}
 
 export interface DeliverEffect {
   kind: 'deliver';
@@ -267,21 +302,20 @@ export interface DeliverEffect {
 
 export type Trace =
   | { kind: 'ingested'; scope: string; count: number; duplicates: number }
-  | { kind: 'gap'; scope: string; cursor: string | null }
+  | { kind: 'gap'; scope: string; source: string | null; cursor: string | null }
   | { kind: 'dropped'; scope: string; entries: Entry[]; why: 'overflow' | 'age' }
   | { kind: 'settled'; scope: string; batchId: string; reason: SettleReason; count: number; merged: boolean }
   | { kind: 'judging'; scope: string; batchId: string; attempt: number; offerWait: boolean }
   | { kind: 'judged'; scope: string; batchId: string; route: DecidedRoute }
   | { kind: 'waiting'; scope: string; batchId: string; waits: number; until: number }
-  | { kind: 'retrying'; scope: string; stage: 'judge' | 'sink' | 'deadLetter'; id: string; attempt: number; at: number; message: string }
+  | { kind: 'retrying'; scope: string; stage: 'judge' | 'sink' | 'deadLetter' | 'source'; id: string; attempt: number; at: number; message: string }
   | { kind: 'delivering'; scope: string; deliveryId: string; attempt: number }
   | { kind: 'delivered'; scope: string; deliveryId: string }
   | { kind: 'deadLettered'; scope: string; letter: DeadLetter }
   | { kind: 'stale'; scope: string; input: Input['kind']; why: string }
   | { kind: 'conflict'; scope: string; version: number }
   | { kind: 'abandoned'; scope: string; input: Input['kind'] }
-  | { kind: 'failed'; scope: string; input: Input['kind']; message: string }
-  | { kind: 'backpressure'; scope: string; outbox: number };
+  | { kind: 'failed'; scope: string; input: Input['kind']; message: string };
 
 export type TraceEffect = { kind: 'trace'; trace: Trace };
 
@@ -345,9 +379,12 @@ export interface SourceBatch {
 /**
  * Something that feeds a scope. `emit` resolves once the batch is persisted, and the
  * source must await it before producing more: that is the backpressure. Rejecting ends
- * the subscription with that error.
+ * the subscription with that error; `attach` resubscribes after a backoff unless the error
+ * is a `PermanentError`.
  */
 export interface Source {
+  /** Names the source within a scope. The record keeps one cursor per key, so two sources on one scope never share a position. */
+  key: string;
   subscribe(cursor: string | null, emit: (batch: SourceBatch) => Promise<void>, signal: AbortSignal): Promise<void>;
 }
 

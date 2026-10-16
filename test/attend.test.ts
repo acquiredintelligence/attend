@@ -1,28 +1,30 @@
 import { describe, expect, test } from 'vitest';
-import { createAttend, defaultNotice, logSource, OutboxFullError, routes, type AttendConfig } from '../src/attend.js';
+import { ConflictError, createAttend, defaultNotice, logSource, OutboxFullError, PermanentError, routes, type AttendConfig } from '../src/attend.js';
 import { memoryLog, memoryStore } from '../src/memory.js';
 import { fakeClock, recordingSink, scriptedJudge, type ScriptedAnswer } from '../src/testing.js';
-import type { DeadLetter, Decision, Event, EventLog, Judge, Kinded, SettlePolicy, SourceBatch, StateStore, Trace } from '../src/types.js';
+import type { DeadLetter, Decision, Event, EventLog, Judge, Kind, SettlePolicy, Source, SourceBatch, StateStore, Trace } from '../src/types.js';
 
-const kind = (e: Event): Kinded => {
+const kind = (e: Event): Kind => {
   switch (e.name) {
     case 'close':
-      return { kind: 'closing' };
+      return 'closing';
     case 'say':
-      return { kind: 'flush' };
+      return 'flush';
+    case 'look':
+      return 'passive';
     case 'out':
-      return { kind: 'consequence' };
+      return 'consequence';
     default:
-      return { kind: 'context' };
+      return 'context';
   }
 };
 
 const ev = (id: string, name = 'close'): Event => ({ id, at: 0, name, data: {}, text: `${name} ${id}` });
-const ID_A = 'af63dc4c8601ec8c';
-const ID_B = 'af63df4c8601f1a5';
-const ID_AB = 'e5beb1190415e670';
+const ID_A = '3ecbd4f2ef91c78f';
+const ID_B = '3ecbd5f2ef91c942';
+const ID_AB = 'f9df8ba2df127ca6';
 
-function setup(script: ScriptedAnswer[], extra?: { settle?: Partial<SettlePolicy>; judge?: Judge; store?: StateStore; config?: Partial<AttendConfig> }) {
+function setup(script: ScriptedAnswer[], extra?: { settle?: Partial<SettlePolicy>; judge?: Judge; store?: StateStore; config?: Partial<AttendConfig>; run?: boolean }) {
   const clock = fakeClock(1000);
   const store = extra?.store ?? memoryStore();
   const judge = scriptedJudge(script);
@@ -43,13 +45,38 @@ function setup(script: ScriptedAnswer[], extra?: { settle?: Partial<SettlePolicy
     ...extra?.config,
   });
   const controller = new AbortController();
-  const done = attend.run({ signal: controller.signal, sweepMs: 1000 });
+  const done = extra?.run === false ? Promise.resolve() : attend.run({ signal: controller.signal, sweepMs: 1000 });
   const stop = async () => {
     controller.abort();
     await done;
   };
   return { clock, store, judge, sink, deadLetters, traces, attend, stop };
 }
+
+/** A source over a list of events, resumable from its cursor (the count already emitted). Records what it was subscribed with. */
+function listSource(key: string, events: Event[], options?: { failFirstWith?: Error }): Source & { subscribedFrom: (string | null)[] } {
+  const subscribedFrom: (string | null)[] = [];
+  let pendingFailure = options?.failFirstWith;
+  return {
+    key,
+    subscribedFrom,
+    async subscribe(cursor, emit, signal) {
+      subscribedFrom.push(cursor);
+      if (pendingFailure) {
+        const error = pendingFailure;
+        pendingFailure = undefined;
+        throw error;
+      }
+      for (let i = cursor === null ? 0 : Number(cursor); i < events.length && !signal.aborted; i += 1) {
+        const event = events[i];
+        if (event) await emit({ events: [event], cursor: String(i + 1) });
+      }
+      await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
+    },
+  };
+}
+
+const realTick = () => new Promise((r) => setTimeout(r, 10));
 
 describe('createAttend', () => {
   test('a closing act settles after the grace, is judged with the configured context, and is delivered', async () => {
@@ -92,7 +119,7 @@ describe('createAttend', () => {
       },
     ]);
     const record = await h.attend.inspect('s');
-    expect(record).toMatchObject({ version: 4, batch: null, outbox: [], recent: [{ id: ID_A, route: 'queue', at: 1500 }], dueAt: null });
+    expect(record).toMatchObject({ version: 4, batch: null, outbox: { decisions: [], deadLetters: [] }, recent: [{ id: ID_A, route: 'queue', at: 1500 }], dueAt: null });
     await h.stop();
   });
 
@@ -110,7 +137,7 @@ describe('createAttend', () => {
     await h.attend.push('s', [ev('a')]);
     await h.clock.advance(500);
     expect(h.judge.calls).toHaveLength(1);
-    expect(await h.attend.inspect('s')).toMatchObject({ batch: { phase: 'waiting', waits: 1, until: 11_500 } });
+    expect(await h.attend.inspect('s')).toMatchObject({ batch: { window: { waits: 1 }, phase: { phase: 'waiting', until: 11_500 } } });
     await h.attend.push('s', [ev('b')]);
     await h.clock.advance(500);
     expect(h.judge.calls[1]?.window).toMatchObject({ id: ID_AB, waits: 1 });
@@ -128,6 +155,44 @@ describe('createAttend', () => {
     await h.clock.advance(1);
     expect(h.judge.calls[1]?.routes.map((r) => r.route)).toEqual(['interrupt', 'queue', 'note', 'ask', 'skip']);
     expect(h.sink.delivered.map((d) => [d.id, d.route])).toEqual([[ID_A, 'ask']]);
+    await h.stop();
+  });
+
+  test('the horizon judges the held window together with a consequence that arrived while waiting', async () => {
+    const h = setup([{ route: 'wait' }, { route: 'queue' }]);
+    await h.attend.push('s', [ev('a', 'look')]);
+    await h.clock.advance(4000);
+    expect(h.judge.calls.map((c) => c.window.events.map((e) => e.id))).toEqual([['a']]);
+    await h.clock.advance(2000);
+    await h.attend.push('s', [ev('c1', 'out')]);
+    await h.clock.advance(8000);
+    expect(h.judge.calls.map((c) => c.window.events.map((e) => e.id))).toEqual([['a'], ['a', 'c1']]);
+    expect(h.judge.calls[1]?.routes.map((r) => r.route)).toEqual(['interrupt', 'queue', 'note', 'ask', 'skip']);
+    expect(h.sink.delivered.map((d) => d.window.events.map((e) => e.id))).toEqual([['a', 'c1']]);
+    expect((await h.attend.inspect('s'))?.buffer.entries).toEqual([]);
+    await h.stop();
+  });
+
+  test('a judge call that outlives a wait cannot answer for the call after the horizon', async () => {
+    const pending: ((judgment: { route: 'interrupt' | 'queue' }) => void)[] = [];
+    const hold = () => new Promise<{ route: 'interrupt' | 'queue' }>((resolve) => pending.push(resolve));
+    const answers: (() => Promise<{ route: 'interrupt' | 'wait' | 'queue' }>)[] = [hold, () => Promise.resolve({ route: 'wait' }), hold];
+    const judge: Judge = () => answers.shift()?.() ?? Promise.resolve({ route: 'skip' });
+    const h = setup([], { judge });
+    await h.attend.push('s', [ev('a')]);
+    await h.clock.advance(500);
+    await h.clock.advance(30_000);
+    await h.clock.advance(1000);
+    expect(await h.attend.inspect('s')).toMatchObject({ batch: { phase: { phase: 'waiting', attempt: 2 } } });
+    await h.clock.advance(10_000);
+    expect(await h.attend.inspect('s')).toMatchObject({ batch: { phase: { phase: 'judging', attempt: 3 } } });
+    pending[0]?.({ route: 'interrupt' });
+    await h.clock.advance(0);
+    expect(h.traces).toContainEqual({ kind: 'stale', scope: 's', input: 'judged', why: `no live judge attempt 1 for batch ${ID_A}` });
+    expect(h.sink.delivered).toEqual([]);
+    pending[1]?.({ route: 'queue' });
+    await h.clock.advance(0);
+    expect(h.sink.delivered.map((d) => d.route)).toEqual(['queue']);
     await h.stop();
   });
 
@@ -152,7 +217,7 @@ describe('createAttend', () => {
     expect(h.deadLetters).toHaveLength(1);
     expect(h.deadLetters[0]).toMatchObject({ id: ID_A, stage: 'judge', decision: null, message: 'down', permanent: false, attempts: 4 });
     expect(h.sink.delivered).toEqual([]);
-    expect(await h.attend.inspect('s')).toMatchObject({ batch: null, outbox: [] });
+    expect(await h.attend.inspect('s')).toMatchObject({ batch: null, outbox: { decisions: [], deadLetters: [] } });
     await h.stop();
   });
 
@@ -194,7 +259,7 @@ describe('createAttend', () => {
     const h = setup([{ hang: true }, { route: 'queue' }]);
     await h.attend.push('s', [ev('a')]);
     await h.clock.advance(500);
-    expect(await h.attend.inspect('s')).toMatchObject({ batch: { phase: 'judging', leaseUntil: 1500 + 30_000 }, dueAt: 31_500 });
+    expect(await h.attend.inspect('s')).toMatchObject({ batch: { phase: { phase: 'judging', leaseUntil: 1500 + 30_000 } }, dueAt: 31_500 });
     await h.clock.advance(15_000);
     expect(h.traces).toContainEqual(expect.objectContaining({ kind: 'retrying', stage: 'judge', attempt: 1, message: 'aborted' }));
     await h.clock.advance(1000);
@@ -239,7 +304,7 @@ describe('createAttend', () => {
     await h.clock.advance(500 + 1000 + 4000 + 16_000);
     expect(h.sink.attempts.get(ID_A)).toBe(4);
     expect(h.deadLetters[0]).toMatchObject({ id: ID_A, stage: 'sink', decision: { route: 'interrupt' }, attempts: 4 });
-    expect(await h.attend.inspect('s')).toMatchObject({ outbox: [] });
+    expect(await h.attend.inspect('s')).toMatchObject({ outbox: { decisions: [], deadLetters: [] } });
     await h.stop();
   });
 
@@ -260,7 +325,7 @@ describe('createAttend', () => {
     expect(h.traces).toContainEqual(expect.objectContaining({ kind: 'retrying', stage: 'deadLetter', attempt: 1, at: 2500 }));
     await h.clock.advance(1000 + 4000);
     expect(letters).toHaveLength(1);
-    expect(await h.attend.inspect('s')).toMatchObject({ outbox: [] });
+    expect(await h.attend.inspect('s')).toMatchObject({ outbox: { decisions: [], deadLetters: [] } });
     await h.stop();
   });
 
@@ -274,27 +339,49 @@ describe('createAttend', () => {
     await h.attend.push('s', [ev('b')]);
     await h.clock.advance(500);
     expect(h.sink.delivered.map((d) => d.id)).toEqual([ID_B]);
-    expect((await h.attend.inspect('s'))?.outbox).toEqual([
-      {
-        id: ID_A,
-        kind: 'deadLetter',
-        letter: {
-          id: ID_A,
-          scope: 's',
-          stage: 'judge',
-          window: { id: ID_A, events: [{ ...ev('a'), kind: 'closing', seenAt: 1000 }], reason: 'closing', waits: 0, dropped: 0, gap: false, settledAt: 1500 },
-          decision: null,
-          message: 'no',
-          permanent: true,
-          attempts: 1,
-          at: 1500,
+    expect((await h.attend.inspect('s'))?.outbox).toEqual({
+      decisions: [],
+      deadLetters: [
+        {
+          item: {
+            id: ID_A,
+            kind: 'deadLetter',
+            letter: {
+              id: ID_A,
+              scope: 's',
+              stage: 'judge',
+              window: { id: ID_A, events: [{ ...ev('a'), kind: 'closing', seenAt: 1000 }], reason: 'closing', waits: 0, dropped: 0, gap: false, settledAt: 1500 },
+              decision: null,
+              message: 'no',
+              permanent: true,
+              attempts: 1,
+              at: 1500,
+            },
+          },
+          phase: { phase: 'retrying', attempt: 1, failures: 1, at: 2500 },
         },
-        phase: 'retrying',
-        attempt: 1,
-        at: 2500,
-      },
-    ]);
+      ],
+    });
     await h.stop();
+  });
+
+  test('a dead-letter lane at maxDeadLetters rejects intake, while decisions still flow below their own cap', async () => {
+    const deadLetter = async () => {
+      throw new Error('handler down');
+    };
+    const h = setup([{ fail: 'no', permanent: true }, { route: 'queue' }], { config: { deadLetter }, settle: { maxDeadLetters: 1 } });
+    await h.attend.push('s', [ev('a')]);
+    await h.clock.advance(500);
+    await expect(h.attend.push('s', [ev('b')])).rejects.toMatchObject({ name: 'OutboxFullError', lane: 'deadLetters', size: 1 });
+    expect(h.sink.delivered).toEqual([]);
+    const roomy = setup([{ fail: 'no', permanent: true }, { route: 'queue' }], { config: { deadLetter }, settle: { maxDeadLetters: 2 } });
+    await roomy.attend.push('s', [ev('a')]);
+    await roomy.clock.advance(500);
+    await roomy.attend.push('s', [ev('b')]);
+    await roomy.clock.advance(500);
+    expect(roomy.sink.delivered.map((d) => d.id)).toEqual([ID_B]);
+    await h.stop();
+    await roomy.stop();
   });
 
   test('a dead letter whose handler keeps throwing retries with doubling backoff up to the cap', async () => {
@@ -308,7 +395,7 @@ describe('createAttend', () => {
     await h.clock.advance(500 + 173_000);
     expect(calls).toBe(7);
     expect(h.traces.flatMap((t) => (t.kind === 'retrying' && t.stage === 'deadLetter' ? [t.at] : []))).toEqual([2500, 6500, 22_500, 54_500, 114_500, 174_500, 234_500]);
-    expect((await h.attend.inspect('s'))?.outbox).toMatchObject([{ id: ID_A, kind: 'deadLetter', phase: 'retrying', attempt: 7, at: 234_500 }]);
+    expect((await h.attend.inspect('s'))?.outbox.deadLetters).toMatchObject([{ item: { id: ID_A }, phase: { phase: 'retrying', attempt: 7, failures: 7, at: 234_500 } }]);
     await h.stop();
   });
 
@@ -321,14 +408,89 @@ describe('createAttend', () => {
     const log = memoryLog();
     await log.append('s', [ev('c')]);
     const attached = h.attend.attach('s', logSource(log, 's', { blockMs: 0, pollMs: 5 }));
-    await new Promise((r) => setTimeout(r, 10));
-    expect(h.traces).toContainEqual({ kind: 'backpressure', scope: 's', outbox: 1 });
+    await realTick();
+    expect(h.traces).toContainEqual({
+      kind: 'retrying',
+      scope: 's',
+      stage: 'source',
+      id: 'log:s',
+      attempt: 1,
+      at: 2500,
+      message: 'attend: outbox for scope "s" holds 1 undelivered decisions',
+    });
     await h.clock.advance(1000);
-    await new Promise((r) => setTimeout(r, 10));
+    await realTick();
     expect(h.sink.delivered.map((d) => d.id)).toEqual([ID_A]);
     expect((await h.attend.inspect('s'))?.buffer.entries.map((e) => e.id)).toEqual(['c']);
     await h.stop();
     await attached;
+  });
+
+  test('attach backs off through the retry rungs on any source error and stops on a PermanentError', async () => {
+    const h = setup([{ route: 'skip' }]);
+    const flaky = listSource('flaky', [ev('a', 'out')], { failFirstWith: new Error('socket reset') });
+    const attached = h.attend.attach('s', flaky);
+    await realTick();
+    expect(h.traces).toContainEqual({ kind: 'retrying', scope: 's', stage: 'source', id: 'flaky', attempt: 1, at: 2000, message: 'socket reset' });
+    expect(flaky.subscribedFrom).toEqual([null]);
+    await h.clock.advance(1000);
+    await realTick();
+    expect(flaky.subscribedFrom).toEqual([null, null]);
+    expect((await h.attend.inspect('s'))?.cursors).toEqual({ flaky: '1' });
+    const fatal = listSource('fatal', [], { failFirstWith: new PermanentError('revoked') });
+    await expect(h.attend.attach('s', fatal)).rejects.toThrow('revoked');
+    await h.stop();
+    await attached;
+  });
+
+  test('two sources on one scope keep separate cursors and both resume after a restart', async () => {
+    const store = memoryStore();
+    const log = memoryLog();
+    await log.append('s', [ev('a', 'out'), ev('b', 'out')]);
+    const other = listSource('other', [ev('x', 'out'), ev('y', 'out')]);
+    const first = setup([{ route: 'skip' }], { store });
+    const stopFirst = new AbortController();
+    const attached = [
+      first.attend.attach('s', logSource(log, 's', { blockMs: 0, pollMs: 5 }), { signal: stopFirst.signal }),
+      first.attend.attach('s', other, { signal: stopFirst.signal }),
+    ];
+    await realTick();
+    expect((await store.get('s'))?.cursors).toEqual({ 'log:s': '00000000000000000002', other: '2' });
+    expect((await store.get('s'))?.buffer.entries.map((e) => e.id).sort()).toEqual(['a', 'b', 'x', 'y']);
+    stopFirst.abort();
+    await Promise.all(attached);
+    await first.stop();
+
+    await log.append('s', [ev('c', 'out')]);
+    const resumed = listSource('other', [ev('x', 'out'), ev('y', 'out'), ev('z', 'out')]);
+    const second = setup([{ route: 'skip' }], { store });
+    const stopSecond = new AbortController();
+    const reattached = [
+      second.attend.attach('s', logSource(log, 's', { blockMs: 0, pollMs: 5 }), { signal: stopSecond.signal }),
+      second.attend.attach('s', resumed, { signal: stopSecond.signal }),
+    ];
+    await realTick();
+    expect(resumed.subscribedFrom).toEqual(['2']);
+    expect((await store.get('s'))?.cursors).toEqual({ 'log:s': '00000000000000000003', other: '3' });
+    expect(second.traces.filter((t) => t.kind === 'ingested').map((t) => [t.count, t.duplicates])).toEqual([
+      [1, 0],
+      [1, 0],
+    ]);
+    expect((await store.get('s'))?.buffer.entries.map((e) => e.id).sort()).toEqual(['a', 'b', 'c', 'x', 'y', 'z']);
+    stopSecond.abort();
+    await Promise.all(reattached);
+    await second.stop();
+  });
+
+  test('a second attach of the same source key on a scope throws', async () => {
+    const h = setup([]);
+    const signal = new AbortController();
+    const attached = h.attend.attach('s', listSource('k', []), { signal: signal.signal });
+    await expect(h.attend.attach('s', listSource('k', []))).rejects.toThrow('attend: source "k" is already attached to scope "s"');
+    await expect(h.attend.attach('t', listSource('k', []), { signal: AbortSignal.abort() })).resolves.toBeUndefined();
+    signal.abort();
+    await attached;
+    await h.stop();
   });
 
   test('two writers on one scope: the loser reloads and both inputs land', async () => {
@@ -342,7 +504,7 @@ describe('createAttend', () => {
     await b.stop();
   });
 
-  test('a writer that never wins gives up after eight conflicts', async () => {
+  test('a writer that never wins backs off between tries and gives up after eight conflicts', async () => {
     const inner = memoryStore();
     let puts = 0;
     const store: StateStore = {
@@ -353,7 +515,9 @@ describe('createAttend', () => {
       },
     };
     const h = setup([], { store });
-    await expect(h.attend.push('s', [ev('a')])).rejects.toThrow('after 8 conflicts');
+    const started = Date.now();
+    await expect(h.attend.push('s', [ev('a')])).rejects.toBeInstanceOf(ConflictError);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(50);
     expect(puts).toBe(8);
     expect(h.traces.filter((t) => t.kind === 'conflict')).toHaveLength(8);
     expect(h.traces).toContainEqual({ kind: 'abandoned', scope: 's', input: 'events' });
@@ -371,6 +535,20 @@ describe('createAttend', () => {
     await h.stop();
   });
 
+  test('a flush from a producer without a runner is persisted and settled by a runner elsewhere', async () => {
+    const store = memoryStore();
+    const producer = setup([], { store, run: false });
+    await producer.attend.push('s', [ev('x', 'out')]);
+    await producer.attend.flush('s');
+    expect(producer.judge.calls).toEqual([]);
+    expect(await store.get('s')).toMatchObject({ buffer: { entries: [{ id: 'x' }], forcedAt: 1000 }, batch: null, dueAt: 1000 });
+    const runner = setup([{ route: 'note' }], { store });
+    await runner.clock.advance(1000);
+    expect(runner.judge.calls[0]?.window).toMatchObject({ reason: 'forced', events: [{ id: 'x' }] });
+    expect(runner.sink.delivered.map((d) => d.route)).toEqual(['note']);
+    await runner.stop();
+  });
+
   test('logSource feeds a scope from the log and resumes from the persisted cursor', async () => {
     const store = memoryStore();
     const log = memoryLog();
@@ -381,7 +559,7 @@ describe('createAttend', () => {
     await new Promise((r) => setTimeout(r, 30));
     await first.clock.advance(500);
     expect(first.sink.delivered.map((d) => d.id)).toEqual([ID_AB]);
-    expect((await store.get('s'))?.cursor).toBe('00000000000000000002');
+    expect((await store.get('s'))?.cursors).toEqual({ 'log:s': '00000000000000000002' });
     stopFirst.abort();
     await attached;
     await first.stop();

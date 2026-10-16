@@ -7,25 +7,26 @@
  * 1. Every input is idempotent against the record: a replayed `events` dedups, a stale
  *    `judged`, `judgeFailed`, `delivered` or `deliveryFailed` is ignored, a `tick` re-derives.
  *    The shell may therefore reload and re-step on a compare-and-swap conflict.
- * 2. `events` yields traces only. Settling, judging and delivering happen on the other
- *    inputs, so a producer without a runner never strands an effect.
+ * 2. `events` and `flush` yield traces only. Settling, judging and delivering happen on the
+ *    other inputs, so a producer without a runner never strands an effect.
  * 3. Timers are state: `record.dueAt` is recomputed at the end of every step.
  */
 import type {
   Batch,
+  BatchPhase,
   Buffer,
   DeadLetter,
   Decision,
-  Delivery,
-  DeliveryItem,
   Effect,
   Entry,
   Event,
   EventsInput,
+  FlushInput,
   InFlightDelivery,
   Input,
   Judgment,
-  Kinded,
+  Kind,
+  OutboxLane,
   Route,
   ScopeRecord,
   SettlePolicy,
@@ -39,7 +40,7 @@ import { ROUTES } from './types.js';
 
 /** What the reducer needs from the config: the kind function and the policy. Nothing async. */
 export interface StepConfig {
-  kind: (event: Event) => Kinded;
+  kind: (event: Event) => Kind;
   policy: SettlePolicy;
 }
 
@@ -47,11 +48,11 @@ export function initialRecord(scope: string): ScopeRecord {
   return {
     version: 0,
     scope,
-    cursor: null,
+    cursors: {},
     seen: [],
     buffer: emptyBuffer(),
     batch: null,
-    outbox: [],
+    outbox: { decisions: [], deadLetters: [] },
     recent: [],
     dueAt: null,
   };
@@ -61,25 +62,16 @@ function emptyBuffer(): Buffer {
   return { entries: [], dropped: 0, gap: false, forcedAt: null };
 }
 
-export function isAct(entry: Kinded): boolean {
+export function isAct(entry: { kind: Kind }): boolean {
   return entry.kind === 'closing' || entry.kind === 'continuous' || entry.kind === 'passive';
 }
 
 /** Consequences and context may leave a window; acts and a flush never do. */
-function isSheddable(entry: Kinded): boolean {
+function isSheddable(entry: { kind: Kind }): boolean {
   return entry.kind === 'consequence' || entry.kind === 'context';
 }
 
-/**
- * The outbox is two lanes told apart by `kind`, so a dead-letter handler that is down never
- * holds a decision back. Each lane delivers one at a time, oldest first.
- */
-const LANES = ['decision', 'deadLetter'] as const;
-type Lane = (typeof LANES)[number];
-
-function laneHead(r: ScopeRecord, lane: Lane): number {
-  return r.outbox.findIndex((d) => d.kind === lane);
-}
+const LANES: readonly OutboxLane[] = ['decisions', 'deadLetters'];
 
 interface Ctx {
   config: StepConfig;
@@ -96,12 +88,12 @@ const handlers: Handlers = {
   judged: onJudged,
   judgeFailed: (ctx, r, input) => {
     const b = liveBatch(ctx, r, input.batchId, input.attempt, 'judgeFailed');
-    return b ? failJudge(ctx, r, b, input.message, input.permanent) : r;
+    return b ? failJudge(ctx, r, b.window, b.phase, input.message, input.permanent) : r;
   },
   delivered: onDelivered,
   deliveryFailed: (ctx, r, input) => {
-    const i = liveDelivery(ctx, r, input.deliveryId, input.attempt, 'deliveryFailed');
-    return i === null ? r : failDelivery(ctx, r, i, input.message, input.permanent);
+    const lane = liveDelivery(ctx, r, input.deliveryId, input.attempt, 'deliveryFailed');
+    return lane === null ? r : failDelivery(ctx, r, lane, input.message, input.permanent);
   },
   flush: onFlush,
 };
@@ -110,13 +102,13 @@ function dispatch<K extends keyof InputByKind>(ctx: Ctx, r: ScopeRecord, kind: K
   return handlers[kind](ctx, r, input);
 }
 
-/** Overload: ingest never emits anything but traces (invariant 2). */
-export function step(config: StepConfig, record: ScopeRecord, input: EventsInput, now: number): Stepped<TraceEffect>;
+/** Overload: ingest and flush never emit anything but traces (invariant 2). */
+export function step(config: StepConfig, record: ScopeRecord, input: EventsInput | FlushInput, now: number): Stepped<TraceEffect>;
 export function step(config: StepConfig, record: ScopeRecord, input: Input, now: number): Stepped;
 export function step(config: StepConfig, record: ScopeRecord, input: Input, now: number): Stepped {
   const ctx: Ctx = { config, now, out: [] };
   let r = dispatch(ctx, structuredClone(record), input.kind, input);
-  if (input.kind !== 'events') r = sweep(ctx, r);
+  if (input.kind !== 'events' && input.kind !== 'flush') r = sweep(ctx, r);
   r.dueAt = nextDue(config.policy, r);
   return { record: r, effects: ctx.out };
 }
@@ -134,7 +126,7 @@ function keepLast<T>(list: T[], n: number): T[] {
 function ingest(ctx: Ctx, r: ScopeRecord, input: EventsInput): ScopeRecord {
   const known = new Set<string>(r.seen);
   for (const e of r.buffer.entries) known.add(e.id);
-  for (const e of r.batch?.events ?? []) known.add(e.id);
+  for (const e of r.batch?.window.events ?? []) known.add(e.id);
   let duplicates = 0;
   for (const e of input.events) {
     if (known.has(e.id)) {
@@ -142,16 +134,17 @@ function ingest(ctx: Ctx, r: ScopeRecord, input: EventsInput): ScopeRecord {
       continue;
     }
     known.add(e.id);
-    r.buffer.entries.push({ ...e, ...ctx.config.kind(e), seenAt: ctx.now });
+    r.buffer.entries.push({ ...e, kind: ctx.config.kind(e), seenAt: ctx.now });
     r.seen.push(e.id);
   }
   r.seen = keepLast(r.seen, ctx.config.policy.seenCount);
   prune(ctx, r);
   shedBuffer(ctx, r);
-  if (input.cursor !== undefined) r.cursor = input.cursor;
+  const source = input.source ?? null;
+  if (source !== null && input.cursor !== undefined) r.cursors[source] = input.cursor;
   if (input.truncated) {
     r.buffer.gap = true;
-    trace(ctx, { kind: 'gap', scope: r.scope, cursor: r.cursor });
+    trace(ctx, { kind: 'gap', scope: r.scope, source, cursor: source === null ? null : (r.cursors[source] ?? null) });
   }
   trace(ctx, { kind: 'ingested', scope: r.scope, count: input.events.length - duplicates, duplicates });
   return r;
@@ -206,7 +199,6 @@ function shed(ctx: Ctx, scope: string, entries: Entry[], dropped: number): { ent
  */
 export function deadline(policy: SettlePolicy, buffer: Buffer): { at: number; reason: SettleReason } | null {
   const entries = buffer.entries;
-  if (entries.length === 0) return null;
   const candidates: { at: number; reason: SettleReason }[] = [];
   if (buffer.forcedAt !== null) candidates.push({ at: buffer.forcedAt, reason: 'forced' });
   const last = entries[entries.length - 1];
@@ -237,14 +229,14 @@ export function deadline(policy: SettlePolicy, buffer: Buffer): { at: number; re
  */
 function nextDue(policy: SettlePolicy, r: ScopeRecord): number | null {
   const times: number[] = [];
-  const b = r.batch;
+  const b = r.batch?.phase;
   if (b) times.push(b.phase === 'judging' ? b.leaseUntil : b.phase === 'waiting' ? b.until : b.at);
-  if (!b || b.phase !== 'judging') {
+  if (b?.phase !== 'judging') {
     const d = deadline(policy, r.buffer);
     if (d) times.push(d.at);
   }
   for (const lane of LANES) {
-    const head = r.outbox[laneHead(r, lane)];
+    const head = r.outbox[lane][0]?.phase;
     if (head) times.push(head.phase === 'inFlight' ? head.leaseUntil : head.at);
   }
   return times.length === 0 ? null : Math.min(...times);
@@ -255,13 +247,14 @@ function nextDue(policy: SettlePolicy, r: ScopeRecord): number | null {
 /** The restart contract: one tick resolves every expiry in this order. */
 function sweep(ctx: Ctx, r: ScopeRecord): ScopeRecord {
   const b = r.batch;
-  if (b?.phase === 'judging' && b.leaseUntil <= ctx.now) r = failJudge(ctx, r, b, 'judge lease expired', false);
+  if (b && b.phase.phase === 'judging' && b.phase.leaseUntil <= ctx.now) r = failJudge(ctx, r, b.window, b.phase, 'judge lease expired', false);
   r = pumpOutbox(ctx, r);
   prune(ctx, r);
   r = settle(ctx, r);
   const held = r.batch;
-  if (held?.phase === 'retrying' && held.at <= ctx.now) r = beginJudging(ctx, r, windowOf(held), held.attempt, held.offerWait);
-  else if (held?.phase === 'waiting' && held.until <= ctx.now) r = beginJudging(ctx, r, windowOf(held), 0, false);
+  if (!held) return r;
+  if (held.phase.phase === 'retrying' && held.phase.at <= ctx.now) return beginJudging(ctx, r, held.window, held.phase, held.phase.offerWait);
+  if (held.phase.phase === 'waiting' && held.phase.until <= ctx.now) return horizon(ctx, r, held.window, held.phase);
   return r;
 }
 
@@ -271,52 +264,62 @@ function sweep(ctx: Ctx, r: ScopeRecord): ScopeRecord {
  * Never while judging: the buffer stays open and settles the moment `judged` lands.
  */
 function settle(ctx: Ctx, r: ScopeRecord): ScopeRecord {
-  const b = r.batch;
-  if (b?.phase === 'judging') return r;
+  if (r.batch?.phase.phase === 'judging') return r;
+  const due = deadline(ctx.config.policy, r.buffer);
+  if (!due || due.at > ctx.now) return r;
+  return settleBuffer(ctx, r, due.reason, due.reason !== 'flush' && due.reason !== 'forced');
+}
+
+/** The horizon judges the held window with everything that arrived meanwhile, consequences included, and wait withheld. */
+function horizon(ctx: Ctx, r: ScopeRecord, window: Window, phase: Extract<BatchPhase, { phase: 'waiting' }>): ScopeRecord {
+  return r.buffer.entries.length === 0 ? beginJudging(ctx, r, window, phase, false) : settleBuffer(ctx, r, window.reason, false);
+}
+
+/** Judge calls so far, and failures since the last wait, carried from a held batch into its next call. */
+interface Counters {
+  attempt: number;
+  failures?: number;
+}
+
+/** The buffer, merged with a waiting or retrying batch, becomes the one judged window. A forced empty buffer judges the held batch alone. */
+function settleBuffer(ctx: Ctx, r: ScopeRecord, reason: SettleReason, mayWait: boolean): ScopeRecord {
+  const held = r.batch;
   const buf = r.buffer;
   if (buf.entries.length === 0) {
-    if (buf.forcedAt === null) return r;
     r.buffer.forcedAt = null;
-    return b ? beginJudging(ctx, r, windowOf(b), b.phase === 'retrying' ? b.attempt : 0, false) : r;
+    return held ? beginJudging(ctx, r, held.window, held.phase, false) : r;
   }
-  const due = deadline(ctx.config.policy, buf);
-  if (!due || due.at > ctx.now) return r;
   let events = buf.entries;
   let dropped = buf.dropped;
   let gap = buf.gap;
   let waits = 0;
-  let attempt = 0;
-  if (b) {
-    events = [...b.events, ...events];
-    dropped += b.dropped;
-    gap = gap || b.gap;
-    waits = b.waits;
-    attempt = b.phase === 'retrying' ? b.attempt : 0;
+  let prior: Counters = { attempt: 0 };
+  if (held) {
+    events = [...held.window.events, ...events];
+    dropped += held.window.dropped;
+    gap = gap || held.window.gap;
+    waits = held.window.waits;
+    prior = held.phase;
   }
   ({ entries: events, dropped } = shed(ctx, r.scope, events, dropped));
   const window: Window = {
-    id: hashIds(events.map((e) => e.id)),
+    id: windowId(r.scope, events.map((e) => e.id)),
     events,
-    reason: due.reason,
+    reason,
     waits,
     dropped,
     gap,
     settledAt: ctx.now,
   };
   r.buffer = emptyBuffer();
-  trace(ctx, { kind: 'settled', scope: r.scope, batchId: window.id, reason: due.reason, count: events.length, merged: b !== null });
-  const offerWait = waits < ctx.config.policy.maxWaits && due.reason !== 'flush' && due.reason !== 'forced';
-  return beginJudging(ctx, r, window, attempt, offerWait);
+  trace(ctx, { kind: 'settled', scope: r.scope, batchId: window.id, reason, count: events.length, merged: held !== null });
+  return beginJudging(ctx, r, window, prior, mayWait && waits < ctx.config.policy.maxWaits);
 }
 
-function windowOf(b: Batch): Window {
-  return { id: b.id, events: b.events, reason: b.reason, waits: b.waits, dropped: b.dropped, gap: b.gap, settledAt: b.settledAt };
-}
-
-function beginJudging(ctx: Ctx, r: ScopeRecord, window: Window, priorAttempts: number, offerWait: boolean): ScopeRecord {
-  const attempt = priorAttempts + 1;
+function beginJudging(ctx: Ctx, r: ScopeRecord, window: Window, prior: Counters, offerWait: boolean): ScopeRecord {
+  const attempt = prior.attempt + 1;
   const leaseUntil = ctx.now + ctx.config.policy.judgeTimeoutMs * 2;
-  r.batch = { ...window, phase: 'judging', attempt, leaseUntil, offerWait };
+  r.batch = { window, phase: { phase: 'judging', attempt, failures: prior.failures ?? 0, leaseUntil, offerWait } };
   ctx.out.push({
     kind: 'judge',
     scope: r.scope,
@@ -337,9 +340,11 @@ export function offeredRoutes(offerWait: boolean): Route[] {
 
 // ─── judge results ───────────────────────────────────────────────────────────
 
-function liveBatch(ctx: Ctx, r: ScopeRecord, batchId: string, attempt: number, input: Input['kind']): Extract<Batch, { phase: 'judging' }> | null {
+type Judging = Batch & { phase: Extract<BatchPhase, { phase: 'judging' }> };
+
+function liveBatch(ctx: Ctx, r: ScopeRecord, batchId: string, attempt: number, input: Input['kind']): Judging | null {
   const b = r.batch;
-  if (b && b.phase === 'judging' && b.id === batchId && b.attempt === attempt) return b;
+  if (b && b.phase.phase === 'judging' && b.window.id === batchId && b.phase.attempt === attempt) return { window: b.window, phase: b.phase };
   trace(ctx, { kind: 'stale', scope: r.scope, input, why: `no live judge attempt ${attempt} for batch ${batchId}` });
   return null;
 }
@@ -347,21 +352,21 @@ function liveBatch(ctx: Ctx, r: ScopeRecord, batchId: string, attempt: number, i
 function onJudged(ctx: Ctx, r: ScopeRecord, input: Extract<Input, { kind: 'judged' }>): ScopeRecord {
   const b = liveBatch(ctx, r, input.batchId, input.attempt, 'judged');
   if (!b) return r;
-  const verdict = validate(input.judgment, offeredRoutes(b.offerWait));
-  if (verdict === null) return failJudge(ctx, r, b, `route not offered: ${String(input.judgment.route)}`, false);
-  const window = windowOf(b);
+  const verdict = validate(input.judgment, offeredRoutes(b.phase.offerWait));
+  if (verdict === null) return failJudge(ctx, r, b.window, b.phase, `route not offered: ${String(input.judgment.route)}`, false);
+  const { window } = b;
   if (verdict.route === 'wait') {
     const until = ctx.now + ctx.config.policy.waitHorizonMs;
-    const waits = b.waits + 1;
-    r.batch = { ...window, waits, phase: 'waiting', until };
-    trace(ctx, { kind: 'waiting', scope: r.scope, batchId: b.id, waits, until });
+    const waits = window.waits + 1;
+    r.batch = { window: { ...window, waits }, phase: { phase: 'waiting', attempt: b.phase.attempt, until } };
+    trace(ctx, { kind: 'waiting', scope: r.scope, batchId: window.id, waits, until });
     return r;
   }
-  r.recent = keepLast([...r.recent, { id: b.id, route: verdict.route, at: ctx.now }], ctx.config.policy.recentCount);
-  trace(ctx, { kind: 'judged', scope: r.scope, batchId: b.id, route: verdict.route });
+  r.recent = keepLast([...r.recent, { id: window.id, route: verdict.route, at: ctx.now }], ctx.config.policy.recentCount);
+  trace(ctx, { kind: 'judged', scope: r.scope, batchId: window.id, route: verdict.route });
   if (verdict.route !== 'skip') {
     const decision: Decision = {
-      id: b.id,
+      id: window.id,
       scope: r.scope,
       route: verdict.route,
       probabilities: verdict.probabilities,
@@ -369,7 +374,7 @@ function onJudged(ctx: Ctx, r: ScopeRecord, input: Extract<Input, { kind: 'judge
       window,
       at: ctx.now,
     };
-    r.outbox.push({ id: b.id, kind: 'decision', decision, phase: 'retrying', attempt: 0, at: ctx.now });
+    r.outbox.decisions.push({ item: { id: window.id, kind: 'decision', decision }, phase: { phase: 'retrying', attempt: 0, failures: 0, at: ctx.now } });
   }
   r.batch = null;
   return r;
@@ -410,27 +415,27 @@ export function validate(judgment: Judgment, offered: Route[]): Validated | null
   return { route, probabilities, predicates };
 }
 
-function failJudge(ctx: Ctx, r: ScopeRecord, b: Extract<Batch, { phase: 'judging' }>, message: string, permanent: boolean): ScopeRecord {
-  const window = windowOf(b);
-  const delay = permanent ? undefined : ctx.config.policy.retryBackoffMs[b.attempt - 1];
+function failJudge(ctx: Ctx, r: ScopeRecord, window: Window, phase: Judging['phase'], message: string, permanent: boolean): ScopeRecord {
+  const failures = phase.failures + 1;
+  const delay = permanent ? undefined : ctx.config.policy.retryBackoffMs[failures - 1];
   if (delay !== undefined) {
     const at = ctx.now + delay;
-    r.batch = { ...window, phase: 'retrying', attempt: b.attempt, at, offerWait: b.offerWait };
-    trace(ctx, { kind: 'retrying', scope: r.scope, stage: 'judge', id: b.id, attempt: b.attempt, at, message });
+    r.batch = { window, phase: { phase: 'retrying', attempt: phase.attempt, failures, at, offerWait: phase.offerWait } };
+    trace(ctx, { kind: 'retrying', scope: r.scope, stage: 'judge', id: window.id, attempt: phase.attempt, at, message });
     return r;
   }
   const letter: DeadLetter = {
-    id: b.id,
+    id: window.id,
     scope: r.scope,
     stage: 'judge',
     window,
     decision: null,
     message,
     permanent,
-    attempts: b.attempt,
+    attempts: phase.attempt,
     at: ctx.now,
   };
-  r.outbox.push({ id: b.id, kind: 'deadLetter', letter, phase: 'retrying', attempt: 0, at: ctx.now });
+  r.outbox.deadLetters.push({ item: { id: window.id, kind: 'deadLetter', letter }, phase: { phase: 'retrying', attempt: 0, failures: 0, at: ctx.now } });
   trace(ctx, { kind: 'deadLettered', scope: r.scope, letter });
   r.batch = null;
   return r;
@@ -438,69 +443,71 @@ function failJudge(ctx: Ctx, r: ScopeRecord, b: Extract<Batch, { phase: 'judging
 
 // ─── deliveries ──────────────────────────────────────────────────────────────
 
-function liveDelivery(ctx: Ctx, r: ScopeRecord, deliveryId: string, attempt: number, input: Input['kind']): number | null {
-  const i = r.outbox.findIndex((d) => d.id === deliveryId && d.phase === 'inFlight' && d.attempt === attempt);
-  if (i !== -1) return i;
+/** Only a lane's head is ever in flight, so a result names the lane whose head it belongs to. */
+function liveDelivery(ctx: Ctx, r: ScopeRecord, deliveryId: string, attempt: number, input: Input['kind']): OutboxLane | null {
+  for (const lane of LANES) {
+    const head = r.outbox[lane][0];
+    if (head && head.item.id === deliveryId && head.phase.phase === 'inFlight' && head.phase.attempt === attempt) return lane;
+  }
   trace(ctx, { kind: 'stale', scope: r.scope, input, why: `no live delivery attempt ${attempt} for ${deliveryId}` });
   return null;
 }
 
 function onDelivered(ctx: Ctx, r: ScopeRecord, input: Extract<Input, { kind: 'delivered' }>): ScopeRecord {
-  const i = liveDelivery(ctx, r, input.deliveryId, input.attempt, 'delivered');
-  if (i === null) return r;
-  r.outbox.splice(i, 1);
+  const lane = liveDelivery(ctx, r, input.deliveryId, input.attempt, 'delivered');
+  if (lane === null) return r;
+  r.outbox[lane].shift();
   trace(ctx, { kind: 'delivered', scope: r.scope, deliveryId: input.deliveryId });
   return r;
 }
 
-function itemOf(d: Delivery): DeliveryItem {
-  return d.kind === 'decision' ? { id: d.id, kind: 'decision', decision: d.decision } : { id: d.id, kind: 'deadLetter', letter: d.letter };
-}
-
 /** Backoff for a dead letter: the retry list, then doubling, capped. It never runs out. */
-function deadLetterDelay(policy: SettlePolicy, attempt: number): number {
+function deadLetterDelay(policy: SettlePolicy, failures: number): number {
   const list = policy.retryBackoffMs;
   const cap = policy.deadLetterBackoffMaxMs;
-  const base = list[Math.min(attempt, list.length) - 1] ?? cap;
-  const beyond = Math.max(0, attempt - list.length);
+  const base = list[Math.min(failures, list.length) - 1] ?? cap;
+  const beyond = Math.max(0, failures - list.length);
   return Math.min(cap, base * 2 ** beyond);
 }
 
 /**
- * A failed attempt at `r.outbox[i]`: a decision retries through the backoff list and then
- * becomes a dead letter, leaving the decision lane; a dead letter retries with capped
- * backoff, whatever the error.
+ * A failed attempt at the lane's in-flight head: a decision retries through the backoff list
+ * and then leaves its lane as a dead letter; a dead letter retries with capped backoff,
+ * whatever the error.
  */
-function failDelivery(ctx: Ctx, r: ScopeRecord, i: number, message: string, permanent: boolean): ScopeRecord {
-  const d = r.outbox[i];
-  if (!d || d.phase !== 'inFlight') return r;
-  const item = itemOf(d);
-  if (d.kind === 'decision') {
-    const delay = permanent ? undefined : ctx.config.policy.retryBackoffMs[d.attempt - 1];
-    if (delay !== undefined) {
-      const at = ctx.now + delay;
-      r.outbox[i] = { ...item, phase: 'retrying', attempt: d.attempt, at };
-      trace(ctx, { kind: 'retrying', scope: r.scope, stage: 'sink', id: d.id, attempt: d.attempt, at, message });
-      return r;
-    }
-    const letter: DeadLetter = {
-      id: d.id,
-      scope: r.scope,
-      stage: 'sink',
-      window: d.decision.window,
-      decision: d.decision,
-      message,
-      permanent,
-      attempts: d.attempt,
-      at: ctx.now,
-    };
-    r.outbox[i] = { id: d.id, kind: 'deadLetter', letter, phase: 'retrying', attempt: d.attempt, at: ctx.now };
-    trace(ctx, { kind: 'deadLettered', scope: r.scope, letter });
+function failDelivery(ctx: Ctx, r: ScopeRecord, lane: OutboxLane, message: string, permanent: boolean): ScopeRecord {
+  const d = r.outbox[lane][0];
+  if (!d || d.phase.phase !== 'inFlight') return r;
+  const { item } = d;
+  const { attempt } = d.phase;
+  const failures = d.phase.failures + 1;
+  if (item.kind === 'deadLetter') {
+    const at = ctx.now + deadLetterDelay(ctx.config.policy, failures);
+    r.outbox[lane][0] = { item, phase: { phase: 'retrying', attempt, failures, at } };
+    trace(ctx, { kind: 'retrying', scope: r.scope, stage: 'deadLetter', id: item.id, attempt, at, message });
     return r;
   }
-  const at = ctx.now + deadLetterDelay(ctx.config.policy, d.attempt);
-  r.outbox[i] = { ...item, phase: 'retrying', attempt: d.attempt, at };
-  trace(ctx, { kind: 'retrying', scope: r.scope, stage: 'deadLetter', id: d.id, attempt: d.attempt, at, message });
+  const delay = permanent ? undefined : ctx.config.policy.retryBackoffMs[failures - 1];
+  if (delay !== undefined) {
+    const at = ctx.now + delay;
+    r.outbox[lane][0] = { item, phase: { phase: 'retrying', attempt, failures, at } };
+    trace(ctx, { kind: 'retrying', scope: r.scope, stage: 'sink', id: item.id, attempt, at, message });
+    return r;
+  }
+  const letter: DeadLetter = {
+    id: item.id,
+    scope: r.scope,
+    stage: 'sink',
+    window: item.decision.window,
+    decision: item.decision,
+    message,
+    permanent,
+    attempts: attempt,
+    at: ctx.now,
+  };
+  r.outbox[lane].shift();
+  r.outbox.deadLetters.push({ item: { id: item.id, kind: 'deadLetter', letter }, phase: { phase: 'retrying', attempt, failures: 0, at: ctx.now } });
+  trace(ctx, { kind: 'deadLettered', scope: r.scope, letter });
   return r;
 }
 
@@ -510,30 +517,28 @@ function pumpOutbox(ctx: Ctx, r: ScopeRecord): ScopeRecord {
 }
 
 /** One delivery per lane in flight at a time, oldest first. An expired lease is one failed attempt. */
-function pumpLane(ctx: Ctx, r: ScopeRecord, lane: Lane): ScopeRecord {
-  let i = laneHead(r, lane);
-  const head = r.outbox[i];
+function pumpLane(ctx: Ctx, r: ScopeRecord, lane: OutboxLane): ScopeRecord {
+  const head = r.outbox[lane][0];
   if (!head) return r;
-  if (head.phase === 'inFlight') {
-    if (head.leaseUntil > ctx.now) return r;
-    r = failDelivery(ctx, r, i, 'delivery lease expired', false);
-    // A decision that just spent its last attempt is now a dead letter, so this lane's head moved.
-    i = laneHead(r, lane);
+  if (head.phase.phase === 'inFlight') {
+    if (head.phase.leaseUntil > ctx.now) return r;
+    r = failDelivery(ctx, r, lane, 'delivery lease expired', false);
   }
-  const next = r.outbox[i];
-  if (!next || next.phase !== 'retrying' || next.at > ctx.now) return r;
-  const attempt = next.attempt + 1;
-  const inFlight: InFlightDelivery = { ...itemOf(next), phase: 'inFlight', attempt, leaseUntil: ctx.now + ctx.config.policy.deliveryTimeoutMs };
-  r.outbox[i] = inFlight;
+  const next = r.outbox[lane][0];
+  if (!next || next.phase.phase !== 'retrying' || next.phase.at > ctx.now) return r;
+  const attempt = next.phase.attempt + 1;
+  const inFlight: InFlightDelivery = { item: next.item, phase: { phase: 'inFlight', attempt, failures: next.phase.failures, leaseUntil: ctx.now + ctx.config.policy.deliveryTimeoutMs } };
+  r.outbox[lane][0] = inFlight;
   ctx.out.push({ kind: 'deliver', scope: r.scope, delivery: inFlight });
-  trace(ctx, { kind: 'delivering', scope: r.scope, deliveryId: next.id, attempt });
+  trace(ctx, { kind: 'delivering', scope: r.scope, deliveryId: next.item.id, attempt });
   return r;
 }
 
 // ─── flush ───────────────────────────────────────────────────────────────────
 
+/** Marks the buffer forced; the runner's next tick settles it, so a flush without a runner strands no effect. */
 function onFlush(ctx: Ctx, r: ScopeRecord): ScopeRecord {
-  const held = r.batch !== null && r.batch.phase !== 'judging';
+  const held = r.batch !== null && r.batch.phase.phase !== 'judging';
   if (r.buffer.entries.length === 0 && !held) {
     trace(ctx, { kind: 'stale', scope: r.scope, input: 'flush', why: 'nothing to settle' });
     return r;
@@ -548,12 +553,24 @@ const FNV_OFFSET = 0xcbf29ce484222325n;
 const FNV_PRIME = 0x100000001b3n;
 const MASK_64 = 0xffffffffffffffffn;
 
-/** FNV-1a 64 over the UTF-8 bytes of the ids joined by newlines, as 16 hex characters. Portable and zero-dep. */
-export function hashIds(ids: readonly string[]): string {
+/**
+ * FNV-1a 64 over the scope and the event ids, each as its UTF-8 byte length, a colon and its
+ * bytes, as 16 hex characters. The length prefix keeps `['a\nb']` apart from `['a', 'b']`, and
+ * the scope keeps the same ids in two scopes apart. Portable and zero-dep.
+ */
+export function windowId(scope: string, ids: readonly string[]): string {
+  const encoder = new TextEncoder();
   let h = FNV_OFFSET;
-  for (const byte of new TextEncoder().encode(ids.join('\n'))) {
-    h ^= BigInt(byte);
-    h = (h * FNV_PRIME) & MASK_64;
+  const feed = (bytes: Uint8Array) => {
+    for (const byte of bytes) {
+      h ^= BigInt(byte);
+      h = (h * FNV_PRIME) & MASK_64;
+    }
+  };
+  for (const part of [scope, ...ids]) {
+    const bytes = encoder.encode(part);
+    feed(encoder.encode(`${bytes.length}:`));
+    feed(bytes);
   }
   return h.toString(16).padStart(16, '0');
 }
