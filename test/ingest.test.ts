@@ -55,7 +55,7 @@ function gate() {
 }
 
 for (const [name, makeStore] of stores) describe(`ingest through ${name}`, () => {
-  test.each(['throwing kind', 'invalid kind', 'BigInt'] as const)('%s rejects only the middle push behind a slow write', async (failure) => {
+  test.each(['throwing kind', 'invalid kind', 'BigInt', 'BigInt at'] as const)('%s rejects only the middle push behind a slow write', async (failure) => {
     const inner = makeStore();
     const held = gate();
     let puts = 0;
@@ -77,13 +77,13 @@ for (const [name, makeStore] of stores) describe(`ingest through ${name}`, () =>
     });
     const writing = attend.push('s', []);
     await drain();
-    const bad = failure === 'BigInt' ? { ...event('b'), data: { value: 1n } } : event('b');
+    const bad = failure === 'BigInt' ? { ...event('b'), data: { value: 1n } } : failure === 'BigInt at' ? { ...event('b'), at: 1n } : event('b');
     const first = attend.push('s', [event('a')]);
     // @ts-expect-error Exercise non-JSON data from a JavaScript caller.
     const middle = attend.push('s', [bad]);
     const last = attend.push('s', [event('c')]);
     const results = Promise.allSettled([first, middle, last]);
-    expect(classified).toEqual(failure === 'BigInt' ? ['a', 'c'] : ['a', 'b', 'c']);
+    expect(classified).toEqual(failure.startsWith('BigInt') ? ['a', 'c'] : ['a', 'b', 'c']);
     held.release();
     await writing;
     const settled = await results;

@@ -158,12 +158,15 @@ export function createAttend(config: AttendConfig): Attend {
 
   function classify(events: Event[]): EventsInput['events'] {
     if (!Array.isArray(events)) throw new TypeError('attend: events must be an array');
-    return Array.from(events, (value) => {
-      const event = copyEvent(value);
+    const classified: EventsInput['events'] = new Array(events.length);
+    for (let i = 0; i < events.length; i += 1) {
+      const event: Event & { kind?: Kind } = copyEvent(events[i] as Event);
       const kind = config.kind(event);
       if (!KINDS.includes(kind)) throw new TypeError('attend: invalid event kind');
-      return { ...event, kind };
-    });
+      event.kind = kind;
+      classified[i] = event as Event & { kind: Kind };
+    }
+    return classified;
   }
 
   /**
