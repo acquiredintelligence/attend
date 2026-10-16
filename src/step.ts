@@ -277,7 +277,7 @@ function settle(ctx: Ctx, r: ScopeRecord): ScopeRecord {
   if (buf.entries.length === 0) {
     if (buf.forcedAt === null) return r;
     r.buffer.forcedAt = null;
-    return b ? beginJudging(ctx, r, windowOf(b), 0, false) : r;
+    return b ? beginJudging(ctx, r, windowOf(b), b.phase === 'retrying' ? b.attempt : 0, false) : r;
   }
   const due = deadline(ctx.config.policy, buf);
   if (!due || due.at > ctx.now) return r;

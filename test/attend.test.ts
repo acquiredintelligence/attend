@@ -156,6 +156,19 @@ describe('createAttend', () => {
     await h.stop();
   });
 
+  test('a flush during a judge outage keeps the retry budget, so the outage still ends in a dead letter', async () => {
+    const h = setup([{ fail: 'down' }]);
+    await h.attend.push('s', [ev('a')]);
+    await h.clock.advance(500);
+    await h.attend.flush('s');
+    await h.clock.advance(0);
+    expect(h.judge.calls).toHaveLength(2);
+    await h.clock.advance(4000 + 16_000);
+    expect(h.judge.calls).toHaveLength(4);
+    expect(h.deadLetters.map((l) => [l.id, l.attempts])).toEqual([[ID_A, 4]]);
+    await h.stop();
+  });
+
   test('a permanent judge error dead-letters at once', async () => {
     const h = setup([{ fail: 'refused', permanent: true }]);
     await h.attend.push('s', [ev('a')]);

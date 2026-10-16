@@ -477,6 +477,12 @@ describe('flush', () => {
     expect(judged.record.batch).toMatchObject({ reason: 'forced', phase: 'judging' });
   });
 
+  test('judges a retrying batch now, keeping its attempts', () => {
+    const before: ScopeRecord = { ...base(), batch: { ...windowA, phase: 'retrying', attempt: 2, at: 4700, offerWait: true } };
+    const { record } = step(cfg, before, { kind: 'flush' }, 800);
+    expect(record.batch).toEqual({ ...windowA, phase: 'judging', attempt: 3, leaseUntil: 30_800, offerWait: false });
+  });
+
   test('judges a waiting batch now', () => {
     const before: ScopeRecord = { ...base(), batch: { ...windowA, waits: 1, phase: 'waiting', until: 10_700 } };
     const { record } = step(cfg, before, { kind: 'flush' }, 800);
