@@ -1,5 +1,5 @@
 /** The default judge prompt, its per-route criteria, and the state rendering the LLM judges share. */
-import type { JudgeInput, OfferedRoute, Route } from '../types.js';
+import type { JsonObject, JudgeInput, OfferedRoute, Route } from '../types.js';
 
 export const DEFAULT_SYSTEM = [
   'You decide how an agent hears about a window of events from its surroundings. The agent works for its user inside one scope, such as a conversation, a workspace or a device. Events in that scope were held back and grouped into this window until the activity in them looked finished. Pick one of the routes on offer; each comes with a note on when it fits.',
@@ -32,10 +32,15 @@ export function resolveCriteria(routes: OfferedRoute[], criteria?: Partial<Recor
  * predicate questions by name. Ages are relative to `input.now`.
  */
 export function renderState(input: JudgeInput): string {
+  return JSON.stringify(stateObject(input));
+}
+
+/** What `renderState` serialises, for a judge whose API takes the state as JSON rather than text. */
+export function stateObject(input: JudgeInput): JsonObject {
   const ago = (at: number) => `${((input.now - at) / 1000).toFixed(1)}s`;
   const { window } = input;
-  return JSON.stringify({
-    guidance: input.guidance,
+  return {
+    ...(input.guidance === undefined ? {} : { guidance: input.guidance }),
     window: {
       reason: window.reason,
       waits: window.waits,
@@ -50,5 +55,5 @@ export function renderState(input: JudgeInput): string {
     facts: input.facts,
     recent: input.recent.map((v) => ({ route: v.route, ago: ago(v.at) })),
     predicates: Object.fromEntries(input.predicates.map((p): [string, string] => [p.name, p.question])),
-  });
+  };
 }

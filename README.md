@@ -45,7 +45,7 @@ can you look?
 Attend to this now, even mid-task.
 ```
 
-Before production, replace the function judge with [`llmJudge`](#judges) and `memoryStore` with a [database store](#storage).
+Before production, replace the function judge with [`jevJudge` or `llmJudge`](#judges) and `memoryStore` with a [database store](#storage).
 
 ## Demo
 
@@ -195,13 +195,21 @@ import { llmJudge } from 'attend/llm';
 const anthropic = new Anthropic();
 
 export const judge = llmJudge({
-  complete: async ({ system, prompt, schema, signal }) => {
+  complete: async ({ system, prompt, images, schema, signal }) => {
     const res = await anthropic.messages.create(
       {
         model: 'claude-opus-5-5',
         max_tokens: 1024,
         system,
-        messages: [{ role: 'user', content: prompt }],
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: prompt },
+              ...images.map((image) => ({ type: 'image' as const, source: { type: 'base64' as const, media_type: image.mimeType, data: image.data } })),
+            ],
+          },
+        ],
         output_config: { effort: 'low', format: { type: 'json_schema', schema } },
       },
       { signal },
@@ -215,15 +223,31 @@ export const judge = llmJudge({
 
 [`skills/attend/references/judges.md`](skills/attend/references/judges.md) has the same judge on the OpenAI Responses API and the Vercel AI SDK. The default prompt is `DEFAULT_SYSTEM`, and each route's default criterion is in `DEFAULT_CRITERIA`. Override them with `system` and `criteria`.
 
+### jevJudge
+
+`jevJudge` from `attend/jev` calls TypeSafe's Jev, a classifier built for this kind of question, with your own TypeSafe key. It asks one `choice` question for the route and one `noul` question per predicate, and sends the state as JSON. The model defaults to `jev-latest`; `jev-preview`, `jev-1.14.0` and `jev-1.13.0` are the others. Pass `endpoint` to go through OpenRouter or LiteLLM, and `longContext: true` for 262k tokens of context at some cost in speed and accuracy.
+
+```ts
+import { jevJudge } from 'attend/jev';
+
+export const judge = jevJudge({ apiKey: process.env.TYPESAFE_API_KEY ?? '' });
+```
+
 ### decisionsJudge
 
-`decisionsJudge` from `attend/decisions` calls the OpenAI Decisions API. It asks one `choice` question for the route and one `predicate` question per predicate. attend retries network errors and 408, 429 and 5xx responses. Any other 4xx dead-letters the window at once.
+`decisionsJudge` from `attend/decisions` calls the OpenAI Decisions API. It asks one `choice` question for the route and one `predicate` question per predicate.
 
 ```ts
 import { decisionsJudge } from 'attend/decisions';
 
 export const judge = decisionsJudge({ apiKey: process.env.OPENAI_API_KEY ?? '', model: '<model id>' });
 ```
+
+Both hosted judges retry network errors and 408, 429 and 5xx responses, and dead-letter the window at once on any other 4xx, on a billing or quota 429, and when the model refuses the route question. Every error from a response carries `status`, `requestId` and `retryAfterMs`. Both return the classifier's `confidence` in the route on `decision.confidence`.
+
+### Images
+
+Give `createAttend` a `capture(scope, signal)` that returns a `JudgeImage` (base64 `data` and a `mimeType`) or a list of them, such as a screenshot of what the user is looking at, and every judge call carries them as `input.images`. A capture that throws or takes longer than `captureTimeoutMs` (default 500) never fails the call: the judge runs without images and an observer sees a `captureFailed` trace. `jevJudge` sends PNG and JPEG within the provider's limits (280 to 1568 px per side, 16 MiB per file) and drops the rest, reporting each through `onImageError`; `decisionsJudge` sends up to 128 of any format. Either one retries once without images when the provider rejects them. `llmJudge` hands them to `complete` as `images`, as the snippet above shows.
 
 ### Your own judge
 

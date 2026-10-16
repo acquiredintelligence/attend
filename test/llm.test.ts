@@ -97,6 +97,14 @@ describe('llmJudge', () => {
     );
   });
 
+  test('passes the input images to complete, and an empty list when there are none', async () => {
+    const fake = fakeComplete({ route: 'note' });
+    const images = [{ data: 'iVBORw0KGgo=', mimeType: 'image/png' as const }];
+    await llmJudge({ complete: fake.complete })(judgeInput({ images }), signal);
+    await llmJudge({ complete: fake.complete })(judgeInput(), signal);
+    expect(fake.requests.map((r) => r.images)).toEqual([images, []]);
+  });
+
   test('a custom render replaces the prompt', async () => {
     const fake = fakeComplete({ route: 'note' });
     await llmJudge({ complete: fake.complete, render: (input) => `scope ${input.scope}, ${input.window.events.length} events` })(judgeInput(), signal);
@@ -216,6 +224,7 @@ describe('llmJudge inside createAttend', () => {
         route: 'interrupt',
         probabilities: { interrupt: 0.625, queue: 0.25, note: 0.125, ask: 0, skip: 0, wait: 0 },
         predicates: { asked: 0.75 },
+        confidence: null,
         window,
         at: 1500,
       },

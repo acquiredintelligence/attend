@@ -179,12 +179,76 @@ describe('createAttend', () => {
         route: 'queue',
         probabilities: { interrupt: 0, queue: 0.8, note: 0.2, ask: 0, skip: 0, wait: 0 },
         predicates: { asked: 0.1 },
+        confidence: null,
         window: { id: ID_A, events: [{ ...ev('a'), kind: 'closing', seenAt: 1000 }], reason: 'closing', waits: 0, dropped: 0, gap: false, settledAt: 1500 },
         at: 1500,
       },
     ]);
     const record = await h.attend.inspect('s');
     expect(record).toMatchObject({ version: 4, batch: null, outbox: { decisions: [], deadLetters: [] }, recent: [{ id: ID_A, route: 'queue', at: 1500 }], dueAt: null });
+    await h.stop();
+  });
+
+  test('capture adds its images to the judge input, fetched again on each retry', async () => {
+    let shots = 0;
+    const h = setup([{ fail: 'flaky' }, { route: 'note' }], {
+      settle: { retryBackoffMs: [1000] },
+      config: {
+        capture: async (scope) => {
+          shots += 1;
+          return shots === 1 ? { data: `${scope}-${shots}`, mimeType: 'image/png' } : [{ data: `${scope}-${shots}`, mimeType: 'image/jpeg' }];
+        },
+      },
+    });
+    await h.attend.push('s', [ev('a')]);
+    await h.clock.advance(500);
+    await h.clock.advance(1000);
+    expect(h.judge.calls.map((c) => c.images)).toEqual([[{ data: 's-1', mimeType: 'image/png' }], [{ data: 's-2', mimeType: 'image/jpeg' }]]);
+    expect(h.sink.delivered.map((d) => d.route)).toEqual(['note']);
+    await h.stop();
+  });
+
+  test('a capture that throws or returns null leaves the judge input without images, with one trace for the throw', async () => {
+    const h = setup([{ route: 'note' }, { route: 'note' }], {
+      config: {
+        capture: async (scope) => {
+          if (scope === 'boom') throw new Error('no display');
+          return null;
+        },
+      },
+    });
+    await h.attend.push('boom', [ev('a')]);
+    await h.attend.push('fine', [ev('b')]);
+    await h.clock.advance(500);
+    expect(h.judge.calls.map((c) => [c.scope, 'images' in c])).toEqual([
+      ['boom', false],
+      ['fine', false],
+    ]);
+    expect(h.traces.filter((t) => t.kind === 'captureFailed')).toEqual([{ kind: 'captureFailed', scope: 'boom', batchId: h.judge.calls[0]?.window.id, message: 'no display' }]);
+    expect(h.sink.delivered.map((d) => d.scope)).toEqual(['boom', 'fine']);
+    await h.stop();
+  });
+
+  test('a capture that outlives captureTimeoutMs is abandoned and the judge runs without images', async () => {
+    const signals: AbortSignal[] = [];
+    const h = setup([{ route: 'queue' }], {
+      config: {
+        capture: (_scope, signal) => {
+          signals.push(signal);
+          return new Promise(() => undefined);
+        },
+        captureTimeoutMs: 300,
+      },
+    });
+    await h.attend.push('s', [ev('a')]);
+    await h.clock.advance(500);
+    await h.clock.advance(299);
+    expect(h.judge.calls).toHaveLength(0);
+    await h.clock.advance(1);
+    expect(h.judge.calls.map((c) => 'images' in c)).toEqual([false]);
+    expect(signals.map((s) => s.aborted)).toEqual([true]);
+    expect(h.traces.filter((t) => t.kind === 'captureFailed')).toEqual([{ kind: 'captureFailed', scope: 's', batchId: ID_A, message: 'attend: capture timed out' }]);
+    expect(h.sink.delivered.map((d) => d.route)).toEqual(['queue']);
     await h.stop();
   });
 
@@ -1035,6 +1099,7 @@ describe('routes and defaultNotice', () => {
     route,
     probabilities: { interrupt: 0, queue: 0, note: 0, ask: 0, skip: 0, wait: 0 },
     predicates: {},
+    confidence: null,
     window: {
       id: ID_A,
       events: [

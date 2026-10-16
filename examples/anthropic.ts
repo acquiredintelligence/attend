@@ -5,6 +5,8 @@
 import { PermanentError } from 'attend';
 import { llmJudge } from 'attend/llm';
 
+type ContentBlock = { type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
+
 interface Anthropic {
   messages: {
     create(
@@ -12,7 +14,7 @@ interface Anthropic {
         model: string;
         max_tokens: number;
         system: string;
-        messages: { role: 'user'; content: string }[];
+        messages: { role: 'user'; content: ContentBlock[] }[];
         output_config: { effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max'; format: { type: 'json_schema'; schema: Record<string, unknown> } };
       },
       options: { signal: AbortSignal },
@@ -22,13 +24,21 @@ interface Anthropic {
 
 export function claudeJudge(anthropic: Anthropic) {
   return llmJudge({
-    complete: async ({ system, prompt, schema, signal }) => {
+    complete: async ({ system, prompt, images, schema, signal }) => {
       const res = await anthropic.messages.create(
         {
           model: 'claude-opus-5-5',
           max_tokens: 1024,
           system,
-          messages: [{ role: 'user', content: prompt }],
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: prompt },
+                ...images.map((image) => ({ type: 'image' as const, source: { type: 'base64' as const, media_type: image.mimeType, data: image.data } })),
+              ],
+            },
+          ],
           output_config: { effort: 'low', format: { type: 'json_schema', schema } },
         },
         { signal },

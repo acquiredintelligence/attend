@@ -58,6 +58,10 @@
       "types": "./dist/decisions.d.ts",
       "default": "./dist/decisions.js"
     },
+    "./jev": {
+      "types": "./dist/jev.d.ts",
+      "default": "./dist/jev.js"
+    },
     "./testing": {
       "types": "./dist/testing.d.ts",
       "default": "./dist/testing.js"

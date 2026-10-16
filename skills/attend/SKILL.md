@@ -68,16 +68,17 @@ Write `kind` as a pure function from the event to a `Kind` string, most often a 
 
 ## 4. Pick or write a judge
 
-A judge is `(input: JudgeInput, signal: AbortSignal) => Promise<Judgment>`, and it returns `{ route, probabilities?, predicates? }`.
+A judge is `(input: JudgeInput, signal: AbortSignal) => Promise<Judgment>`, and it returns `{ route, probabilities?, predicates?, confidence? }`.
 
 | When | Judge |
 |---|---|
 | A rule decides, such as "a direct message always interrupts" | A plain function |
-| The decision needs judgment about what the events mean | `llmJudge` from `attend/llm`, with a `complete` call to your model |
+| The decision needs judgment about what the events mean, and a TypeSafe key is available | `jevJudge` from `attend/jev`, a hosted classifier made for this kind of question |
+| The decision needs judgment and the app already has an LLM client | `llmJudge` from `attend/llm`, with a `complete` call to your model |
 | The app already uses the OpenAI Decisions API | `decisionsJudge` from `attend/decisions` |
 | Rules cover some cases and a model covers the rest | A function that answers the rule cases and calls the model judge for the rest |
 
-Set `guidance` to one or two sentences on who the agent is and what its user cares about. Set `criteria` only for routes whose default criterion is wrong for the app. Use `context(scope, signal)` to pass live facts, such as whether the agent is mid-turn.
+Set `guidance` to one or two sentences on who the agent is and what its user cares about. Set `criteria` only for routes whose default criterion is wrong for the app. Use `context(scope, signal)` to pass live facts, such as whether the agent is mid-turn, and `capture(scope, signal)` to pass a screenshot as a `JudgeImage` when what the user sees matters.
 
 **Check.** The judge answers only with routes in `input.routes`, stops when `signal` aborts, and throws `PermanentError` on a refusal. [references/judges.md](references/judges.md) has the Claude, OpenAI and AI SDK wiring.
 

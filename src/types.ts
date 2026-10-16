@@ -177,6 +177,8 @@ export interface Decision {
   probabilities: Record<Route, number>;
   /** Answers to the ride-along questions, by name. */
   predicates: Record<string, number>;
+  /** How sure the judge was of the route, from 0 to 1, when it says; null when it does not. */
+  confidence: number | null;
   window: Window;
   at: number;
 }
@@ -255,6 +257,8 @@ export interface Judgment {
   /** Per offered route. Missing routes count as 0; the reducer renormalises. */
   probabilities?: Partial<Record<Route, number>>;
   predicates?: Record<string, number>;
+  /** From 0 to 1, when the judge reports one. Anything else is dropped. */
+  confidence?: number;
 }
 
 // ─── inputs ──────────────────────────────────────────────────────────────────
@@ -337,7 +341,8 @@ export type Trace =
   | { kind: 'stale'; scope: string; input: Input['kind']; why: string }
   | { kind: 'conflict'; scope: string; version: number }
   | { kind: 'abandoned'; scope: string; input: Input['kind'] }
-  | { kind: 'failed'; scope: string; input: Input['kind']; message: string };
+  | { kind: 'failed'; scope: string; input: Input['kind']; message: string }
+  | { kind: 'captureFailed'; scope: string; batchId: string; message: string };
 
 export type TraceEffect = { kind: 'trace'; trace: Trace };
 
@@ -416,6 +421,12 @@ export interface OfferedRoute {
   criterion?: string;
 }
 
+/** A still image for the judge, as base64 with no `data:` prefix. Hosted judges have their own format and size limits. */
+export interface JudgeImage {
+  data: string;
+  mimeType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
+}
+
 /** What a judge decides from. Plain JSON, so a judge can run in another process or on a server. */
 export interface JudgeInput {
   scope: string;
@@ -428,6 +439,8 @@ export interface JudgeInput {
   predicates: { name: string; question: string }[];
   /** Live facts from `context()`, such as whether the agent is mid-turn. */
   facts: JsonObject;
+  /** What `capture()` returned for this call, when configured and it returned any. */
+  images?: JudgeImage[];
   /** This scope's last few verdicts, oldest first. */
   recent: Verdict[];
   now: number;
