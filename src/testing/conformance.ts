@@ -384,6 +384,13 @@ export function decisionLogConformance(make: () => Promise<ScopeStore> | ScopeSt
       const head = (await store.log.bounds()).last;
       assertEqual(await store.log.read({ after: null, scope: 'a', limit: 2, scanLimit: 4 }), { rows: [row], checked: head, more: false }, 'scope index');
     }],
+    ['a prefix read counts every row it examines toward scanLimit, like kinds and routes', async (store) => {
+      await seed(store, [...Array.from({ length: 6 }, (_, i) => append(`other:${i}`, 'other')), append('mine', 'p/1')]);
+      const all = (await store.log.read({ after: null, limit: 10 })).rows;
+      const first = await store.log.read({ after: null, scopePrefix: 'p/', limit: 1, scanLimit: 4 });
+      assertEqual(first, { rows: [], checked: position(all, 3), more: true }, 'stops at the scan limit');
+      assertEqual(await store.log.read({ after: first.checked, scopePrefix: 'p/', limit: 2, scanLimit: 4 }), { rows: all.slice(6), checked: position(all, 6), more: false }, 'continued scan');
+    }],
     ['a prefix read matches only scopes that start with the prefix', async (store) => {
       const scopes = ['p/x', 'p/y', 'px', 'p%', 'p_', 'q'];
       await seed(store, scopes.map((scope) => append(scope, scope)));

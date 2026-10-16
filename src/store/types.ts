@@ -84,7 +84,9 @@ export type DecisionRow = DecisionAppend & { position: Position };
 export interface DecisionQuery {
   /** Strictly after this position; null starts from the oldest retained row. */
   after: Position | null;
+  /** Only this scope. Rows of other scopes are never examined. */
   scope?: string;
+  /** Scopes that start with this. Like `kinds` and `routes`, every row examined counts toward `scanLimit`. */
   scopePrefix?: string;
   kinds?: readonly DecisionKind[];
   /** Rows whose route is one of these. A row with a null route never matches. */
