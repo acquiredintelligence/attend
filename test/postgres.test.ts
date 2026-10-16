@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
-import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { afterAll, describe, expect, test } from 'vitest';
 import { migrate, postgresLog, postgresStore } from '../src/postgres.js';
 import { initialRecord } from '../src/step.js';
 import { crashSuite, logConformance, storeConformance } from '../src/testing.js';
@@ -9,24 +9,28 @@ import type { Event, ScopeRecord } from '../src/types.js';
 const url = process.env.ATTEND_POSTGRES_URL ?? 'postgres://postgres:attend@127.0.0.1:15432/attend';
 const schema = `attend_test_${randomUUID().replaceAll('-', '').slice(0, 12)}`;
 const config = { connectionString: url, options: `-c search_path=${schema}`, connectionTimeoutMillis: 5000 };
-let pool: pg.Pool;
 const clients: pg.Client[] = [];
 
-beforeAll(async () => {
-  const admin = new pg.Client({ connectionString: url, connectionTimeoutMillis: 5000 });
-  await admin.connect();
-  await admin.query(`CREATE SCHEMA ${schema}`);
-  await admin.end();
-  pool = new pg.Pool({ ...config, max: 20 });
-});
+/** Set up on first use, inside a test, so an unreachable database fails every test rather than skipping them. */
+let ready: Promise<pg.Pool> | undefined;
+const pool = () =>
+  (ready ??= (async () => {
+    const admin = new pg.Client({ connectionString: url, connectionTimeoutMillis: 5000 });
+    await admin.connect();
+    await admin.query(`CREATE SCHEMA ${schema}`);
+    await admin.end();
+    return new pg.Pool({ ...config, max: 20 });
+  })());
 
 afterAll(async () => {
   await Promise.all(clients.map((c) => c.end()));
-  await pool?.query(`DROP SCHEMA ${schema} CASCADE`);
-  await pool?.end();
+  const opened = await ready?.catch(() => undefined);
+  await opened?.query(`DROP SCHEMA ${schema} CASCADE`);
+  await opened?.end();
 });
 
 const connect = async () => {
+  await pool();
   const client = new pg.Client(config);
   clients.push(client);
   await client.connect();
@@ -36,18 +40,18 @@ const connect = async () => {
 let tables = 0;
 const fresh = async () => {
   const prefix = `t${tables++}_`;
-  await migrate(pool, { prefix });
+  await migrate(await pool(), { prefix });
   return prefix;
 };
 
 describe('postgresStore conformance', () => {
-  const make = async () => postgresStore(pool, { prefix: await fresh() });
+  const make = async () => postgresStore(await pool(), { prefix: await fresh() });
   for (const c of storeConformance(make)) test(c.name, c.run);
   for (const c of crashSuite(make)) test(c.name, c.run, 120_000);
 });
 
 describe('postgresLog conformance', () => {
-  for (const c of logConformance(async () => postgresLog(pool, { prefix: await fresh(), pollMs: 10 }), { canBlock: true })) test(c.name, c.run, 10_000);
+  for (const c of logConformance(async () => postgresLog(await pool(), { prefix: await fresh(), pollMs: 10 }), { canBlock: true })) test(c.name, c.run, 10_000);
 });
 
 const record = (scope: string, version: number, dueAt: number | null): ScopeRecord => ({ ...initialRecord(scope), version, dueAt });
@@ -86,7 +90,7 @@ describe('postgresStore across connections', () => {
   });
 
   test('a record whose event text holds a NUL round-trips', async () => {
-    const store = postgresStore(pool, { prefix: await fresh() });
+    const store = postgresStore(await pool(), { prefix: await fresh() });
     const r: ScopeRecord = {
       ...record('s', 1, null),
       buffer: { entries: [{ id: 'a', at: 0, name: 'out', data: { raw: 'x\u0000y' }, text: 'nul \u0000 here', kind: 'consequence', seenAt: 0 }], dropped: 0, gap: false, forcedAt: null },
@@ -96,7 +100,7 @@ describe('postgresStore across connections', () => {
   });
 
   test('a fractional dueAt is due exactly when now reaches it', async () => {
-    const store = postgresStore(pool, { prefix: await fresh() });
+    const store = postgresStore(await pool(), { prefix: await fresh() });
     expect(await store.put(record('s', 1, 100.5), 0)).toBe('ok');
     expect(await store.due(100.4, 10)).toEqual([]);
     expect(await store.due(100.5, 10)).toEqual(['s']);
@@ -106,11 +110,11 @@ describe('postgresStore across connections', () => {
     const prefix = `t${tables++}_`;
     const connections = await Promise.all(Array.from({ length: 8 }, () => connect()));
     await Promise.all(connections.map((c) => migrate(c, { prefix })));
-    expect(await postgresStore(pool, { prefix }).put(record('s', 1, null), 0)).toBe('ok');
+    expect(await postgresStore(await pool(), { prefix }).put(record('s', 1, null), 0)).toBe('ok');
   });
 
   test('a prefix that is not a plain identifier is refused', async () => {
-    await expect(migrate(pool, { prefix: 'x; DROP TABLE y; --' })).rejects.toThrow('attend/postgres: prefix must be letters, digits and underscores');
+    await expect(migrate(await pool(), { prefix: 'x; DROP TABLE y; --' })).rejects.toThrow('attend/postgres: prefix must be letters, digits and underscores');
   });
 });
 
@@ -145,7 +149,7 @@ describe('postgresLog across connections', () => {
   });
 
   test('an event whose text holds a NUL round-trips', async () => {
-    const log = postgresLog(pool, { prefix: await fresh() });
+    const log = postgresLog(await pool(), { prefix: await fresh() });
     const e: Event = { id: 'a', at: 1, name: 'out', data: { raw: 'x\u0000y' }, text: 'nul \u0000 here' };
     await log.append('s', [e]);
     expect(await log.read('s', null, { limit: 10 })).toEqual([{ position: expect.stringMatching(/^\d{20}$/), event: e }]);
