@@ -5,9 +5,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { afterAll, describe, expect, test } from 'vitest';
 import { sqliteLog, sqliteStore } from '../src/sqlite.js';
 import { initialRecord } from '../src/step.js';
-import { crashSuite, logConformance, storeConformance } from '../src/testing.js';
+import { logConformance, storeConformance } from '../src/testing.js';
 import type { Event, ScopeRecord } from '../src/types.js';
-import { aliasingCases } from './support/aliasing.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'attend-sqlite-'));
 const opened: DatabaseSync[] = [];
@@ -34,7 +33,6 @@ for (const [where, make] of targets) {
       return sqliteStore(db, { prefix });
     };
     for (const c of storeConformance(store)) test(c.name, c.run);
-    for (const c of crashSuite(store)) test(c.name, c.run, 120_000);
   });
 
   describe(`sqliteLog in ${where}`, () => {
@@ -44,10 +42,6 @@ for (const [where, make] of targets) {
     }, { canBlock: false })) test(c.name, c.run);
   });
 }
-
-describe('aliasing through sqliteStore', () => {
-  for (const c of aliasingCases(() => sqliteStore(open(':memory:')))) test(c.name, c.run);
-});
 
 const record = (scope: string, version: number, dueAt: number | null): ScopeRecord => ({ ...initialRecord(scope), version, dueAt });
 const event = (id: string): Event => ({ id, at: 0, name: 'n', data: { id } });

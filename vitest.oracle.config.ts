@@ -19,6 +19,6 @@ export default defineConfig({
     },
   }],
   test: {
-    include: ['test/step.test.ts', 'test/attend.test.ts'],
+    include: ['test/step.test.ts', 'test/oracle/attend.spec.ts'],
   },
 });

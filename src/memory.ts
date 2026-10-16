@@ -1,39 +1,11 @@
-/**
- * In-memory adapters: the reference implementation of both ports, the browser's store,
- * and what the conformance suites are first run against.
- */
-import type { Event, EventLog, LogEntry, ScopeRecord, StateStore } from './types.js';
+import type { Event, EventLog, LogEntry } from './types.js';
 
-/**
- * Keeps the records it is given and hands them back as they are: `step` never mutates a record
- * and shares what it does not change, so a clone per put and get would cost the whole window
- * for nothing. Nothing outside the core reaches a stored record: `push` copies each event on the
- * way in, and `inspect`, the judge, the sink and the dead-letter handler each get a copy.
- */
-export function memoryStore(): StateStore {
-  const rows = new Map<string, ScopeRecord>();
-  return {
-    async get(scope) {
-      return rows.get(scope) ?? null;
-    },
-    async put(record, expectedVersion) {
-      const current = rows.get(record.scope)?.version ?? 0;
-      if (current !== expectedVersion) return 'conflict';
-      rows.set(record.scope, record);
-      return 'ok';
-    },
-    async due(now, limit) {
-      const due: { scope: string; dueAt: number }[] = [];
-      for (const [scope, row] of rows) if (row.dueAt !== null && row.dueAt <= now) due.push({ scope, dueAt: row.dueAt });
-      due.sort((a, b) => a.dueAt - b.dueAt || (a.scope < b.scope ? -1 : a.scope > b.scope ? 1 : 0));
-      return due.slice(0, limit).map((d) => d.scope);
-    },
-    async remove(scope) {
-      rows.delete(scope);
-    },
-  };
-}
+/** The in-memory log and snapshot store. */
+export { memoryStore } from './store/memory.js';
+/** Retention options for the in-memory decision log. */
+export type { MemoryStoreOptions } from './store/memory.js';
 
+/** An in-memory event log with optional retention. */
 export function memoryLog(options?: { retain?: number }): EventLog {
   const retain = options?.retain ?? Number.POSITIVE_INFINITY;
   const partitions = new Map<string, { next: number; entries: LogEntry[]; waiters: Set<() => void> }>();

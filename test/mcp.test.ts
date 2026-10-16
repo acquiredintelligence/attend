@@ -4,7 +4,7 @@ import { createAttend, PermanentError } from '../src/attend.js';
 import { mcpEventsSource, type McpEventsError, type McpEventsOptions } from '../src/mcp.js';
 import { memoryStore } from '../src/memory.js';
 import { drain, fakeClock, recordingSink, scriptedJudge, type ScriptedAnswer } from '../src/testing.js';
-import type { DeadLetter, Entry, Event, Kind, StateStore, Trace } from '../src/types.js';
+import type { DeadLetter, Entry, Event, Kind, ScopeStore, Trace } from '../src/types.js';
 import { mcpEventsTestServer, type EventSpec } from './support/mcp-events-server.js';
 
 const SUBSCRIPTION_KEY = 'io.modelcontextprotocol/subscriptionId';
@@ -19,7 +19,7 @@ async function settle(): Promise<void> {
   for (let i = 0; i < 4; i += 1) await drain();
 }
 
-function setup(script: ScriptedAnswer[] = [{ route: 'queue' }], store: StateStore = memoryStore()) {
+function setup(script: ScriptedAnswer[] = [{ route: 'queue' }], store: ScopeStore = memoryStore()) {
   const clock = fakeClock(1000);
   const judge = scriptedJudge(script);
   const sink = recordingSink();
@@ -59,17 +59,17 @@ function setup(script: ScriptedAnswer[] = [{ route: 'queue' }], store: StateStor
 
 const ALPHA: EventSpec[] = [{ name: 'alpha', delivery: ['poll', 'push'] }];
 
-/** A store whose puts wait while held, the way a slow database stalls the source's emit. */
-function heldStore(): { store: StateStore; hold(): void; release(): void } {
+/** A store whose commits wait while held, the way a slow database stalls the source's emit. */
+function heldStore(): { store: ScopeStore; hold(): void; release(): void } {
   const inner = memoryStore();
   let gate: Promise<void> | null = null;
   let open: () => void = () => undefined;
   return {
     store: {
-      get: (scope) => inner.get(scope),
-      async put(record, expectedVersion) {
+      ...inner,
+      async commit(writes) {
         if (gate) await gate;
-        return inner.put(record, expectedVersion);
+        return inner.commit(writes);
       },
       due: (now, limit) => inner.due(now, limit),
       remove: (scope) => inner.remove(scope),
@@ -89,13 +89,13 @@ function heldStore(): { store: StateStore; hold(): void; release(): void } {
 const deliveredIds = (h: ReturnType<typeof setup>) => h.delivered().flatMap((d) => d.ids);
 
 /** A store whose every put takes `ms` of real time, the way a database round trip does. */
-function slowStore(ms: number): StateStore {
+function slowStore(ms: number): ScopeStore {
   const inner = memoryStore();
   return {
-    get: (scope) => inner.get(scope),
-    async put(record, expectedVersion) {
+    ...inner,
+    async commit(writes) {
       await new Promise((resolve) => setTimeout(resolve, ms));
-      return inner.put(record, expectedVersion);
+      return inner.commit(writes);
     },
     due: (now, limit) => inner.due(now, limit),
     remove: (scope) => inner.remove(scope),
@@ -144,7 +144,7 @@ describe('mcpEventsSource over a real Client and Server', () => {
         window: expect.objectContaining({ events: [entry('e1')], reason: 'closing', gap: false }),
       }),
     ]);
-    expect((await h.store.get('s'))?.cursors).toEqual({ 'mcp:alpha:{"room":"r1"}': '1' });
+    expect((await h.attend.inspect('s'))?.cursors).toEqual({ 'mcp:alpha:{"room":"r1"}': '1' });
     await server.append('alpha', occ('e2'));
     await h.clock.advance(499);
     expect(server.requests.filter((r) => r.method === 'events/poll')).toHaveLength(1);
@@ -190,13 +190,13 @@ describe('mcpEventsSource over a real Client and Server', () => {
     void h.attach('s', client, { mode: 'stream' });
     await settle();
     expect(server.requests.map((r) => r.method)).toEqual(['events/stream']);
-    expect((await h.store.get('s'))?.cursors).toEqual({ [KEY]: '0' });
+    expect((await h.attend.inspect('s'))?.cursors).toEqual({ [KEY]: '0' });
     await server.append('alpha', occ('e1'));
     await settle();
-    expect((await h.store.get('s'))?.buffer.entries).toEqual([entry('e1')]);
+    expect((await h.attend.inspect('s'))?.buffer.entries).toEqual([entry('e1')]);
     await h.clock.advance(500);
     expect(h.delivered()).toEqual([{ scope: 's', ids: ['e1'], gap: false }]);
-    expect((await h.store.get('s'))?.cursors).toEqual({ [KEY]: '1' });
+    expect((await h.attend.inspect('s'))?.cursors).toEqual({ [KEY]: '1' });
     await h.stop();
     expect(server.liveStreams('alpha')).toEqual([]);
   });
@@ -282,10 +282,10 @@ describe('mcpEventsSource over a real Client and Server', () => {
     const h = setup();
     void h.attach('s', client, { mode: 'stream' });
     await settle();
-    expect((await h.store.get('s'))?.cursors).toEqual({ [KEY]: '0' });
+    expect((await h.attend.inspect('s'))?.cursors).toEqual({ [KEY]: '0' });
     await server.heartbeat('alpha', '5');
     await settle();
-    expect((await h.store.get('s'))?.cursors).toEqual({ [KEY]: '5' });
+    expect((await h.attend.inspect('s'))?.cursors).toEqual({ [KEY]: '5' });
     await h.clock.advance(1000);
     expect(h.judge.calls).toEqual([]);
     await h.stop();
@@ -301,8 +301,8 @@ describe('mcpEventsSource over a real Client and Server', () => {
     await settle();
     expect(server.liveStreams('beta')).toHaveLength(1);
     expect(server.liveStreams('alpha')).toHaveLength(0);
-    expect((await h.store.get('y'))?.cursors).toEqual({ 'mcp:beta:{}': '0' });
-    expect(await h.store.get('x')).toBeNull();
+    expect((await h.attend.inspect('y'))?.cursors).toEqual({ 'mcp:beta:{}': '0' });
+    expect(await h.attend.inspect('x')).toBeNull();
     await server.release('alpha');
     await settle();
     expect(server.liveStreams('alpha')).toHaveLength(1);
@@ -418,7 +418,7 @@ describe('mcpEventsSource over a real Client and Server', () => {
         payload: { name: 'alpha', timestamp: 'yesterday', data: {}, cursor: '1', _meta: { [SUBSCRIPTION_KEY]: id } },
       },
     ]);
-    expect((await h.store.get('s'))?.cursors).toEqual({ [KEY]: '2' });
+    expect((await h.attend.inspect('s'))?.cursors).toEqual({ [KEY]: '2' });
     await h.clock.advance(500);
     expect(h.delivered()).toEqual([{ scope: 's', ids: ['e2'], gap: false }]);
     await h.stop();
@@ -439,7 +439,7 @@ describe('mcpEventsSource over a real Client and Server', () => {
         payload: { eventId: 'e2', name: 'alpha', timestamp: STAMP, data: 'not an object' },
       },
     ]);
-    expect((await h.store.get('s'))?.cursors).toEqual({ [KEY]: '3' });
+    expect((await h.attend.inspect('s'))?.cursors).toEqual({ [KEY]: '3' });
     await h.clock.advance(500);
     expect(h.delivered()).toEqual([{ scope: 's', ids: ['e1', 'e3'], gap: false }]);
     await h.stop();
@@ -464,7 +464,7 @@ describe('mcpEventsSource over a real Client and Server', () => {
       { name: 'alpha', cursor: null },
       { name: 'alpha', cursor: '3' },
     ]);
-    expect((await h.store.get('s'))?.cursors).toEqual({ [KEY]: '6' });
+    expect((await h.attend.inspect('s'))?.cursors).toEqual({ [KEY]: '6' });
 
     for (let round = 0; round < 10 && deliveredIds(h).length < 6; round += 1) await h.clock.advance(1000);
     expect(deliveredIds(h)).toEqual(['e1', 'e2', 'e3', 'e4', 'e5', 'e6']);
@@ -533,7 +533,7 @@ describe('mcpEventsSource over a real Client and Server', () => {
     slow.release();
     await stopping;
     for (let turn = 0; turn < 3; turn += 1) {
-      const record = await slow.store.get('s');
+      const record = await first.attend.inspect('s');
       expect({ version: record?.version, cursors: record?.cursors, count: record?.buffer.entries.length }).toEqual({ version: 2, cursors: { [KEY]: '500' }, count: 500 });
       await settle();
       await first.clock.advance(1000);
@@ -550,7 +550,7 @@ describe('mcpEventsSource over a real Client and Server', () => {
       { name: 'alpha', cursor: null },
       { name: 'alpha', cursor: '500' },
     ]);
-    expect((await slow.store.get('s'))?.cursors).toEqual({ [KEY]: '2500' });
+    expect((await second.attend.inspect('s'))?.cursors).toEqual({ [KEY]: '2500' });
     expect(ingestedTotals(second)).toEqual({ count: 2000, duplicates: 0 });
     expect(deliveredIds(second)).toEqual(BACKLOG);
     await second.stop();
@@ -578,7 +578,7 @@ describe('mcpEventsSource over a real Client and Server', () => {
       { name: 'alpha', cursor: '1000' },
       { name: 'alpha', cursor: '2000' },
     ]);
-    expect((await h.store.get('s'))?.cursors).toEqual({ [KEY]: '2500' });
+    expect((await h.attend.inspect('s'))?.cursors).toEqual({ [KEY]: '2500' });
     await h.stop();
   }, 15_000);
 
@@ -593,7 +593,7 @@ describe('mcpEventsSource over a real Client and Server', () => {
     expect({ delivered: deliveredIds(h).length, under5s: elapsed < 5000 }).toEqual({ delivered: 2500, under5s: true });
     expect(deliveredIds(h)).toEqual(BACKLOG);
     expect(ingestedTotals(h)).toEqual({ count: 2500, duplicates: 0 });
-    expect((await h.store.get('s'))?.cursors).toEqual({ [KEY]: '2500' });
+    expect((await h.attend.inspect('s'))?.cursors).toEqual({ [KEY]: '2500' });
     await h.stop();
   }, 15_000);
 
@@ -607,7 +607,7 @@ describe('mcpEventsSource over a real Client and Server', () => {
     const RATE = 3000;
     const SECONDS = 4;
     const all = Array.from({ length: RATE * SECONDS }, (_, i) => `e${i + 1}`);
-    const cursorAt = async () => (await h.store.get('s'))?.cursors[KEY] ?? null;
+    const cursorAt = async () => (await h.attend.inspect('s'))?.cursors[KEY] ?? null;
     const committed: (string | null)[] = [];
     const started = performance.now();
     for (let second = 1; second <= SECONDS; second += 1) {
@@ -774,8 +774,8 @@ describe('mcpEventsSource over a real Client and Server', () => {
       { kind: 'unrouted', method: 'notifications/events/event', subscriptionId: 'nope' },
       { kind: 'unrouted', method: 'notifications/events/heartbeat', subscriptionId: null },
     ]);
-    expect((await h.store.get('s'))?.cursors).toEqual({ [KEY]: '0' });
-    expect((await h.store.get('s'))?.buffer.entries).toEqual([]);
+    expect((await h.attend.inspect('s'))?.cursors).toEqual({ [KEY]: '0' });
+    expect((await h.attend.inspect('s'))?.buffer.entries).toEqual([]);
     await h.stop();
   });
 

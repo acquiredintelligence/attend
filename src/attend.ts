@@ -1,247 +1,82 @@
-/**
- * The shell. Thin: load, step, compare-and-swap, arm a timer from `dueAt`, execute
- * effects, feed results back as inputs. All policy is in ./step.ts.
- */
-import { initialRecord, step, type StepConfig } from './step.js';
-import { ConflictError, isPermanent, OutboxFullError } from './errors.js';
+import { ConflictError, isPermanent } from './errors.js';
 import { sleep, systemClock } from './internal/clock.js';
-import { arrayLength, assertNever, copyEvent, messageOf } from './internal/shared.js';
-import type {
-  Clock,
-  DeadLetter,
-  Decision,
-  DeliveredRoute,
-  DeliverEffect,
-  Effect,
-  Event,
-  EventLog,
-  EventsInput,
-  Input,
-  Judge,
-  JudgeEffect,
-  JudgeImage,
-  JudgeInput,
-  Judgment,
-  JsonObject,
-  Kind,
-  ReleasedInput,
-  Route,
-  ScopeRecord,
-  SettlePolicy,
-  Sink,
-  Source,
-  SourceBatch,
-  StateStore,
-  Trace,
-} from './types.js';
+import { arrayLength, assertNever, messageOf } from './internal/shared.js';
 import { DEFAULT_POLICY, KINDS, ROUTES } from './types.js';
+import type { Clock, Source, SourceBatch, DeadLetter, Decision, DeliveredRoute, DeliverEffect, Effect, Event, EventLog, EventsInput, Input, JudgeEffect, JudgeImage, JudgeInput, Judgment, Kind, ReleasedInput, SettlePolicy, Sink, Trace } from './types.js';
+import type { Attend, AttendConfig } from './shell/types.js';
+import { createScopes } from './shell/scope.js';
+import { createScheduler } from './shell/scheduler.js';
+import { copyDecision, copyEventSized, copyLetter, copyWindowSliced } from './shell/copy.js';
+import { windowBytesFor } from './shell/budget.js';
+import { readRecord } from './shell/read.js';
+import { readDecisions } from './shell/decisions.js';
+import { thresholdRoute } from './core/threshold.js';
 
-export { ConflictError, OutboxFullError, PermanentError } from './errors.js';
+/** Errors raised by intake and effect handlers. */
+export { BackpressureError, ConflictError, OutboxFullError, PermanentError } from './errors.js';
+/** Public configuration and runner contracts. */
+export type { AdmissionOptions, Attend, AttendConfig, DeadLetterHandler, DecisionCursorPage, DecisionFilter, DecisionReadOptions, JudgeContext, RunOptions } from './shell/types.js';
 
-/** Live context fetched when the judge is called, and again on every retry. */
-export interface JudgeContext {
-  facts?: JsonObject;
-  /** Questions the judge answers beside the route, by name. Merged over `AttendConfig.predicates`. */
-  predicates?: Record<string, string>;
-}
-
-export interface AttendConfig {
-  store: StateStore;
-  judge: Judge;
-  sink: Sink;
-  /** Pure. Called once per event at ingest; the result is stored on the entry. */
-  kind: (event: Event) => Kind;
-  /** Receives windows no judge or sink could take. Required: there is no silent default. */
-  deadLetter: (letter: DeadLetter, signal: AbortSignal) => void | Promise<void>;
-  settle?: Partial<SettlePolicy>;
-  /** Who the agent is and what matters to its user. Passed to the judge as given. */
-  guidance?: string;
-  /** Per-route criteria for the judge. Judges fall back to their own for routes left out. */
-  criteria?: Partial<Record<Route, string>>;
-  /** Static questions the judge answers beside the route, by name. */
-  predicates?: Record<string, string>;
-  context?: (scope: string, signal: AbortSignal) => JudgeContext | Promise<JudgeContext>;
-  /**
-   * Images for the judge, fetched when it is called and again on every retry: a screenshot of
-   * what the user sees, say. A throw or a timeout costs the call its images, never the call.
-   */
-  capture?: (scope: string, signal: AbortSignal) => Promise<JudgeImage[] | JudgeImage | null>;
-  /** How long `capture` may take before the judge runs without images. Default 500. */
-  captureTimeoutMs?: number;
-  /** Every trace the reducer emits, plus the shell's own. Optional; nothing else observes. */
-  observe?: (trace: Trace) => void;
-  clock?: Clock;
-}
-
-export interface RunOptions {
-  /**
-   * Aborting stops the sweep, the timers and the attached sources and starts no further judge,
-   * sink or dead-letter call: one the reducer asks for after that is released at once, with no
-   * failure counted, so the next runner takes it up on its first tick. `run` then resolves once
-   * the calls already in flight have settled and persisted their results, or their leases have
-   * expired, and once every write this instance had in flight has landed, so the store may be
-   * closed as soon as it resolves. A call that outlived its lease is taken up by the next
-   * runner when that lease expires.
-   */
-  signal: AbortSignal;
-  /** How often to ask the store for due scopes. The only path for scopes written by other processes. Default 1000. */
-  sweepMs?: number;
-  /** Scopes per sweep. Default 100. */
-  sweepLimit?: number;
-}
-
-export interface Attend {
-  /**
-   * Ingest from a producer in this process. Persists with compare-and-swap and resolves
-   * once persisted; never judges or delivers (the runner does, via `dueAt`). Safe from any
-   * replica; idempotent on event ids. Rejects with `OutboxFullError` when either outbox lane
-   * is at its cap, and with `ConflictError` after eight lost compare-and-swaps.
-   *
-   * Pushes that queue while the scope's write is in flight are ingested together in one write,
-   * and each resolves once that write has landed. `memoryStore` resolves without leaving the
-   * microtask queue, so a loop that awaits only `push` never lets the runner's timers fire and
-   * the open window grows until the loop yields to the event loop.
-   */
-  push(scope: string, events: Event[]): Promise<void>;
-  /**
-   * Run a source from its committed cursor until the attachment or run aborts cleanly; a
-   * rejected emit aborts its subscription's child signal, rejects queued and later emits,
-   * and backs off through `retryBackoffMs` (last rung repeated) before resubscribing.
-   * A `PermanentError` or duplicate `Source.key` on the scope rejects; a normal return from
-   * an unbroken subscription resolves.
-   */
-  attach(scope: string, source: Source, options?: { signal?: AbortSignal }): Promise<void>;
-  /**
-   * Settle the open window at the runner's next tick, reason `forced`. A window already in
-   * front of the judge is forced too: a `wait` verdict is judged again at once with `wait`
-   * withheld. Persists the request and resolves at once, like `push`; rejects with
-   * `ConflictError` after eight lost compare-and-swaps.
-   */
-  flush(scope: string): Promise<void>;
-  /** The record as stored, for operators and tests. */
-  inspect(scope: string): Promise<ScopeRecord | null>;
-  /** The runner: in-process timers for scopes touched here, the sweep for everything. Resolves after an abort, once the calls in flight have settled. */
-  run(options: RunOptions): Promise<void>;
-}
-
-const MAX_CAS_ATTEMPTS = 8;
-
-/** A few milliseconds, growing with each lost compare-and-swap and jittered so two losers do not collide again. */
-function conflictBackoffMs(attempt: number): number {
-  return 2 * attempt + Math.random() * 4;
-}
-
+/** Creates a scope-owning shell over a log and snapshot store. */
 export function createAttend(config: AttendConfig): Attend {
+  return createAttendInternal(config);
+}
+
+/** Internal snapshot kill switch for recovery and differential verification. */
+export function createAttendInternal(config: AttendConfig, snapshot: 'ratio' | 'always' = 'ratio'): Attend {
+  const share = config.windowShare ?? 0.5;
+  if (!Number.isFinite(share) || share <= 0 || share > 1) throw new RangeError('attend: windowShare must be in (0, 1]');
+  if (config.actThreshold !== undefined && (!Number.isFinite(config.actThreshold) || config.actThreshold <= 0 || config.actThreshold > 1)) {
+    throw new RangeError('attend: actThreshold must be in (0, 1]');
+  }
   const policy: SettlePolicy = { ...DEFAULT_POLICY, ...config.settle };
-  const stepConfig: StepConfig = { policy };
+  if (config.judge.budget) {
+    const bytes = windowBytesFor(config.judge.budget, share);
+    if (!Number.isFinite(bytes) || bytes <= 0) throw new RangeError('attend: judge window budget must be positive and finite');
+    if (config.settle?.maxWindowBytes === undefined) policy.maxWindowBytes = bytes;
+  }
   const clock = config.clock ?? systemClock();
-  const lanes = new Map<string, Promise<void>>();
-  const timers = new Map<string, { at: number; cancel: () => void }>();
+  const modes = { decisions: config.sink === 'log' ? 'log' : 'lane', deadLetters: config.deadLetter === 'log' ? 'log' : 'lane' } as const;
   const sources = new Set<AbortController>();
   const attached = new Set<string>();
-  /** Judge, sink and dead-letter calls in flight, each with the lease the reducer gave it. */
+  const sizedEvents = new WeakMap<Event, number>();
   const calls = new Map<Promise<void>, number>();
-  /** Release writes for calls no live runner would start. A stopping runner waits for them, so none is left for a closed store. */
   const releases = new Set<Promise<void>>();
   let running: { signal: AbortSignal } | null = null;
+  let judges = 0;
+  const scheduler = createScheduler({ clock, onDue(scope) {
+    const due = scopes.due(scope);
+    if (due === null) return;
+    if (due > clock.now()) scheduler.arm(scope, due);
+    else tick(scope);
+  } });
+  const scopes = createScopes({ store: config.store, clock, config: { policy, ...modes, traces: config.observe !== undefined },
+    admission: config.admission, idleMs: config.cache?.idleMs ?? 300000, snapshot, scheduler,
+    eventBytes: (event) => sizedEvents.get(event), running: () => running !== null, execute, observe });
+  const submit = scopes.submit;
 
   function observe(trace: Trace): void {
-    try {
-      config.observe?.(trace.kind === 'deadLettered' || trace.kind === 'dropped' ? structuredClone(trace) : trace);
-    } catch {
-      // An observer that throws must not take the runner down with it.
-    }
+    try { config.observe?.(trace.kind === 'deadLettered' || trace.kind === 'dropped' ? structuredClone(trace) : trace); }
+    catch {}
   }
-
-  /** The `events` input at the tail of each lane that has not started: later events from the same source join it. */
-  const ingests = new Map<string, { input: EventsInput; done: Promise<void>; signal: AbortSignal | undefined }>();
 
   function classify(events: Event[]): EventsInput['events'] {
     if (!Array.isArray(events)) throw new TypeError('attend: events must be an array');
     const length = arrayLength(events.length);
     const classified: EventsInput['events'] = new Array(length);
     for (let i = 0; i < length; i += 1) {
-      const event: Event & { kind?: Kind } = copyEvent(events[i] as Event);
+      const { event, bytes } = copyEventSized(events[i]!);
       const kind = config.kind(event);
       if (!KINDS.includes(kind)) throw new TypeError('attend: invalid event kind');
-      event.kind = kind;
-      classified[i] = event as Event & { kind: Kind };
+      const entry = { ...event, kind };
+      sizedEvents.set(entry, bytes);
+      classified[i] = entry;
     }
     return classified;
   }
 
-  /**
-   * Per-scope inputs run in arrival order; queued pushes or emits from one subscription
-   * share one write and its promise, including its rejection. A queued input from
-   * an aborted subscription rejects before running and never merges with a later subscription.
-   */
-  function apply(scope: string, input: Input, signal?: AbortSignal): Promise<void> {
-    const open = ingests.get(scope);
-    if (open && input.kind === 'events' && input.source === open.input.source && signal === open.signal) {
-      merge(open.input, input);
-      return open.done;
-    }
-    ingests.delete(scope);
-    const previous = lanes.get(scope) ?? Promise.resolve();
-    const next = previous.then(() => {
-      if (ingests.get(scope)?.input === input) ingests.delete(scope);
-      signal?.throwIfAborted();
-      return applyNow(scope, input);
-    });
-    if (input.kind === 'events') ingests.set(scope, { input, done: next, signal });
-    const settled = next.catch(() => undefined).finally(() => {
-      if (lanes.get(scope) === settled) lanes.delete(scope);
-    });
-    lanes.set(scope, settled);
-    return next;
-  }
-
-  /** Later events after earlier ones, the last cursor, and a gap if any batch reported one. */
-  function merge(open: EventsInput, input: EventsInput): void {
-    for (const event of input.events) open.events.push(event);
-    if (input.cursor !== undefined) open.cursor = input.cursor;
-    if (input.truncated) open.truncated = true;
-  }
-
-  async function applyNow(scope: string, input: Input): Promise<void> {
-    for (let attempt = 1; attempt <= MAX_CAS_ATTEMPTS; attempt += 1) {
-      const current = (await config.store.get(scope)) ?? initialRecord(scope);
-      if (input.kind === 'events' && input.events.length > 0) {
-        if (current.outbox.decisions.length >= policy.maxOutbox) throw new OutboxFullError(scope, 'decisions', current.outbox.decisions.length);
-        if (current.outbox.deadLetters.length >= policy.maxDeadLetters) throw new OutboxFullError(scope, 'deadLetters', current.outbox.deadLetters.length);
-      }
-      const { record, effects } = step(stepConfig, current, input, clock.now());
-      const next = { ...record, version: current.version + 1 };
-      if ((await config.store.put(next, current.version)) === 'conflict') {
-        observe({ kind: 'conflict', scope, version: current.version });
-        // Real time, not the injected clock: the contention is with another process, and a fake clock would never advance for it.
-        await new Promise((resolve) => setTimeout(resolve, conflictBackoffMs(attempt)));
-        continue;
-      }
-      arm(scope, next.dueAt);
-      for (const effect of effects) execute(scope, effect);
-      return;
-    }
-    observe({ kind: 'abandoned', scope, input: input.kind });
-    throw new ConflictError(scope, MAX_CAS_ATTEMPTS);
-  }
-
-  function arm(scope: string, dueAt: number | null): void {
-    const armed = timers.get(scope);
-    // A due tick keeps its timer: replacing it on every write would start a fresh zero-delay timer each time and starve it under a steady stream.
-    if (armed && running && dueAt !== null && dueAt <= clock.now() && armed.at <= clock.now()) return;
-    armed?.cancel();
-    timers.delete(scope);
-    if (!running || dueAt === null) return;
-    const cancel = clock.at(dueAt, () => {
-      timers.delete(scope);
-      tick(scope);
-    });
-    timers.set(scope, { at: dueAt, cancel });
-  }
-
   function tick(scope: string): void {
-    void background(scope, 'tick', () => apply(scope, { kind: 'tick' }));
+    void background(scope, 'tick', () => submit(scope, { kind: 'tick' }));
   }
 
   function background(scope: string, input: Input['kind'], work: () => Promise<void>): Promise<void> {
@@ -250,13 +85,9 @@ export function createAttend(config: AttendConfig): Attend {
     });
   }
 
-  /**
-   * Only a live runner starts a call. One it will not start is released instead, so the next
-   * runner takes it up on its first tick rather than when the lease expires.
-   */
   function call(scope: string, result: Input['kind'], leaseUntil: number, work: () => Promise<void>, release: ReleasedInput): void {
     if (!running) {
-      const released = background(scope, release.kind, () => apply(scope, release)).finally(() => releases.delete(released));
+      const released = background(scope, release.kind, () => submit(scope, release)).finally(() => releases.delete(released));
       releases.add(released);
       return;
     }
@@ -264,7 +95,6 @@ export function createAttend(config: AttendConfig): Attend {
     calls.set(done, leaseUntil);
   }
 
-  /** Resolves when the call settles or its lease expires, whichever comes first. */
   function settledOrExpired(done: Promise<void>, leaseUntil: number): Promise<void> {
     if (leaseUntil <= clock.now()) return Promise.resolve();
     return new Promise((resolve) => {
@@ -282,6 +112,10 @@ export function createAttend(config: AttendConfig): Attend {
         observe(effect.trace);
         return;
       case 'judge':
+        if (running && judges >= (config.judgeConcurrency ?? Infinity)) {
+          void background(scope, 'judgeDeferred', () => submit(scope, { kind: 'judgeDeferred', batchId: effect.batchId, attempt: effect.attempt, until: clock.now() + 100 }));
+          return;
+        }
         call(scope, 'judged', effect.leaseUntil, () => runJudge(scope, effect), { kind: 'judgeReleased', batchId: effect.batchId, attempt: effect.attempt });
         return;
       case 'deliver':
@@ -297,6 +131,7 @@ export function createAttend(config: AttendConfig): Attend {
   }
 
   async function runJudge(scope: string, effect: JudgeEffect): Promise<void> {
+    judges += 1;
     const controller = new AbortController();
     const cancel = clock.at(clock.now() + policy.judgeTimeoutMs, () => controller.abort(new Error('attend: judge timed out')));
     const { batchId, attempt } = effect;
@@ -305,7 +140,7 @@ export function createAttend(config: AttendConfig): Attend {
       const live = config.context ? await config.context(scope, controller.signal) : {};
       const input: JudgeInput = {
         scope,
-        window: structuredClone(effect.window),
+        window: await copyWindowSliced(effect.window),
         routes: effect.offered.map((route) => {
           const criterion = config.criteria?.[route];
           return criterion === undefined ? { route } : { route, criterion };
@@ -319,18 +154,20 @@ export function createAttend(config: AttendConfig): Attend {
       const images = config.capture ? await capture(config.capture, scope, batchId, controller.signal) : [];
       if (images.length > 0) input.images = images;
       const judgment: unknown = await config.judge(input, controller.signal);
-      result = isJudgment(judgment)
-        ? { kind: 'judged', batchId, attempt, judgment }
-        : { kind: 'judgeFailed', batchId, attempt, message: 'malformed judgment', permanent: false };
+      if (isJudgment(judgment)) {
+        const threshold = config.actThreshold === undefined ? null : thresholdRoute(judgment, effect.offered, config.actThreshold);
+        if (threshold) observe({ kind: 'routeThresholded', scope, batchId, from: judgment.route, to: threshold.route, act: threshold.act });
+        result = { kind: 'judged', batchId, attempt, judgment: structuredClone(threshold ? { ...judgment, route: threshold.route } : judgment) };
+      } else result = { kind: 'judgeFailed', batchId, attempt, message: 'malformed judgment', permanent: false };
     } catch (error) {
       result = { kind: 'judgeFailed', batchId, attempt, message: messageOf(error), permanent: isPermanent(error) };
     } finally {
       cancel();
     }
-    await apply(scope, result);
+    judges -= 1;
+    await submit(scope, result);
   }
 
-  /** The captured images, or none after a throw or `captureTimeoutMs`, with one trace to say so. */
   async function capture(fn: NonNullable<AttendConfig['capture']>, scope: string, batchId: string, judgeSignal: AbortSignal): Promise<JudgeImage[]> {
     const controller = new AbortController();
     const onJudgeAbort = () => controller.abort(judgeSignal.reason);
@@ -346,7 +183,7 @@ export function createAttend(config: AttendConfig): Attend {
     } finally {
       cancel();
       judgeSignal.removeEventListener('abort', onJudgeAbort);
-      // Settle the race's loser so a late abort never reports an unhandled rejection.
+
       timedOut.catch(() => undefined);
     }
   }
@@ -357,44 +194,42 @@ export function createAttend(config: AttendConfig): Attend {
     const cancel = clock.at(phase.leaseUntil, () => controller.abort(new Error('attend: delivery timed out')));
     let result: Input;
     try {
-      if (item.kind === 'decision') await config.sink.deliver(structuredClone(item.decision), controller.signal);
-      else await config.deadLetter(structuredClone(item.letter), controller.signal);
+      if (item.kind === 'decision' && config.sink !== 'log') await config.sink.deliver(await copyDecision(item.decision), controller.signal);
+      else if (item.kind === 'deadLetter' && config.deadLetter !== 'log') await config.deadLetter(await copyLetter(item.letter), controller.signal);
       result = { kind: 'delivered', deliveryId: item.id, attempt: phase.attempt };
     } catch (error) {
       result = { kind: 'deliveryFailed', deliveryId: item.id, attempt: phase.attempt, message: messageOf(error), permanent: isPermanent(error) };
     } finally {
       cancel();
     }
-    await apply(scope, result);
+    await submit(scope, result);
   }
 
-  /** After a start, arm timers for scopes not yet due, so recovery is on time rather than at the next sweep. */
-  async function warm(limit: number): Promise<void> {
+  async function sweep(now: number, limit: number, warm: boolean): Promise<void> {
     try {
-      const dueNow = new Set(await config.store.due(clock.now(), limit));
-      for (const scope of await config.store.due(Number.MAX_SAFE_INTEGER, limit)) {
-        if (dueNow.has(scope)) continue;
-        const record = await config.store.get(scope);
-        if (record) arm(scope, record.dueAt);
+      let after: import('./store/types.js').DueKey | undefined;
+      while (running) {
+        const page = await config.store.due(now, limit, after);
+        for (const key of page) {
+          if (!running) break;
+          const due = await scopes.touch(key.scope);
+          if (!warm || (due !== null && due <= clock.now())) tick(key.scope);
+        }
+        if (page.length < limit || page.length === 0) break;
+        after = page.at(-1);
       }
-    } catch (error) {
-      observe({ kind: 'failed', scope: '*', input: 'tick', message: messageOf(error) });
-    }
+    } catch (error) { observe({ kind: 'failed', scope: '*', input: 'tick', message: messageOf(error) }); }
   }
 
   return {
     push(scope, events) {
-      try {
-        return apply(scope, { kind: 'events', events: classify(events) });
-      } catch (error) {
-        return Promise.reject(error);
-      }
+      try { return submit(scope, { kind: 'events', events: classify(events) }, true); }
+      catch (error) { return Promise.reject(error); }
     },
-    flush: (scope) => apply(scope, { kind: 'flush' }),
-    async inspect(scope) {
-      const record = await config.store.get(scope);
-      return record === null ? null : structuredClone(record);
-    },
+    flush: (scope) => submit(scope, { kind: 'flush' }, true),
+    end: (scope) => submit(scope, { kind: 'end' }, true),
+    inspect: (scope) => readRecord(config.store, scope, modes),
+    decisions: (filter, options) => readDecisions(config.store.log, clock, filter, options),
 
     async attach(scope, source, options) {
       const slot = `${scope}\n${source.key}`;
@@ -414,7 +249,7 @@ export function createAttend(config: AttendConfig): Attend {
           const write = async (batch: SourceBatch) => {
             try {
               signal.throwIfAborted();
-              await apply(scope, { kind: 'events', ...batch, source: source.key, events: classify(batch.events) }, signal);
+              await submit(scope, { kind: 'events', ...batch, source: source.key, events: classify(batch.events) }, true, signal, (error) => subscription.abort(error));
               if (!signal.aborted) failures = 0;
             } catch (error) {
               subscription.abort(error);
@@ -423,12 +258,12 @@ export function createAttend(config: AttendConfig): Attend {
           };
           const emit = (batch: SourceBatch) => {
             pending = write(batch);
-            // The subscription recovers from a failed write itself, so a source that drops this promise must not crash the process.
+
             pending.catch(() => undefined);
             return pending;
           };
           try {
-            const cursor = (await config.store.get(scope))?.cursors[source.key] ?? null;
+            const cursor = (await readRecord(config.store, scope, modes))?.cursors[source.key] ?? null;
             controller.signal.throwIfAborted();
             await source.subscribe(cursor, emit, signal);
             await pending;
@@ -457,25 +292,23 @@ export function createAttend(config: AttendConfig): Attend {
     async run({ signal, sweepMs = 1000, sweepLimit = 100 }) {
       if (running) throw new Error('attend: already running');
       running = { signal };
+      const onAbort = () => { running = null; scheduler.stop(); for (const source of sources) source.abort(); };
+      signal.addEventListener('abort', onAbort, { once: true });
       try {
-        await warm(sweepLimit);
+        if (signal.aborted) return;
+        scopes.armAll();
+        await sweep(Number.MAX_SAFE_INTEGER, sweepLimit, true);
         while (!signal.aborted) {
-          try {
-            for (const scope of await config.store.due(clock.now(), sweepLimit)) tick(scope);
-          } catch (error) {
-            observe({ kind: 'failed', scope: '*', input: 'tick', message: messageOf(error) });
-          }
+          await sweep(clock.now(), sweepLimit, false);
+          scopes.evict();
           await sleep(clock, sweepMs, signal);
         }
       } finally {
-        running = null;
-        for (const timer of timers.values()) timer.cancel();
-        timers.clear();
-        for (const controller of sources) controller.abort();
-        // Only the writes in flight now, not a producer's later pushes: those persist on their own and do not hold the runner.
-        const writes = [...lanes.values()];
+        onAbort();
+        signal.removeEventListener('abort', onAbort);
+        const writes = scopes.pending();
         await Promise.all([...calls].map(([done, leaseUntil]) => settledOrExpired(done, leaseUntil)));
-        await Promise.all(writes);
+        await writes;
         while (releases.size > 0) await Promise.all(releases);
       }
     },
@@ -491,16 +324,12 @@ function isJudgment(value: unknown): value is Judgment {
   return optionalObject(probabilities) && optionalObject(predicates);
 }
 
-// ─── helpers that ship in the main export ────────────────────────────────────
-
+/** One delivery handler per delivered route. */
 export type RouteHandlers = {
   [R in DeliveredRoute]: (decision: Decision & { route: R }, signal: AbortSignal) => void | Promise<void>;
 };
 
-/**
- * A sink with one handler per delivered route. All four are required, so a route added to
- * the library is a compile error in every app that has not decided what it means for them.
- */
+/** A sink with a required handler for each delivered route. */
 export function routes(handlers: RouteHandlers): Sink {
   return {
     async deliver(decision, signal) {
@@ -541,11 +370,7 @@ export function defaultNotice(decision: Decision, options?: { maxLines?: number 
   return out.join('\n');
 }
 
-/**
- * A `Source` over an `EventLog`, keyed `log:<scope>`: reads after the cursor, emits, repeats.
- * `blockMs` is passed to the log; a log that cannot block returns at once, and `pollMs` then
- * paces the loop on `clock`.
- */
+/** A resumable source over an event log, with optional polling and blocking waits. */
 export function logSource(log: EventLog, scope: string, options?: { limit?: number; blockMs?: number; pollMs?: number; clock?: Clock }): Source {
   const limit = options?.limit ?? 100;
   const blockMs = options?.blockMs ?? 1000;

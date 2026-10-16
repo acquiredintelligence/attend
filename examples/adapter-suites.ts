@@ -4,7 +4,9 @@
  */
 import { test } from 'node:test';
 import { memoryStore } from 'attend';
-import { crashSuite, storeConformance } from 'attend/testing';
+import { crashSuite, multiScopeCrashSuite, scopeStoreConformance, decisionLogConformance } from 'attend/testing';
 
-for (const c of storeConformance(() => memoryStore())) test(c.name, c.run);
+for (const c of scopeStoreConformance(() => memoryStore())) test(c.name, c.run);
 for (const c of crashSuite(() => memoryStore())) test(c.name, c.run);
+for (const c of decisionLogConformance(() => memoryStore())) test(c.name, c.run);
+for (const c of multiScopeCrashSuite(() => memoryStore())) test(c.name, c.run);
