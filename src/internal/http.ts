@@ -34,7 +34,7 @@ const IMAGE_REJECTIONS = new Set([400, 413, 415, 422]);
 export async function postJson(provider: Provider, send: typeof fetch, endpoint: string, headers: Record<string, string>, body: unknown, signal: AbortSignal): Promise<unknown> {
   let res: Response;
   try {
-    res = await send(endpoint, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body), signal });
+    res = await send(endpoint, { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json', ...headers }, signal });
   } catch (error) {
     signal.throwIfAborted();
     throw new Error(`${provider.name}: request failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
