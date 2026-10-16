@@ -5,7 +5,8 @@ const finish = (slo, checks, info) => ({
   checks, ...(info ? { info } : {}),
 });
 const flat = (r) => r.p50LastUs <= 2 * r.p50FirstUs + 100;
-const ratePass = (r) => r.achievedRate >= 0.999 * r.targetRate && flat(r) && r.failed === 0;
+const ratePass = (r) => r.achievedRate >= 0.999 * r.targetRate && flat(r) && r.failed === 0 && r.rejected === 0;
+const MIN_PROBES = 200;
 const median = (values) => {
   const sorted = [...values].sort((a, b) => a - b);
   return (sorted[Math.floor((sorted.length - 1) / 2)] + sorted[Math.floor(sorted.length / 2)]) / 2;
@@ -18,7 +19,7 @@ export function evaluateGates(reports) {
   const knee = {};
   for (const mix of mixes) {
     const runs = open.filter((r) => r.mix === mix && r.targetRate === 50000);
-    one.push(runs.length < 3 ? missing(mix, `${runs.length}/3 runs at 50000 over 1000 scopes for 60 s`) : pass(mix, runs.every((r) => ratePass(r) && r.attendCores <= 1), 'rate, flat p50, no failures, at most one core'));
+    one.push(runs.length < 3 ? missing(mix, `${runs.length}/3 runs at 50000 over 1000 scopes for 60 s`) : pass(mix, runs.every((r) => ratePass(r) && r.attendCores <= 1), 'rate, flat p50, no failures or rejections, at most one core'));
     const rates = [...new Set(open.filter((r) => r.mix === mix).map((r) => r.targetRate))];
     knee[mix] = Math.max(0, ...rates.filter((rate) => open.filter((r) => r.mix === mix && r.targetRate === rate).every(ratePass)));
   }
@@ -26,9 +27,10 @@ export function evaluateGates(reports) {
   for (const mix of mixes) for (const rate of [10000, 30000, 50000]) {
     const all = open.filter((r) => r.mix === mix && r.targetRate === rate);
     const pinned = all.filter((r) => r.runner.pinned);
+    const floored = pinned.filter((r) => r.noopFloorFailed === 0 && r.noopFloorRate >= 0.999 * r.targetRate);
     const name = `${mix}/${rate}`;
-    two.push(pinned.length < 3 ? missing(name, `${pinned.length}/3 pinned runs over 1000 scopes for 60 s; ${all.length - pinned.length} unpinned`)
-      : pass(name, pinned.every((r) => r.engineUs.p99 <= 100 && r.latencyUs.p99 - r.noopFloorUs.p99 <= 100), 'engine and floor-adjusted p99 at most 100 us'));
+    two.push(floored.length < 3 ? missing(name, `${floored.length}/3 pinned runs with usable floors over 1000 scopes for 60 s; ${all.length - pinned.length} unpinned; ${pinned.length - floored.length} with unusable floor`)
+      : pass(name, floored.every((r) => ratePass(r) && r.engineUs.p99 <= 100 && r.latencyUs.p99 - r.noopFloorUs.p99 <= 100), 'rate within 0.1%, flat p50, no failures or rejections, clean floor at rate, engine and floor-adjusted p99 at most 100 us'));
   }
   const alloc = reports.filter((r) => r.report === 'alloc');
   const three = [];
@@ -52,28 +54,46 @@ export function evaluateGates(reports) {
     }
   }
   const durable = reports.filter((r) => r.report === 'durable');
-  const four = [
-    ...['sqlite', 'postgres', 'redis'].filter((store) => !durable.some((r) => r.durability.store === store)).map((store) => missing(store, 'no durable report')),
-    ...durable.flatMap((r, i) => [
-      pass(`report ${i + 1}/grouping`, r.eventsPerSecond < 1000 || r.eventsPerCommit > 1, 'more than one event/commit at rate >=1000'),
-      pass(`report ${i + 1}/bytes`, r.bytesWrittenPerEvent <= 4 * r.eventBytes, 'at most four times event bytes'),
-    ]),
+  const workloads = [
+    ['200x700', (r) => r.scopes >= 200 && r.eventsPerScope >= 700],
+    ['1000 scopes', (r) => r.scopes >= 1000 && r.scopes * r.eventsPerScope >= 140000],
   ];
+  const sized = durable.filter((r) => workloads.some(([, matches]) => matches(r)));
+  const modeLabel = ({ durability: d }) => d.store === 'sqlite' ? `sqlite ${d.journalMode}/${d.synchronous}${d.worker ? ' worker' : ''}`
+    : d.store === 'postgres' ? `postgres synchronous_commit=${d.synchronousCommit}`
+      : d.store === 'redis' ? `redis appendonly${d.appendonly ? '' : '=false'}` : d.store;
+  const modes = ['sqlite WAL/NORMAL', 'sqlite WAL/FULL', 'sqlite DELETE/FULL', 'postgres synchronous_commit=on', 'redis appendonly'];
+  const four = [];
+  for (const mode of modes) for (const [workload, matches] of workloads) for (const window of [50, 250]) {
+    if (!sized.some((r) => modeLabel(r) === mode && matches(r) && r.maxWindow === window)) four.push(missing(`${mode}/${workload}/W=${window}`, 'no report of at least this size'));
+  }
+  for (const r of sized) {
+    const name = `${modeLabel(r)}/${r.scopes}x${r.eventsPerScope} W=${r.maxWindow}`;
+    four.push(r.eventsPerSecond < 1000 ? missing(`${name}/grouping`, 'below 1000 events/s, so grouping at that rate is not shown')
+      : pass(`${name}/grouping`, r.eventsPerCommit > 1, 'more than one event per commit at 1000 events/s or more'));
+    four.push(pass(`${name}/bytes`, r.bytesWrittenPerEvent <= 4 * r.eventBytes, 'at most four times the event bytes'));
+  }
   const latency = reports.filter((r) => r.report === 'latency');
   const five = [];
   const classes = [
     ['memory idle', (r) => r.durability.store === 'memory' && r.load === null, () => 2000],
     ['memory loaded', (r) => r.durability.store === 'memory' && r.load?.targetRate >= 50000, () => 10000],
-    ['durable', (r) => r.durability.store !== 'memory', (r) => r.commitLatencyMs === null ? null : 2000 * r.commitLatencyMs.p99 + 2000],
+    ...['sqlite', 'postgres', 'redis'].map((store) => [store, (r) => r.durability.store === store, (r) => r.commitLatencyMs === null ? null : 2000 * r.commitLatencyMs.p99 + 2000]),
   ];
+  const usable = (r) => r.errors === 0 && r.samples >= MIN_PROBES && (r.load === null || (r.load.achievedRate >= 0.999 * r.load.targetRate && r.load.scopes >= 1000));
+  const usableReports = [];
   for (const [name, matches, limit] of classes) {
     const rows = latency.filter(matches);
-    if (!rows.length) five.push(missing(name, 'missing report'));
-    else for (const [i, r] of rows.entries()) {
+    for (const [i, r] of rows.entries()) if (r.errors > 0) five.push(pass(`${name}/${i + 1}`, false, `${r.errors} failed probes`));
+    const accepted = rows.filter(usable);
+    usableReports.push(...accepted);
+    if (!accepted.length) five.push(missing(name, !rows.length ? 'missing report' : `none had at least ${MIN_PROBES} probes with none failed${rows.some((r) => r.load !== null) ? ' and the full load over 1000 scopes' : ''}`));
+    for (const [i, r] of rows.entries()) {
+      if (!usable(r)) continue;
       const threshold = limit(r);
       five.push(threshold === null ? missing(`${name}/${i + 1}`, 'missing commit latency') : pass(`${name}/${i + 1}`, r.nonJudgeUs.p99 <= threshold, `non-judge p99 <= ${threshold} us`));
     }
   }
-  five.push(latency.some((r) => r.commitToSubscriberUs !== null) ? pass('commit to subscriber', true, 'segment reported; no bound specified') : missing('commit to subscriber', 'MCP Events segment unavailable'));
-  return [finish(1, one, { knee }), finish(2, two), finish(3, three), finish(4, four), finish(5, five)];
+  five.push(usableReports.some((r) => r.commitToSubscriberUs !== null) ? pass('commit to subscriber', true, 'segment reported; no bound specified') : missing('commit to subscriber', 'MCP Events segment unavailable'));
+  return [finish(1, one, { knee }), finish(2, two), finish(3, three), finish(4, four, durable.length > sized.length ? { undersized: durable.length - sized.length } : undefined), finish(5, five)];
 }

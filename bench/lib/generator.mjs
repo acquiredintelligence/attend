@@ -17,6 +17,8 @@ export async function drive({ socketPath, schedule, keepLines = false, stall = n
   let acked = 0;
   let next = 0;
   let measured = 0;
+  let rejected = 0;
+  let seconds = 0;
   let t0;
   let epoch0;
   let lastAck;
@@ -31,8 +33,17 @@ export async function drive({ socketPath, schedule, keepLines = false, stall = n
   const completion = new Promise((resolve, reject) => { resolveDone = resolve; rejectDone = reject; });
   const request = http.request({ socketPath, path: '/v1/ingest/stream', method: 'POST', agent: false, headers: { 'content-type': 'application/x-ndjson', 'transfer-encoding': 'chunked' } });
   const finish = async () => {
+    const end = performance.now();
     if (closed) return;
     closed = true;
+    for (let i = Math.max(acked, warmCount); i < total; i += 1) {
+      const value = Math.max(0, (end - (t0 + schedule.intendedMs(i))) * 1000);
+      latency.record(value);
+      if (i - warmCount < (total - warmCount) / 5) first.record(value);
+      if (i - warmCount >= (total - warmCount) * 4 / 5) last.record(value);
+    }
+    const spanEnd = acked === total ? lastAck : end;
+    seconds = t0 === undefined || spanEnd === undefined ? 0 : Math.max(0, (spanEnd - (t0 + schedule.intendedMs(warmCount))) / 1000);
     clearImmediate(immediate);
     clearTimeout(drain);
     try { await onEnd(); resolveDone(); } catch (error) { rejectDone(error); }
@@ -46,6 +57,7 @@ export async function drive({ socketPath, schedule, keepLines = false, stall = n
     response.on('error', rejectDone);
     response.on('end', () => { if (acked < total && !closed) rejectDone(new Error('ingest stream ended before all acknowledgments')); });
     response.on('data', (chunk) => {
+      if (closed) return;
       partial += chunk;
       const lines = partial.split('\n');
       partial = lines.pop();
@@ -65,17 +77,24 @@ export async function drive({ socketPath, schedule, keepLines = false, stall = n
         }
         if (frame.through !== undefined) {
           if (!Number.isInteger(frame.through) || frame.through < acked || frame.through > next) { rejectDone(new Error('invalid ack prefix')); return; }
+          if (frame.rejected !== undefined && (!Array.isArray(frame.rejected) || frame.rejected.some((index, i) => !Number.isInteger(index) || index < acked || index >= frame.through || (i > 0 && index <= frame.rejected[i - 1])))) {
+            rejectDone(new Error('invalid rejection list')); return;
+          }
           const now = performance.now();
+          let rejection = 0;
           for (; acked < frame.through; acked += 1) {
             if (ackTimes) ackTimes[acked] = now;
+            const isRejected = frame.rejected?.[rejection] === acked;
+            if (isRejected) { rejected += 1; rejection += 1; }
             if (acked < warmCount) continue;
+            lastAck = now;
+            if (isRejected) continue;
             const value = (now - (t0 + schedule.intendedMs(acked))) * 1000;
             latency.record(Math.max(0, value));
             service.record(Math.max(0, (now - sent[acked]) * 1000));
             if (acked - warmCount < (total - warmCount) / 5) first.record(Math.max(0, value));
             if (acked - warmCount >= (total - warmCount) * 4 / 5) last.record(Math.max(0, value));
             measured += 1;
-            lastAck = now;
           }
           if (acked === total) void finish();
         }
@@ -121,9 +140,8 @@ export async function drive({ socketPath, schedule, keepLines = false, stall = n
   request.flushHeaders();
   try {
     await completion;
-    const seconds = lastAck === undefined ? 0 : Math.max(0, (lastAck - (t0 + schedule.intendedMs(warmCount))) / 1000);
     return {
-      latency, service, first, last, total, acked, failed: total - acked, measured,
+      latency, service, first, last, total, acked, failed: total - acked, rejected, measured,
       achievedRate: seconds ? measured / seconds : 0, generatorMaxLagMs: maxLag, seconds,
       ...(keepLines ? { lines: { intended, sent, acked: ackTimes } } : {}),
     };

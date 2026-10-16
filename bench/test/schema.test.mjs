@@ -3,10 +3,30 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import { join } from 'node:path';
 import { validateReport } from '../lib/schema.mjs';
+import { openLoopReport } from '../lib/openloop.mjs';
+import { createHistogram } from '../lib/histogram.mjs';
 import { openReport, allocReport, durableReport, latencyReport, cli } from './helpers.mjs';
 
 test('Schemas accept one complete fixture per report', () => {
   for (const fixture of [openReport(), allocReport(), durableReport(), latencyReport()]) expect(validateReport(fixture)).toEqual({ ok: true, report: fixture });
+});
+test('Open-loop reports separate unacknowledged lines, rejections and floor evidence', () => {
+  const histogram = createHistogram();
+  histogram.record(7);
+  const report = openLoopReport({
+    run: { achievedRate: 42, seconds: 60, latency: histogram, first: histogram, last: histogram, failed: 2, rejected: 3, generatorMaxLagMs: 0 },
+    stats: { engine: histogram.toJSON(), rejected: 99, wallMs: 0, gcMs: 0, maxLagMs: 0, windows: 0, meanWindow: 0, p99Window: 0, port: 'state', adapterVersion: 'test' },
+    runner: openReport().runner,
+  }, { schedule: { targetRate: 50 }, scopes: 1000, mix: 'continuous', floor: { latency: histogram, achievedRate: 49, failed: 4, rejected: 5 } });
+  expect(report).toMatchObject({ failed: 2, rejected: 3, noopFloorRate: 49, noopFloorFailed: 9, noopFloorUs: { p50: 7, p99: 7, p999: 7, max: 7 } });
+  expect(validateReport(report)).toEqual({ ok: true, report });
+});
+test.each(['rejected', 'noopFloorRate', 'noopFloorFailed'])('Open-loop schema requires a finite nonnegative %s', (field) => {
+  for (const value of [undefined, -1, Infinity]) {
+    const result = validateReport(openReport({ [field]: value }));
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain(field);
+  }
 });
 test('Schemas reject missing, extra, enum, negative, percentile and durability fields with paths', () => {
   const missing = openReport();

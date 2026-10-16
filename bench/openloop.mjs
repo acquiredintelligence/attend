@@ -14,6 +14,6 @@ try {
     const targetOptions = { dist: options.dist, cpus: options['target-cpus'] };
     const noop = await runTarget({ ...targetOptions, mode: 'noop' }, schedule);
     const result = options.mix === 'noop' ? noop : await runTarget({ ...targetOptions, mode: 'attend' }, schedule);
-    emit(openLoopReport(result, { schedule, scopes, mix: options.mix, floor: noop.run.latency.percentiles() }), options.out);
+    emit(openLoopReport(result, { schedule, scopes, mix: options.mix, floor: noop.run }), options.out);
   }
 } catch (error) { console.error(error.stack); process.exitCode = 1; }

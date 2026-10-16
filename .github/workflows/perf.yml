@@ -51,7 +51,9 @@ jobs:
         env:
           BASELINE: ${{ inputs.baseline || '1a05f39' }}
         run: |
-          git worktree add ../attend-baseline "$BASELINE"
+          rm -rf ../attend-baseline
+          git worktree prune
+          git worktree add --detach ../attend-baseline "$BASELINE"
           cd ../attend-baseline
           pnpm install --frozen-lockfile
           pnpm build

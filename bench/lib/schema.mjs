@@ -26,6 +26,7 @@ export const DurableReport = z.strictObject({
 export const OpenLoopReport = z.strictObject({
   report: z.literal('openloop'), targetRate: number, achievedRate: number, scopes: number, seconds: number,
   mix: z.enum(['continuous', 'realistic', 'tape', 'noop']), latencyUs: Percentiles, engineUs: Percentiles, noopFloorUs: Percentiles,
+  rejected: number, noopFloorRate: number, noopFloorFailed: number,
   p50FirstUs: number, p50LastUs: number, failed: number, attendCores: number, gcShare: number, maxSchedulerLagMs: number,
   generatorMaxLagMs: number, windows: number, meanWindow: number, p99Window: number, overdueRule: z.boolean(), ...common,
 });

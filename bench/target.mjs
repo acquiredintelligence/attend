@@ -137,6 +137,7 @@ try {
     response.write(JSON.stringify({ credit }) + '\n');
     const size = 2 * credit;
     const parsed = new Float64Array(size);
+    const rejected = new Uint8Array(size);
     const done = new Uint8Array(size);
     const measured = new Uint8Array(size);
     let queue = [];
@@ -152,16 +153,23 @@ try {
     const flushAck = () => {
       ackScheduled = false;
       const now = performance.now();
+      const rejections = [];
       for (let i = written; i < through; i += 1) {
-        if (measuring && measured[i % size]) { state.lines += 1; state.engine.record((now - parsed[i % size]) * 1000); }
+        if (measuring && measured[i % size]) {
+          state.lines += 1;
+          if (!rejected[i % size]) state.engine.record((now - parsed[i % size]) * 1000);
+        }
+        if (rejected[i % size]) rejections.push(i);
+        rejected[i % size] = 0;
       }
       const count = through - written;
-      if (count && !response.destroyed) response.write(JSON.stringify({ ack: ++seq, through }) + '\n' + JSON.stringify({ credit: count }) + '\n');
+      if (count && !response.destroyed) response.write(JSON.stringify({ ack: ++seq, through, ...(rejections.length ? { rejected: rejections } : {}) }) + '\n' + JSON.stringify({ credit: count }) + '\n');
       written = through;
       if (ended && written === lineIndex && cursor === queue.length) response.end();
     };
-    const finish = (index, rejected) => {
-      if (rejected && measuring && measured[index % size]) state.rejected += 1;
+    const finish = (index, isRejected) => {
+      rejected[index % size] = isRejected ? 1 : 0;
+      if (isRejected && measuring && measured[index % size]) state.rejected += 1;
       done[index % size] = 1;
       while (through < lineIndex && done[through % size]) { done[through % size] = 0; through += 1; }
       if (through > written && !ackScheduled) { ackScheduled = true; queueMicrotask(flushAck); }

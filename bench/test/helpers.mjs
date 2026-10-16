@@ -23,7 +23,8 @@ const common = () => ({ adapterVersion: '1.2.3+abcdef0', runner: runner() });
 export const openReport = (changes = {}) => ({
   report: 'openloop', targetRate: 50000, achievedRate: 50000, scopes: 1000, seconds: 60, mix: 'continuous',
   latencyUs: percentiles(), engineUs: percentiles(), noopFloorUs: percentiles(), p50FirstUs: 10, p50LastUs: 10,
-  failed: 0, attendCores: 1, gcShare: 0, maxSchedulerLagMs: 0, generatorMaxLagMs: 0, windows: 1, meanWindow: 10, p99Window: 10,
+  failed: 0, rejected: 0, noopFloorRate: changes.targetRate ?? 50000, noopFloorFailed: 0,
+  attendCores: 1, gcShare: 0, maxSchedulerLagMs: 0, generatorMaxLagMs: 0, windows: 1, meanWindow: 10, p99Window: 10,
   overdueRule: false, ...common(), ...changes,
 });
 export const allocReport = (changes = {}) => ({ report: 'alloc', layer: 'reducer', reducer: 'step', window: 10, seenCount: 0, events: 20000, bytesPerEvent: 1000, cpuMicrosPerEvent: 1, ...common(), ...changes });
