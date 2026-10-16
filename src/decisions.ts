@@ -13,7 +13,8 @@
  * ```
  */
 import { PermanentError } from './errors.js';
-import { DEFAULT_SYSTEM, renderState, resolveCriteria } from './llm.js';
+import { DEFAULT_SYSTEM, renderState, resolveCriteria } from './internal/prompt.js';
+import { isRecord } from './internal/shared.js';
 import type { Judge, Judgment, Route } from './types.js';
 
 export interface DecisionsJudgeOptions {
@@ -101,10 +102,6 @@ function parseAnswers(body: unknown, routes: Route[], predicates: string[]): Jud
     if (answer !== undefined && isFiniteNumber(answer.probability)) answered[name] = answer.probability;
   }
   return { route, probabilities, predicates: answered };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function isFiniteNumber(value: unknown): value is number {

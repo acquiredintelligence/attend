@@ -3,7 +3,7 @@ import { createAttend } from '../src/attend.js';
 import { DEFAULT_CRITERIA, DEFAULT_SYSTEM, llmJudge, type Complete, type CompleteRequest } from '../src/llm.js';
 import { memoryStore } from '../src/memory.js';
 import { fakeClock, recordingSink } from '../src/testing.js';
-import type { DeadLetter, Event, JudgeInput, Kinded } from '../src/types.js';
+import type { DeadLetter, Event, JudgeInput, Kind } from '../src/types.js';
 
 function fakeComplete(reply: unknown) {
   const requests: CompleteRequest[] = [];
@@ -174,7 +174,7 @@ describe('llmJudge inside createAttend', () => {
       store: memoryStore(),
       judge: llmJudge({ complete: fake.complete, criteria: { interrupt: 'judge interrupt' } }),
       sink,
-      kind: (e: Event): Kinded => (e.name === 'commit' ? { kind: 'closing' } : { kind: 'consequence' }),
+      kind: (e: Event): Kind => (e.name === 'commit' ? 'closing' : 'consequence'),
       deadLetter: (letter) => {
         deadLetters.push(letter);
       },
@@ -201,7 +201,7 @@ describe('llmJudge inside createAttend', () => {
       `- wait: ${DEFAULT_CRITERIA.wait}`,
     ]);
     const window = {
-      id: 'af63dc4c8601ec8c',
+      id: '3ecbd4f2ef91c78f',
       events: [{ id: 'a', at: 0, name: 'commit', data: {}, text: 'commit a', kind: 'closing', seenAt: 1000 }],
       reason: 'closing',
       waits: 0,
@@ -211,7 +211,7 @@ describe('llmJudge inside createAttend', () => {
     };
     expect(sink.delivered).toEqual([
       {
-        id: 'af63dc4c8601ec8c',
+        id: '3ecbd4f2ef91c78f',
         scope: 's',
         route: 'interrupt',
         probabilities: { interrupt: 0.625, queue: 0.25, note: 0.125, ask: 0, skip: 0, wait: 0 },
