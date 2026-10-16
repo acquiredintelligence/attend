@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { createClient, RESP_TYPES } from 'redis';
-import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { afterAll, describe, expect, test } from 'vitest';
 import { redisLog, redisStore, type RedisSend } from '../src/redis.js';
 import { initialRecord } from '../src/step.js';
 import { crashSuite, logConformance, storeConformance } from '../src/testing.js';
@@ -26,14 +26,14 @@ async function connect(resp: 2 | 3 = 3, mapping: 'default' | 'buffers' | 'maps' 
   return (args) => client.sendCommand(args, { typeMapping });
 }
 
-let send: RedisSend;
-beforeAll(async () => {
-  send = await connect();
-});
+/** Connected on first use, inside a test, so an unreachable server fails every test rather than skipping them. */
+let main: Promise<RedisSend> | undefined;
+const shared = () => (main ??= connect());
 
 afterAll(async () => {
-  const keys = await send(['KEYS', `${run}*`]);
-  if (Array.isArray(keys) && keys.length > 0) await send(['UNLINK', ...keys.map(String)]);
+  const send = await main?.catch(() => undefined);
+  const keys = await send?.(['KEYS', `${run}*`]);
+  if (send && Array.isArray(keys) && keys.length > 0) await send(['UNLINK', ...keys.map(String)]);
   await Promise.all(closers.map((close) => close()));
 });
 
@@ -41,7 +41,7 @@ let prefixes = 0;
 const fresh = () => `${run}${prefixes++}:`;
 
 describe('redisStore conformance', () => {
-  const make = () => redisStore(send, { prefix: fresh() });
+  const make = async () => redisStore(await shared(), { prefix: fresh() });
   for (const c of storeConformance(make)) test(c.name, c.run);
   for (const c of crashSuite(make)) test(c.name, c.run, 120_000);
 });
@@ -51,11 +51,11 @@ describe('redisStore conformance over RESP2 with Buffer replies', () => {
 });
 
 describe('redisLog conformance without a blocking connection', () => {
-  for (const c of logConformance(() => redisLog(send, { prefix: fresh() }), { canBlock: false })) test(c.name, c.run);
+  for (const c of logConformance(async () => redisLog(await shared(), { prefix: fresh() }), { canBlock: false })) test(c.name, c.run);
 });
 
 describe('redisLog conformance with a blocking connection', () => {
-  for (const c of logConformance(async () => redisLog(send, { prefix: fresh(), blockingSend: await connect() }), { canBlock: true })) test(c.name, c.run, 10_000);
+  for (const c of logConformance(async () => redisLog(await shared(), { prefix: fresh(), blockingSend: await connect() }), { canBlock: true })) test(c.name, c.run, 10_000);
 });
 
 describe('redisLog conformance over RESP2 with Buffer replies', () => {
@@ -87,7 +87,7 @@ describe('redisStore across connections', () => {
   });
 
   test('a fractional dueAt is due exactly when now reaches it', async () => {
-    const store = redisStore(send, { prefix: fresh() });
+    const store = redisStore(await shared(), { prefix: fresh() });
     await store.put(record('s', 1, 100.5), 0);
     expect(await store.due(100.4, 10)).toEqual([]);
     expect(await store.due(100.5, 10)).toEqual(['s']);
@@ -125,7 +125,7 @@ describe('redisLog across connections', () => {
   });
 
   test('positions of a dozen entries appended at once sort as strings in read order', async () => {
-    const log = redisLog(send, { prefix: fresh() });
+    const log = redisLog(await shared(), { prefix: fresh() });
     await log.append('s', 'abcdefghijkl'.split('').map(event));
     const entries = await log.read('s', null, { limit: 20 });
     const positions = entries.map((e) => e.position);
@@ -137,10 +137,10 @@ describe('redisLog across connections', () => {
   test('a blocked read wakes for an append whatever shape the client decodes the XREAD map into', async () => {
     for (const mapping of ['default', 'maps', 'flat'] as const) {
       const prefix = fresh();
-      const log = redisLog(send, { prefix, blockingSend: await connect(3, mapping) });
+      const log = redisLog(await shared(), { prefix, blockingSend: await connect(3, mapping) });
       const pending = log.read('s', null, { limit: 10, blockMs: 5000 });
       await new Promise((resolve) => setTimeout(resolve, 20));
-      await redisLog(send, { prefix }).append('s', [event(mapping)]);
+      await redisLog(await shared(), { prefix }).append('s', [event(mapping)]);
       expect((await pending).map((e) => e.event.id)).toEqual([mapping]);
     }
   });
