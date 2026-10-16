@@ -103,28 +103,16 @@ attend held the log lines until the failed test closed the window. The judge cho
 
 ## How it works
 
-```text
-  app events (the firehose)
-        |   push() in-process, or NDJSON over HTTP to attend serve
-        v
-  +----------------------------------------------------------+
-  |  attend                                                  |
-  |   window    one per scope; events pile up                |
-  |   settle    the act in it is finished, or the window     |
-  |             is old, or full, or you flushed it           |
-  |   judge     reads the settled window, picks a route:     |
-  |             interrupt | queue | note | ask | skip | wait |
-  |   log       every step and decision is persisted         |
-  +----------------------------------------------------------+
-        |  a handful of decisions
-        v
-  decisions out
-        |-- in-process: your sink's handler for the route
-        '-- attend serve: MCP Events poll, stream and tools, for any MCP client
-        v
-  your agent reacts (barge in, take it next turn, add context, offer the user a prompt);
-  your app decides how each route is carried out
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/how-it-works-dark.svg">
+  <img src="docs/assets/how-it-works-light.svg" alt="An isometric machine on a bench. Event chips ride a belt into a glass window, a settle timer opens its gate, a dial gauge judges the batch and points at one of six routes, and six chutes carry the decision toward an agent at the far end." width="100%">
+</picture>
+
+<details>
+<summary>Watch it run</summary>
+<br>
+<img src="docs/assets/how-it-works.gif" alt="The machine running: log chips pile into the window, a failed test closes the act, the judge tries wait and the batch loops back, then a message arrives and the needle swings to interrupt, ringing the agent's bell." width="100%">
+</details>
 
 The judge picks the route, and your app carries it out. `interrupt` means the agent should hear this now, and your handler decides whether that cancels the turn, steers it or shows a banner. Raw events never leave attend. Only settled, judged decisions do. [How attend works](docs/how-it-works.md) walks through each step, and [the reference](docs/reference.md) lists every kind, route and default.
 
