@@ -6,7 +6,7 @@
  */
 import pg from 'pg';
 import { createAttend, defaultNotice, routes, type Decision } from 'attend';
-import { migrate, postgresStore } from 'attend/store/postgres';
+import { migrate, postgresStore } from 'attend/postgres';
 
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 await migrate(pool);

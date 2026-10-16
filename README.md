@@ -4,15 +4,113 @@
 
 Decide when an event should wake your agent.
 
-MCP Events, webhooks and app buses give an agent a stream of events, and the MCP Events draft leaves "should this wake the agent?" to the application. An agent that wakes on every event is noisy, and one behind a debounce is deaf to the message that mattered.
+An app emits a firehose of events: log lines, messages, clicks, alerts. An agent that wakes on every one is noisy, and one behind a debounce is deaf to the message that mattered. attend sits between the two. It settles each scope's events into a window, asks a judge what the agent should do about the window, and hands the decision to your app, which keeps the final say in how that route runs.
 
-attend groups each scope's events into a window, settles the window when the act in it is finished, and asks a judge whether the agent should hear about it now, after its turn, in the background, only if the user asks, or not at all. It persists every step, so a restart loses nothing.
+```text
+  app events (the firehose)
+        |   push() in-process, or NDJSON over HTTP to attend serve
+        v
+  +----------------------------------------------------------+
+  |  attend                                                  |
+  |   window    one per scope; events pile up                |
+  |   settle    the act in it is finished, or the window     |
+  |             is old, or full, or you flushed it           |
+  |   judge     reads the settled window, picks a route:     |
+  |             interrupt | queue | note | ask | skip | wait |
+  |   log       every step and decision is persisted         |
+  +----------------------------------------------------------+
+        |  ~4 to 8 decisions a minute, not thousands of events
+        v
+  decisions out
+        |-- in-process: your sink's handler for the route
+        '-- attend serve: MCP Events poll, stream and tools, for any MCP client
+        v
+  your agent reacts (barge in, take it next turn, add context, offer the user a prompt);
+  your app decides how each route is carried out
+```
+
+The judge picks the route and the app executes it: `interrupt` means "the agent should hear this now", and your handler decides whether that cancels the turn, steers it or shows a banner. Raw events never leave attend. Only settled, judged decisions do.
 
 ```sh
 npm install attend
 ```
 
 attend needs Node 22.13 or later and ships ESM only. The core has no runtime dependencies and imports nothing from Node.
+
+## Two ways to run it
+
+One engine, run either way.
+
+| | Embedded | `attend serve` |
+|---|---|---|
+| What | `createAttend` in your process | The same engine as a process of its own: a sidecar next to your app |
+| Events in | `attend.push(scope, events)` | `POST /v1/ingest` with NDJSON, from any language |
+| Decisions out | Your `sink`, called in-process | MCP Events: `events/poll`, `events/stream`, and the `attend_wait` and `attend_window` tools |
+| Use it for | **Real-time agents.** The default. Flush to delivery stays in-process, with no network hop. | Apps that are not TypeScript, several agents on one firehose, or a team that wants one shared attention service |
+
+Raw events never cross MCP, so the MCP hop carries a few decisions a minute and adds about a millisecond to a judge call that takes 140 ms or more.
+
+### attend serve
+
+```sh
+npx attend serve --store sqlite:attend.db --judge jev --kinds kinds.json
+# attend serving http://127.0.0.1:8787  (ingest POST http://127.0.0.1:8787/v1/ingest, MCP http://127.0.0.1:8787/mcp)
+```
+
+One command, no image. Every flag has an environment variable, and a flag wins.
+
+| Flag | Env | Default | |
+|---|---|---|---|
+| `--store` | `ATTEND_STORE` | `memory` | `memory`, `sqlite:<file>`, `postgres:<url>` or `redis:<url>`. Postgres and Redis need the `pg` or `redis` package installed. |
+| `--judge` | `ATTEND_JUDGE` | `rule` | `rule` interrupts on a flush and queues otherwise, with no network. `jev` reads `TYPESAFE_API_KEY`. `decisions` reads `OPENAI_API_KEY` and needs `--judge-model`. |
+| `--kinds` | `ATTEND_KINDS` | none | Event name to kind, as inline JSON or a file: `{"user.said":"flush","build.failed":"closing"}` |
+| `--default-kind` | `ATTEND_DEFAULT_KIND` | `consequence` | Kind for names `--kinds` does not list |
+| `--host`, `--port`, `--socket` | `ATTEND_HOST`, `ATTEND_PORT`, `ATTEND_SOCKET` | `127.0.0.1`, `8787` | Port 0 picks a free one. A socket path replaces host and port. |
+| `--act-threshold` | `ATTEND_ACT_THRESHOLD` | off | See [the act threshold](#the-act-threshold) |
+| `--token` | `ATTEND_TOKEN` | none | Require `Authorization: Bearer <token>` on ingest and MCP |
+
+Send events from anything that can POST:
+
+```sh
+curl -H 'content-type: application/x-ndjson' --data-binary @events.ndjson http://127.0.0.1:8787/v1/ingest
+# {"scope":"ops/db","id":"a1","at":1760570000123,"name":"alert.fired","data":{},"text":"replica lag 40s on db-2"}
+# {"scope":"ops/db","end":true}
+```
+
+A line is an event, `{"scope", "flush": true}` or `{"scope", "end": true}`. The reply is `{accepted, duplicates, rejected: [{line, scope, error}]}` once every accepted line has committed, and a `429` with `Retry-After` when attend is over its limit. `POST /v1/ingest/stream` keeps one NDJSON request open and answers with acks and credits.
+
+An agent hears the decisions by subscribing to `attention.decision` on `/mcp`. Hosts that do not subscribe call the `attend_wait` tool in a loop. In TypeScript, `decisionFeed` from `attend/mcp` keeps the cursor for you. This is [`examples/serve.ts`](examples/serve.ts), which runs the server and a subscriber in one process:
+
+```ts
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import { createAttend, memoryStore } from 'attend';
+import { decisionFeed } from 'attend/mcp';
+import { serve } from 'attend/server';
+
+const store = memoryStore();
+const attend = createAttend({
+  store,
+  kind: (event) => (event.name === 'page.acked' ? 'flush' : event.name === 'alert.fired' ? 'closing' : 'consequence'),
+  judge: async ({ window }) => ({ route: window.reason === 'flush' ? 'interrupt' : 'note' }),
+  sink: 'log',
+  deadLetter: 'log',
+});
+
+const server = serve(attend, store, { listen: { port: 0 } });
+await server.ready;
+const url = server.url();
+console.log(`attend serving ${url}`);
+
+const client = new Client({ name: 'pager-agent', version: '1.0.0' });
+// The SDK's class types sessionId as optional, which exactOptionalPropertyTypes rejects.
+await client.connect(new StreamableHTTPClientTransport(new URL(`${url}/mcp`)) as Transport);
+const stop = new AbortController();
+const feed = decisionFeed(client, { cursor: null, signal: stop.signal })[Symbol.asyncIterator]();
+```
+
+`serve(attend, store, options)` is the same thing as a library call: it runs `attend.run`, the events server over `store.log` and the ingest routes on one HTTP listener. Give it `principal` to authorize by scope prefix, and close it with `await server.close()`.
 
 ## Quickstart
 
@@ -102,11 +200,11 @@ attend held the log lines until the failed test closed the window. The judge cho
   sink.deliver(decision)    at least once, idempotent on the decision id
 ```
 
-1. A source hands events to a scope. A scope is whatever one agent attends to: a conversation, a repo or a device. Each scope has one record, which holds a cursor per attached source, the open window, the judge slot and the outbox.
+1. A source hands events to a scope. A scope is whatever one agent attends to: a conversation, a repo or a device. Each scope has one persisted state: a cursor per attached source, the open window, the judge slot and the outbox.
 2. `kind(event)` gives each event a settle role when it arrives. attend stores the kind on the event, so a later change to `kind` never reinterprets an open window.
 3. The window settles at the earliest deadline among its events. A window that holds only `consequence` and `context` events never settles.
 4. The judge sees the settled window and picks a route. One judge call runs per scope at a time. Events that arrive during the call wait in the next window.
-5. The sink receives a `Decision` that carries the route, the window, a probability for each route and the answers to any predicates. The judge never writes text. `defaultNotice(decision)` builds the agent's notice from the events.
+5. The decision is appended to the store's decision log in the same write as the state change, so a restart loses nothing. In-process, the sink receives it; over `attend serve`, subscribers read it from the log. It carries the route, the window, a probability for each route and the answers to any predicates. The judge never writes text. `defaultNotice(decision)` builds the agent's notice from the events.
 
 ### Kinds
 
@@ -119,7 +217,7 @@ attend held the log lines until the failed test closed the window. The judge cho
 | `consequence` | System output: a log line, a status change, a tool result | Never. It joins the open window. |
 | `context` | The agent's own output | Never. It joins the open window as context for the judge, and `defaultNotice` leaves it out. |
 
-`closing`, `flush`, `continuous` and `passive` events are acts: things that happen in the scope and can call for the agent, whether the user did them or an outside party did. A window also settles when its first act is `maxWindowMs` old (reason `age`), or when you call `attend.flush(scope)` (reason `forced`, with `wait` not offered). When a window passes `maxEvents`, attend drops its oldest consequence and context events and counts them in `window.dropped`. If the window is still too big, it settles with reason `overflow`. attend never drops an act. Consequence and context events that wait longer than `maxWindowMs` for an act are dropped and counted the same way.
+`closing`, `flush`, `continuous` and `passive` events are acts: things that happen in the scope and can call for the agent, whether the user did them or an outside party did. A window also settles when its first act is `maxWindowMs` old (reason `age`), when it fills its share of the judge's context window (reason `size`, see [the window budget](#the-window-budget)), when you call `attend.end(scope)` because the producer knows the unit is over (reason `closing`, `wait` still offered), or when you call `attend.flush(scope)` (reason `forced`, with `wait` not offered). When a window passes `maxEvents`, attend drops its oldest consequence and context events and counts them in `window.dropped`. If the window is still too big, it settles with reason `overflow`. attend never drops an act. Consequence and context events that wait longer than `maxWindowMs` for an act are dropped and counted the same way.
 
 A system event that should wake the agent on its own, such as a failed deploy or a fired alert, needs an act kind. `closing` is the usual choice.
 
@@ -177,6 +275,8 @@ MCP events carry no one-line summary, so `Event.text` stays unset and `defaultNo
 
 ## Judges
 
+**The speed default is a system-one classifier.** `jevJudge` (TypeSafe's Jev, with your own TypeSafe key) and `decisionsJudge` (the OpenAI Decisions API) answer a fixed multiple-choice question with probabilities in roughly 140 ms or more, which is what a real-time agent can afford on every settled window. `llmJudge` calls a general model you already use; it is slower, and its self-reported probabilities are close to one-hot. Use it when you want reasoning over speed.
+
 A judge is a function, `(input: JudgeInput, signal: AbortSignal) => Promise<Judgment>`. It gets the settled `window`, the `routes` on offer with your criteria, your `guidance`, the `predicates` to answer, live `facts` from `context()` and the scope's `recent` verdicts. It returns `{ route, probabilities?, predicates? }`.
 
 - Throw to retry with backoff. Throw a `PermanentError` to dead-letter the window at once.
@@ -225,7 +325,7 @@ export const judge = llmJudge({
 
 ### jevJudge
 
-`jevJudge` from `attend/jev` calls TypeSafe's Jev, a classifier built for this kind of question, with your own TypeSafe key. It asks one `choice` question for the route and one `noul` question per predicate, and sends the state as JSON. The model defaults to `jev-latest`; `jev-preview`, `jev-1.14.0` and `jev-1.13.0` are the others. Pass `endpoint` to go through OpenRouter or LiteLLM, and `longContext: true` for 262k tokens of context at some cost in speed and accuracy.
+`jevJudge` from `attend/jev` calls TypeSafe's Jev, a classifier built for this kind of question, with your own TypeSafe key. It asks one `choice` question for the route and one `noul` question per predicate, and sends the state as JSON. The model defaults to `jev-latest`; `jev-preview`, `jev-1.14.0` and `jev-1.13.0` are the others. Pass `endpoint` to go through OpenRouter or LiteLLM, and `longContext: true` for 262k tokens of context at some cost in speed and accuracy. Its probabilities are real, so [the act threshold](#the-act-threshold) works with it.
 
 ```ts
 import { jevJudge } from 'attend/jev';
@@ -244,6 +344,33 @@ export const judge = decisionsJudge({ apiKey: process.env.OPENAI_API_KEY ?? '', 
 ```
 
 Both hosted judges retry network errors and 408, 429 and 5xx responses, and dead-letter the window at once on any other 4xx, on a billing or quota 429, and when the model refuses the route question. Every error from a response carries `status`, `requestId` and `retryAfterMs`. Both return the classifier's `confidence` in the route on `decision.confidence`.
+
+### The window budget
+
+A window must never overload the judge that reads it. A judge declares its input budget (`jevJudge` declares 32k tokens, or 262k with `longContext`; `llmJudge` and `decisionsJudge` take `contextTokens`), and attend turns it into a size limit on the open window: `(contextTokens - reservedTokens) * windowShare * bytesPerToken`, with `windowShare` defaulting to 0.5. attend keeps a running size estimate for each window as events arrive. A window that reaches its share settles early with reason `size`, and a judge that still gets more than fits drops sheddable events (consequence and context, oldest first) when it renders and never an act or a flush. As a backstop, a provider's context-length rejection triggers exactly one retry with the window halved. A judge that declares no budget leaves the limit off. Set `settle.maxWindowBytes` yourself to override.
+
+### The act threshold
+
+By default the judge's route stands. A judge that returns real probabilities (`jevJudge`, `decisionsJudge`) also ranks how much the agent should act, and only your app knows whether an interruption or a missed moment costs more. Set `actThreshold` in (0, 1] on `createAttend`, and the route becomes an acting route (`interrupt` or `ask`, whichever is likelier and offered) exactly when `p(interrupt) + p(ask)` is at least the threshold, and a quieter route (`skip`, `note`, `queue` or `wait`, by probability) otherwise. It is off by default. A judgment without probabilities is never changed, and a changed route emits a `routeThresholded` trace. The threshold is applied before the decision is logged, so replays stay deterministic.
+
+Pick it from your own traffic instead of guessing. Replay a recorded stream with the threshold off, record each judgment, and `suggestThreshold` from `attend/testing` returns the smallest threshold whose acts fit an interruptions-per-hour budget, with the rate at every candidate:
+
+```ts
+import { suggestThreshold } from 'attend/testing';
+import type { Judge, Judgment } from 'attend';
+
+export const judgments: Judgment[] = [];
+export const recording = (judge: Judge): Judge => async (input, signal) => {
+  const judgment = await judge(input, signal);
+  judgments.push(judgment);
+  return judgment;
+};
+
+// After replaying an hour of recorded events through createAttend({ judge: recording(judge), ... }):
+export const { threshold, candidates } = suggestThreshold(judgments, { durationMs: 3_600_000, maxActsPerHour: 6 });
+```
+
+`threshold` is null when no threshold fits the budget. `llmJudge`'s probabilities are near one-hot, so a threshold changes little there.
 
 ### Images
 
@@ -295,22 +422,27 @@ const attend = createAttend({
 
 ## Storage
 
+One `ScopeStore` holds each scope's latest snapshot, the inputs committed since it, the due index and the decision log. attend replays the short tail of inputs over the snapshot to recover a scope, so a restart loses nothing.
+
 | Store | Create it | Guarantees | Caveats |
 |---|---|---|---|
-| Memory | `memoryStore()` from `attend` | Compare-and-swap within one process. | State is lost when the process exits. Use it for tests, demos and browser apps. |
-| SQLite | `sqliteStore(db)` from `attend/sqlite`, with `db` a `node:sqlite` `DatabaseSync`, a `bun:sqlite` `Database`, or any object with the same `exec` and `prepare` | Compare-and-swap with a versioned `UPDATE`. Durable on a file. Creates its table and index on construction. | Calls are synchronous and block the event loop for their duration. Processes that share the file must run on one host. |
-| Postgres | `postgresStore(pool)` from `attend/postgres`, after `await migrate(pool)` | Compare-and-swap with a versioned `UPDATE`, or `INSERT ... ON CONFLICT DO NOTHING` for a new scope. Durable. Safe for many replicas. | Run `migrate()` at deploy with a role that can create tables. The store needs only `SELECT`, `INSERT`, `UPDATE` and `DELETE`. The table prefix must be lowercase. |
-| Redis | `redisStore((args) => client.sendCommand(args))` from `attend/redis` | Compare-and-swap and the due index change together in one Lua script. Redis 6.2 or later. | Durable only as far as your Redis persistence settings. On Redis Cluster, the script touches each record key and the shared due key, so all of them must hash to one slot. Put a hash tag in the prefix, such as `redisStore(send, { prefix: 'attend:{app}:' })`. That puts every scope on one shard. |
+| Memory | `memoryStore()` from `attend` | Atomic within one process. | State is lost when the process exits. Use it for tests, demos and browser apps. |
+| SQLite | `sqliteStore(db)` from `attend/sqlite`, with `db` a `node:sqlite` `DatabaseSync`, a `bun:sqlite` `Database`, or any object with the same `exec` and `prepare`. `sqliteStore({ file, worker: true })` runs the database on a worker thread. | One transaction per group of writes. Durable on a file. Creates its tables on construction. | Given a handle, calls block the event loop for their duration; the worker mode does not. Processes that share the file must run on one host. |
+| Postgres | `postgresStore(pool)` from `attend/postgres`, after `await migrate(pool)` | One statement commits a group of scopes' writes together, and decisions wake subscribers in other processes through `LISTEN` and `NOTIFY` when you pass a `listener`. Durable. Safe for many replicas. | Run `migrate()` at deploy with a role that can create tables. The store needs only `SELECT`, `INSERT`, `UPDATE` and `DELETE`. The table prefix must be lowercase. PostgreSQL 13 or later. |
+| Redis | `redisStore((args) => client.sendCommand(args))` from `attend/redis` | One script validates and writes a group of scopes' writes together, and keeps the decision log in a stream. Redis 6.2 or later. | Durable only as far as your Redis persistence settings. On Redis Cluster, a group's keys must hash to one slot. Put a hash tag in the prefix, such as `redisStore(send, { prefix: 'attend:{app}:' })`. |
 
-Several processes can share one store. Any of them can `push`, and any number can `run`, because compare-and-swap lets one writer win each write and the others reload and try again. Give every process the same `kind` function, because the process that ingests an event is the one that kinds it. A scope can take several sources at once; the record keeps one cursor per `Source.key`. Attach a given source to a scope from one process only, since two processes running the same source would overwrite each other's cursor, and a second `attach` of the same key in one process throws.
+Each store also takes `retain` (decision rows kept by count or age), so the log does not grow without bound. Every store passes the same conformance and crash suites.
+
+Several processes can share one store. Any of them can `push`, and any number can `run` or serve the log: a write names the stored version it read, a writer that loses reloads and applies its input again, and every input is idempotent. Give every process the same `kind` function, because the process that ingests an event is the one that kinds it. A scope can take several sources at once; the record keeps one cursor per `Source.key`. Attach a given source to a scope from one process only, since two processes running the same source would overwrite each other's cursor, and a second `attend.attach` of the same key in one process throws.
 
 Each adapter also has an `EventLog`: `memoryLog`, `sqliteLog`, `postgresLog` and `redisLog`. When producers live in other processes and you want a durable shared log in front of attend, append to the log and attach `logSource(log, scope)` instead of calling `push`.
 
 ## Guarantees
 
-- **One record per scope.** It holds a cursor per attached source, the open window, the judge slot and the outbox. A source's cursor commits in the same write as the events it covers.
-- **Compare-and-swap on every write.** Each write names the record version it read. A writer that loses waits a few jittered milliseconds, reloads and applies its input again. Every input is idempotent, so a retry is safe. After 8 losses in a row it gives up: `push` and `flush` reject with `ConflictError`, and work in flight recovers when its lease expires.
-- **Effects only after a won write.** attend calls the judge and the sink only for state it has persisted. `push` and `flush` persist and return; the runner settles, judges and delivers. If a process crashes after a write and before its effect, the work stays in the record, and a runner retries it when its lease expires.
+- **One snapshot and a short tail per scope.** The snapshot holds the open window, the judge slot and the outbox. A write appends the inputs that changed state, and a snapshot replaces the tail once it grows past the snapshot's own size. A source's cursor commits in the same write as the events it covers.
+- **Versioned writes.** Each write names the version it read. A writer that loses waits a few jittered milliseconds, reloads and applies its input again. After 8 losses in a row it gives up: `push` and `flush` reject with `ConflictError`, and work in flight recovers when its lease expires.
+- **Effects only after a committed write.** attend calls the judge and the sink only for state it has persisted. `push` and `flush` persist and return; the runner settles, judges and delivers. If a process crashes after a write and before its effect, the work stays in the store, and a runner retries it when its lease expires.
+- **The decision log is the delivery for subscribers.** The decision row commits with the state change that made it. Subscribers read it by cursor, so a reconnect resumes where it stopped; a cursor that fell behind retention is reported as `truncated`, never silently skipped.
 - **At-least-once delivery with stable ids.** A decision's id is a hash of the scope and its window's event ids, so a redelivery carries the same id and no two scopes share one. Deliveries in one scope run one at a time, oldest first.
 - **Dead letters are never dropped.** The judge and the sink each get `retryBackoffMs.length` retries. A window that still fails becomes a dead letter, which attend retries with capped backoff until `deadLetter` accepts it. A lane that fills to its cap (`maxOutbox` decisions, `maxDeadLetters` dead letters) makes `push` and a source's `emit` reject until it drains.
 - **Crash-tested at every commit boundary.** `crashSuite` runs a scripted session once, then once more for each commit with a crash just before it and again just after it. Every run must deliver the same decision ids and dead-letter ids. CI runs it against the memory, SQLite, Postgres and Redis stores.
@@ -379,14 +511,15 @@ test('a finished build is judged after the closing grace, with its log lines', a
 
 ## Writing an adapter
 
-A store is four methods, and each one's guarantee is in its doc comment in [`src/types.ts`](src/types.ts):
+A store implements `ScopeStore` (see [`src/store/types.ts`](src/store/types.ts), where each member's guarantee is in its doc comment):
 
-- `get(scope)` returns the record exactly as it was last put, or `null`.
-- `put(record, expectedVersion)` writes only if the stored version equals `expectedVersion`, where 0 means no record exists. Of N concurrent puts at one version, exactly one returns `'ok'`, and the rest return `'conflict'` and change nothing.
-- `due(now, limit)` lists at most `limit` scopes whose `dueAt` is at or before `now`, earliest first. It reads and claims nothing.
+- `load(scope)` returns the latest snapshot and the inputs committed after it, or `null`.
+- `commit(writes)` applies each scope's write only if its stored version equals `expectedVersion` (0 means no stored scope), and returns `'ok'` or `'conflict'` for each. The inputs, the snapshot, the due value and the decision rows of one write land together or not at all. Of N concurrent writes at one version, exactly one is `'ok'`.
+- `due(now, limit, after?)` pages the scopes whose due value has passed. It reads and claims nothing.
 - `remove(scope)` forgets the scope.
+- `log` is the `DecisionLog`: the epoch, bounds, reads by position, `find`, `wait` and `trim`.
 
-Run the conformance suite and the crash suite against your adapter with any test runner. Both return named async cases. [`examples/adapter-suites.ts`](examples/adapter-suites.ts) runs them against `memoryStore` with `node:test`:
+Run the conformance suites and the crash suites against your adapter with any test runner. Each returns named async cases. [`examples/adapter-suites.ts`](examples/adapter-suites.ts) runs them against `memoryStore` with `node:test`:
 
 ```ts
 import { test } from 'node:test';
@@ -399,7 +532,7 @@ for (const c of decisionLogConformance(() => memoryStore())) test(c.name, c.run)
 for (const c of multiScopeCrashSuite(() => memoryStore())) test(c.name, c.run);
 ```
 
-The factory must return a fresh, empty store for each case. For a database, give each case its own table or key prefix. An `EventLog` adapter runs `logConformance(make, { canBlock })`, where `canBlock` says whether `read` waits for `blockMs`.
+The factory must return a fresh, empty store for each case. For a database, give each case its own table prefix or key prefix. An `EventLog` adapter runs `logConformance(make, { canBlock })`, where `canBlock` says whether `read` waits for `blockMs`.
 
 ## Defaults
 
@@ -414,6 +547,8 @@ These are round starting points, not tuned values. Override any of them with `se
 | `maxWaits` | 2 | How many times one window may wait |
 | `maxEvents` | 250 | Events one window holds. Past it, attend drops consequence and context events, then settles. |
 | `maxWindowMs` | 60000 | Age of the first act at which the window settles |
+| `windowShare` (a `createAttend` option) | 0.5 | Share of the judge's context budget a window may fill before it settles with reason `size` |
+| `actThreshold` (a `createAttend` option) | off | Act when p(interrupt) + p(ask) reaches it |
 | `retryBackoffMs` | `[1000, 4000, 16000]` | Backoff before each retry of a judge call, a delivery or a source. Its length is the retry budget for judges and sinks; a source repeats the last rung. |
 | `judgeTimeoutMs` | 15000 | Aborts a judge call. The judge's lease is twice this. |
 | `deliveryTimeoutMs` | 10000 | Lease on one delivery. An expired lease counts as a failed attempt. |
@@ -427,7 +562,7 @@ These are round starting points, not tuned values. Override any of them with `se
 
 ## Agent skill
 
-The repo ships an [Agent Skill](skills/attend/SKILL.md) that teaches a coding agent to wire attend into an app. It covers choosing kinds, picking a store and a judge, writing an idempotent sink, connecting MCP Events and testing with a fake clock. To install it in Claude Code:
+The repo ships an [Agent Skill](skills/attend/SKILL.md) that leads your coding agent through wiring attend into your app. It works out which events the app emits, which of them are signals, and which deserve which reaction, then wires it with one small module and a few call sites at your existing event chokepoints. It tells you in a few lines what it will do, asks one batch of questions with a recommended default for each, and tunes the act threshold from a replay of your own events. To install it in Claude Code:
 
 ```text
 /plugin marketplace add acquiredintelligence/attend
