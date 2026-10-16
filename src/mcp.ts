@@ -81,7 +81,11 @@ const ERROR_POLICY: Readonly<Record<number, Policy>> = {
 
 /** The longest delay `setTimeout` honours; past it the SDK's timeout fires at once. */
 const STREAM_TIMEOUT_MS = 2 ** 31 - 1;
-/** Pause before reopening a stream the server ended or the source closed, so a server that ends every stream at once never spins. */
+/**
+ * Pause before reopening a stream the server ended or the source found idle, so a server that
+ * ends every stream at once never spins. An overflow reopens at once: the source closed that
+ * stream itself, and the backlog behind it is real.
+ */
 const REOPEN_MS = 1000;
 /** Events already waiting in the inbox fold into one `emit`, so a slow store costs one write per batch rather than per event. */
 const EMIT_BATCH = 500;
@@ -232,7 +236,7 @@ function inbox(max: number, onOverflow: () => void): { push(note: Note): void; c
 
 // ─── the source ──────────────────────────────────────────────────────────────
 
-type Outcome = { kind: 'ended' } | { kind: 'failed'; error: unknown };
+type Outcome = { kind: 'ended' } | { kind: 'overflowed' } | { kind: 'failed'; error: unknown };
 
 /**
  * One subscription (name + arguments) as a `Source`, keyed `mcp:<name>:<arguments as sorted
@@ -241,8 +245,8 @@ type Outcome = { kind: 'ended' } | { kind: 'failed'; error: unknown };
  * the record's seen ring dedups redelivery. `truncated` becomes the batch's `truncated`, which
  * marks the window as a gap.
  *
- * The subscription runs until `signal` aborts. A terminated, overflowed or idle stream reopens
- * from the last committed cursor after a short pause. A request error that the server says to
+ * The subscription runs until `signal` aborts. A terminated or idle stream reopens from the last
+ * committed cursor after a short pause; an overflowed one at once. A request error that the server says to
  * retry (-32025, a request timeout) is thrown as a plain Error, so `attach` backs off through the
  * app's `retryBackoffMs` and resubscribes; any other error, and a closed Client, is thrown as a
  * `PermanentError` with the SDK error as its `cause`, and `attach` rejects.
@@ -274,6 +278,7 @@ export function mcpEventsSource(client: Client, options: McpEventsOptions): Sour
       while (delivery !== null && !signal.aborted) {
         const outcome = delivery === 'stream' ? await runStream(position.cursor, deliver, signal) : await runPoll(position, deliver, signal);
         if (signal.aborted) return;
+        if (outcome.kind === 'overflowed') continue;
         if (outcome.kind === 'ended') {
           await sleep(clock, REOPEN_MS, signal);
           continue;
@@ -400,7 +405,7 @@ export function mcpEventsSource(client: Client, options: McpEventsOptions): Sour
               return signal.aborted ? { kind: 'ended' } : { kind: 'failed', error: item.error };
             case 'overflow':
               report({ kind: 'overflow', buffered: item.buffered });
-              return { kind: 'ended' };
+              return { kind: 'overflowed' };
             case 'idle':
               report({ kind: 'idle' });
               return { kind: 'ended' };

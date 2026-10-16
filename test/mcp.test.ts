@@ -445,7 +445,7 @@ describe('mcpEventsSource over a real Client and Server', () => {
     await h.stop();
   });
 
-  test('past maxBuffered the stream closes, reopens from the committed cursor, and every event reaches the sink once', async () => {
+  test('past maxBuffered the stream closes, reopens at once from the committed cursor, and every event reaches the sink once', async () => {
     const server = mcpEventsTestServer(ALPHA);
     const client = await server.connect();
     const slow = heldStore();
@@ -460,12 +460,11 @@ describe('mcpEventsSource over a real Client and Server', () => {
     slow.release();
     await settle();
     expect(h.errors).toEqual([{ kind: 'overflow', buffered: 2 }]);
-    expect((await h.store.get('s'))?.cursors).toEqual({ [KEY]: '3' });
-    await h.clock.advance(1000);
     expect(h.streamRequests(server)).toEqual([
       { name: 'alpha', cursor: null },
       { name: 'alpha', cursor: '3' },
     ]);
+    expect((await h.store.get('s'))?.cursors).toEqual({ [KEY]: '6' });
 
     for (let round = 0; round < 10 && deliveredIds(h).length < 6; round += 1) await h.clock.advance(1000);
     expect(deliveredIds(h)).toEqual(['e1', 'e2', 'e3', 'e4', 'e5', 'e6']);
@@ -539,6 +538,36 @@ describe('mcpEventsSource over a real Client and Server', () => {
     expect((await h.store.get('s'))?.cursors).toEqual({ [KEY]: '2500' });
     await h.stop();
   }, 15_000);
+
+  test('a server that replays in bursts at 3000 events a second is kept up with, because the stream reopens at once after an overflow', async () => {
+    const server = mcpEventsTestServer(ALPHA);
+    server.burst = true;
+    const client = await server.connect();
+    const h = setup();
+    void h.attach('s', client, { mode: 'stream' });
+    await settle();
+    const RATE = 3000;
+    const SECONDS = 4;
+    const all = Array.from({ length: RATE * SECONDS }, (_, i) => `e${i + 1}`);
+    const cursorAt = async () => (await h.store.get('s'))?.cursors[KEY] ?? null;
+    const committed: (string | null)[] = [];
+    const started = performance.now();
+    for (let second = 1; second <= SECONDS; second += 1) {
+      await server.append('alpha', ...all.slice((second - 1) * RATE, second * RATE).map((id) => occ(id)));
+      await h.clock.advance(1000);
+      const budget = performance.now() + 1500;
+      while ((await cursorAt()) !== String(second * RATE) && performance.now() < budget) await settle();
+      committed.push(await cursorAt());
+    }
+    const elapsed = performance.now() - started;
+    expect({ committed, under3s: elapsed < 3000 }).toEqual({ committed: ['3000', '6000', '9000', '12000'], under3s: true });
+    expect(ingestedTotals(h)).toEqual({ count: RATE * SECONDS, duplicates: 0 });
+    expect(h.errors.filter((e) => e.kind !== 'overflow')).toEqual([]);
+    await h.clock.advance(1000);
+    await h.clock.advance(1000);
+    expect(deliveredIds(h)).toEqual(all);
+    await h.stop();
+  }, 30_000);
 
   test('a stream with no notification for idleTimeoutMs is reported idle and reopened from the committed cursor', async () => {
     const server = mcpEventsTestServer(ALPHA);
