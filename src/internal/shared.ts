@@ -45,7 +45,10 @@ function copyObject(value: object, key: string | number, depth: number): JsonVal
   if (prototype !== Object.prototype && prototype !== Array.prototype) {
     if (value instanceof Number) return toJson(Number(value), key, depth);
     if (value instanceof String) return String(value);
-    if (value instanceof Boolean) return value.valueOf();
+    if (value instanceof Boolean) {
+      const unboxed = booleanData(value);
+      if (unboxed !== undefined) return unboxed;
+    }
     if (value instanceof BigInt) throw new TypeError('attend: event data cannot hold a BigInt');
     if (prototype === null && isRawJSON?.(value)) return toJson(JSON.parse((value as { rawJSON: string }).rawJSON), key, depth);
   }
@@ -67,27 +70,41 @@ function copyObject(value: object, key: string | number, depth: number): JsonVal
   return object;
 }
 
+/** The boolean a real Boolean object wraps, read from its slot as JSON does; undefined for an object that only inherits Boolean.prototype. */
+const booleanValueOf = Boolean.prototype.valueOf;
+
+function booleanData(value: object): boolean | undefined {
+  try {
+    const unboxed: unknown = booleanValueOf.call(value);
+    return typeof unboxed === 'boolean' ? unboxed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function isPlainField(value: unknown): boolean {
   return typeof value === 'string' || typeof value === 'boolean' || value === null || (typeof value === 'number' && Number.isFinite(value) && !Object.is(value, -0));
 }
 
-/** An event the caller cannot reach, copied as JSON: what every store would persist. */
+/**
+ * An event the caller cannot reach: a plain JSON value, the same on every store. Each property is
+ * read once, so a getter or Proxy cannot hand the stores a value the checks never saw.
+ */
 export function copyEvent(event: Event): Event {
   if (typeof event === 'object' && event !== null && Object.getPrototypeOf(event) === Object.prototype && typeof (event as { toJSON?: unknown }).toJSON !== 'function') {
-    let plain = true;
-    for (const name in event) {
-      if (name !== 'data' && !(Object.hasOwn(event, name) && isPlainField((event as unknown as Record<string, unknown>)[name]))) {
-        plain = false;
-        break;
-      }
-    }
-    if (plain) {
-      const data = toJson(event.data, 'data', 1);
+    const fields: Record<string, unknown> = { ...event };
+    if (Object.getOwnPropertySymbols(fields).length === 0 && Object.keys(fields).every((name) => name === 'data' || isPlainField(fields[name]))) {
+      const data = toJson(fields.data, 'data', 1);
       if (!isRecord(data)) throw new TypeError('attend: event data must be a JSON object');
-      return { ...event, data };
+      fields.data = data;
+      return fields as unknown as Event;
     }
+    return checkedEvent(toJson(fields, '', 0));
   }
-  const copied = toJson(event, '', 0);
+  return checkedEvent(toJson(event, '', 0));
+}
+
+function checkedEvent(copied: JsonValue | undefined): Event {
   if (!isRecord(copied) || !isRecord(copied.data)) throw new TypeError('attend: event data must be a JSON object');
   return copied as unknown as Event;
 }

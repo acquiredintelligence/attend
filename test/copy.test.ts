@@ -129,6 +129,33 @@ describe('copyEvent copies data exactly as JSON.parse(JSON.stringify(data))', ()
     expect(copyEvent({ id: 'e', at, name: 'n', data: {}, text: undefined } as unknown as Event)).toStrictEqual({ id: 'e', at: 5, name: 'n', data: {} });
   });
 
+  test('each field is read once, so a getter cannot slip a value past the checks', () => {
+    let reads = 0;
+    const event = { id: 'e', name: 'n', data: { a: 1 }, get at() { reads += 1; return reads === 1 ? 0 : 1n; } };
+    const copied = copyEvent(event as unknown as Event);
+    expect(reads).toBe(1);
+    expect(copied).toStrictEqual({ id: 'e', name: 'n', data: { a: 1 }, at: 0 });
+    expect(viaJson(copied)).toStrictEqual(copied);
+  });
+
+  test('a toJSON in data that adds a field to the event cannot reach the copy unchecked', () => {
+    const event: Record<string, unknown> = { id: 'e', at: 0, name: 'n' };
+    event.data = { x: { toJSON: () => { event.late = 1n; return 1; } } };
+    const copied = copyEvent(event as unknown as Event);
+    expect(copied).toStrictEqual({ id: 'e', at: 0, name: 'n', data: { x: 1 } });
+  });
+
+  test('a patched Boolean.prototype.valueOf cannot put a non-JSON value in the copy', () => {
+    const original = Boolean.prototype.valueOf;
+    Boolean.prototype.valueOf = function () { return { x: 1n } as unknown as boolean; };
+    try {
+      const copied = copyEvent(event({ b: Object(true) }));
+      expect(copied.data).toStrictEqual({ b: true });
+    } finally {
+      Boolean.prototype.valueOf = original;
+    }
+  });
+
   test('a repeated object that is not a cycle is copied twice', () => {
     const shared = { x: 1 };
     expect(copyEvent(event({ a: shared, b: [shared, shared] })).data).toEqual({ a: { x: 1 }, b: [{ x: 1 }, { x: 1 }] });
