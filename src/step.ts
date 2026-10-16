@@ -375,11 +375,8 @@ function onJudged(ctx: Ctx, r: ScopeRecord, input: Extract<Input, { kind: 'judge
   return r;
 }
 
-interface Validated {
-  route: Route;
-  probabilities: Record<Route, number>;
-  predicates: Record<string, number>;
-}
+/** A judgment after validation: the decision's vectors, with the route still allowed to be `wait`. */
+type Validated = Pick<Decision, 'probabilities' | 'predicates'> & { route: Route };
 
 function unit(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1 ? value : null;
