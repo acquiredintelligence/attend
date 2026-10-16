@@ -323,3 +323,113 @@ describe('decisionsJudge images', () => {
     expect(twice.calls).toHaveLength(2);
   });
 });
+
+const CONTEXT_BODY = { error: { message: 'Your input exceeds the context window of this model.', type: 'invalid_request_error', param: 'input', code: 'context_length_exceeded' } };
+const TWO_EVENTS: JudgeInput = { ...input, window: { ...input.window, events: [...input.window.events, { id: 'b', name: 'newest', kind: 'closing', data: { env: 'prod' }, at: 0, seenAt: 9000 }] } };
+const HALVED_INPUT =
+  '{"window":{"reason":"closing","waits":0,"dropped":1,"gap":false,"events":[{"kind":"closing","name":"newest","data":{"env":"prod"},"ago":"1.0s"}]},"facts":{},"recent":[],"predicates":{"asked":"Did the user ask for this?"}}';
+
+function sentState(call: Call) {
+  const value = bodyOf(call).input;
+  return JSON.parse(typeof value === 'string' ? value : Array.isArray(value) ? value[0].content[0].text : 'null');
+}
+
+describe('decisionsJudge budgets', () => {
+  test('declares a measured budget only when requested and validates its allowance', () => {
+    expect('budget' in decisionsJudge({ apiKey: 'k', model: 'm' })).toBe(false);
+    expect(decisionsJudge({ apiKey: 'k', model: 'm', contextTokens: 200_000 }).budget).toEqual({ contextTokens: 200_000, reservedTokens: 837 });
+    for (const contextTokens of [837, 836, NaN])
+      expect(() => decisionsJudge({ apiKey: 'k', model: 'm', contextTokens })).toThrow(
+        new RangeError(`decisionsJudge: contextTokens must be more than the 837 tokens its own prompt takes, got ${contextTokens}`),
+      );
+  });
+  test('retries a context-length 400 once with halved input', async () => {
+    let calls = 0;
+    const fake = fakeFetch(async () => (++calls === 1 ? new Response(JSON.stringify(CONTEXT_BODY), { status: 400 }) : json({ answers: [ROUTE_ANSWER] })()));
+    expect(await decisionsJudge({ apiKey: 'k', model: 'm', fetch: fake.fetch })(TWO_EVENTS, signal)).toEqual({ route: 'note', probabilities: { note: 1 }, predicates: {} });
+    expect(fake.calls).toHaveLength(2);
+    expect(bodyOf(fake.calls[1]).input).toBe(HALVED_INPUT);
+  });
+  test('second context rejection is retryable and keeps status and request ID', async () => {
+    const fake = fakeFetch(async () => new Response(JSON.stringify(CONTEXT_BODY), { status: 400, headers: { 'x-request-id': 'req-budget' } }));
+    const error: unknown = await decisionsJudge({ apiKey: 'k', model: 'm', fetch: fake.fetch })(TWO_EVENTS, signal).catch((e: unknown) => e);
+    expect(fake.calls).toHaveLength(2);
+    expect(Object.getPrototypeOf(error)).toBe(Error.prototype);
+    expect(isPermanent(error)).toBe(false);
+    expect(error).toMatchObject({
+      message: 'decisionsJudge: HTTP 400: Your input exceeds the context window of this model. (request req-budget); rejected again with the window halved',
+      status: 400,
+      requestId: 'req-budget',
+    });
+  });
+  test.each([
+    { status: 413, body: CONTEXT_BODY, calls: 2, outcome: ['resolved', '', false] },
+    { status: 422, body: CONTEXT_BODY, calls: 1, outcome: ['PermanentError', 'decisionsJudge: HTTP 422: Your input exceeds the context window of this model.', true] },
+    { status: 400, body: { message: 'unrelated' }, calls: 1, outcome: ['PermanentError', 'decisionsJudge: HTTP 400: unrelated', true] },
+  ])('context classification at status $status with $calls calls', async ({ status, body, calls, outcome: expected }) => {
+    let count = 0;
+    const fake = fakeFetch(async () => (++count === 1 ? new Response(JSON.stringify(body), { status }) : json({ answers: [ROUTE_ANSWER] })()));
+    const pending = decisionsJudge({ apiKey: 'k', model: 'm', fetch: fake.fetch })(TWO_EVENTS, signal);
+    if (calls === 2) await expect(pending).resolves.toEqual({ route: 'note', probabilities: { note: 1 }, predicates: {} });
+    expect(await outcome(pending)).toEqual(expected);
+    expect(fake.calls).toHaveLength(calls);
+    if (calls === 2) expect(bodyOf(fake.calls[1]).input).toBe(HALVED_INPUT);
+  });
+  test('halving keeps images and a later image rejection drops them once', async () => {
+    let count = 0;
+    const fake = fakeFetch(async () => {
+      count += 1;
+      if (count === 1) return new Response(JSON.stringify(CONTEXT_BODY), { status: 400 });
+      if (count === 2) return new Response(JSON.stringify({ message: 'bad image' }), { status: 400 });
+      return json({ answers: [ROUTE_ANSWER] })();
+    });
+    const errors: string[] = [];
+    const judge = decisionsJudge({ apiKey: 'k', model: 'm', fetch: fake.fetch, onImageError: (error) => errors.push(error.message) });
+    expect(await judge({ ...TWO_EVENTS, images: [{ data: png(280, 280), mimeType: 'image/png' }] }, signal)).toEqual({ route: 'note', probabilities: { note: 1 }, predicates: {} });
+    expect(fake.calls.map((call) => [typeof bodyOf(call).input, sentState(call).window.events.length])).toEqual([
+      ['object', 2],
+      ['object', 1],
+      ['string', 1],
+    ]);
+    expect(bodyOf(fake.calls[2]).input).toBe(HALVED_INPUT);
+    expect(errors).toEqual(['decisionsJudge: the provider rejected the request with its 1 images, retrying without them: decisionsJudge: HTTP 400: bad image']);
+  });
+  test('context-length retry with images never reports an image error', async () => {
+    let count = 0;
+    const fake = fakeFetch(async () => (++count === 1 ? new Response(JSON.stringify(CONTEXT_BODY), { status: 400 }) : json({ answers: [ROUTE_ANSWER] })()));
+    const errors: Error[] = [];
+    const judge = decisionsJudge({ apiKey: 'k', model: 'm', fetch: fake.fetch, onImageError: (error) => errors.push(error) });
+    expect(await judge({ ...TWO_EVENTS, images: [{ data: png(280, 280), mimeType: 'image/png' }] }, signal)).toEqual({ route: 'note', probabilities: { note: 1 }, predicates: {} });
+    expect(fake.calls.map((call) => [typeof bodyOf(call).input, sentState(call).window.events.length])).toEqual([
+      ['object', 2],
+      ['object', 1],
+    ]);
+    expect(errors).toEqual([]);
+  });
+  test("the Decisions API's own token-limit 400 is retried once with the window halved", async () => {
+    const body = { error: { message: 'Decision input exceeds the token limit.', type: 'invalid_request_error', param: null, code: null } };
+    let calls = 0;
+    const fake = fakeFetch(async () => (++calls === 1 ? new Response(JSON.stringify(body), { status: 400 }) : json({ answers: [ROUTE_ANSWER] })()));
+    expect(await decisionsJudge({ apiKey: 'k', model: 'm', fetch: fake.fetch })(TWO_EVENTS, signal)).toEqual({ route: 'note', probabilities: { note: 1 }, predicates: {} });
+    expect(fake.calls.map((call) => bodyOf(call).input)).toEqual([expect.any(String), HALVED_INPUT]);
+  });
+  test('trims oldest sheddable input at render time', async () => {
+    const fake = fakeFetch(json({ answers: [ROUTE_ANSWER] }));
+    const original: JudgeInput = {
+      ...input,
+      window: {
+        ...input.window,
+        events: [
+          { id: 'old', name: 'old', kind: 'consequence', data: {}, text: 'x'.repeat(200), at: 0, seenAt: 0 },
+          ...input.window.events,
+          { id: 'context', name: 'context', kind: 'context', data: {}, text: 'y'.repeat(200), at: 0, seenAt: 0 },
+        ],
+      },
+    };
+    expect(await decisionsJudge({ apiKey: 'k', model: 'm', fetch: fake.fetch, contextTokens: 897 })(original, signal)).toEqual({ route: 'note', probabilities: { note: 1 }, predicates: {} });
+    expect(fake.calls).toHaveLength(1);
+    expect(bodyOf(fake.calls[0]).input).toBe(
+      '{"window":{"reason":"closing","waits":0,"dropped":2,"gap":false,"events":[{"kind":"closing","name":"deploy","data":{"env":"prod"},"ago":"1.0s"}]},"facts":{},"recent":[],"predicates":{"asked":"Did the user ask for this?"}}',
+    );
+  });
+});

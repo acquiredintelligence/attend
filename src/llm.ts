@@ -4,6 +4,11 @@
  * images, `complete` receives them as `images` to place after the prompt in the model's own block
  * format.
  *
+ * With `contextTokens`, the judge declares a budget, and a rendered window over it loses its
+ * oldest consequence and context events first; acts and flushes always stay. A rejection that
+ * names the context length is retried once with the window halved, so let a vendor SDK's error
+ * propagate from `complete` with its `status`.
+ *
  * Anthropic:
  *
  * ```ts
@@ -120,9 +125,10 @@
  * });
  * ```
  */
-import { DEFAULT_SYSTEM, renderState, resolveCriteria } from './internal/prompt.js';
+import type { JudgeBudget } from './core/types.js';
+import { DEFAULT_SYSTEM, renderBytes, renderWithin, resolveCriteria, sendHalving, stateText, tokensOf } from './internal/prompt.js';
 import { isRecord } from './internal/shared.js';
-import type { JsonObject, Judge, JudgeImage, JudgeInput, Judgment, OfferedRoute, Route } from './types.js';
+import { ROUTES, type JsonObject, type Judge, type JudgeImage, type JudgeInput, type Judgment, type OfferedRoute, type Route } from './types.js';
 
 export { DEFAULT_CRITERIA, DEFAULT_SYSTEM } from './internal/prompt.js';
 
@@ -140,7 +146,7 @@ export interface CompleteRequest {
   signal: AbortSignal;
 }
 
-/** One structured-output call. Resolve with the parsed JSON reply; throw a `PermanentError` on a refusal. */
+/** One structured-output call. Resolve with the parsed JSON reply; throw a `PermanentError` on a refusal, and let other errors propagate as thrown. */
 export type Complete = (request: CompleteRequest) => Promise<unknown>;
 
 export interface LlmJudgeOptions {
@@ -149,25 +155,50 @@ export interface LlmJudgeOptions {
   system?: string;
   /** Per-route criteria. A criterion on the judge input wins over these, and `DEFAULT_CRITERIA` fills the rest. */
   criteria?: Partial<Record<Route, string>>;
-  /** Builds the user prompt from the judge input. The default renders the window, facts, recent routes and predicate questions as compact JSON. */
+  /** The model's context window in tokens. Set it to declare a budget. */
+  contextTokens?: number;
+  /**
+   * Builds the user prompt from the judge input, once its window is trimmed to the budget or halved.
+   * The default renders the window, facts, recent routes and predicate questions as compact JSON, 64 events per macrotask.
+   */
   render?: (input: JudgeInput) => string;
 }
 
-export function llmJudge(options: LlmJudgeOptions): Judge {
-  const { complete, system = DEFAULT_SYSTEM, criteria, render = renderState } = options;
-  return async (input, signal) => {
+/** With `contextTokens`, `budget.reservedTokens` is measured from the system prompt with every route on offer, plus the schema. */
+export function llmJudge(options: LlmJudgeOptions): Judge & { budget?: JudgeBudget } {
+  const { complete, system = DEFAULT_SYSTEM, criteria, render, contextTokens } = options;
+  const reservedTokens = tokensOf(
+    systemPrompt(
+      system,
+      resolveCriteria(
+        ROUTES.map((route) => ({ route })),
+        criteria,
+      ),
+      true,
+    ) + JSON.stringify(judgmentSchema([...ROUTES], [])),
+  );
+  if (contextTokens !== undefined && !(contextTokens > reservedTokens))
+    throw new RangeError(`llmJudge: contextTokens must be more than the ${reservedTokens} tokens its own prompt takes, got ${contextTokens}`);
+  const budget = contextTokens === undefined ? undefined : { contextTokens, reservedTokens };
+  const judge: Judge & { budget?: JudgeBudget } = async (input, signal) => {
     const routes = resolveCriteria(input.routes, criteria);
     const offered = routes.map((r) => r.route);
     const asked = input.predicates.map((p) => p.name);
-    const reply = await complete({
-      system: systemPrompt(system, routes, asked.length > 0),
-      prompt: render(input),
-      images: input.images ?? [],
-      schema: judgmentSchema(offered, asked),
-      signal,
-    });
+    const rendered = await renderWithin(input, renderBytes(budget), signal);
+    signal.throwIfAborted();
+    const reply = await sendHalving(rendered, (r) =>
+      complete({
+        system: systemPrompt(system, routes, asked.length > 0),
+        prompt: render === undefined ? stateText(r) : render(r.input),
+        images: input.images ?? [],
+        schema: judgmentSchema(offered, asked),
+        signal,
+      }),
+    );
     return parseReply(reply, offered, asked);
   };
+  if (budget !== undefined) judge.budget = budget;
+  return judge;
 }
 
 function systemPrompt(base: string, routes: Required<OfferedRoute>[], asksPredicates: boolean): string {

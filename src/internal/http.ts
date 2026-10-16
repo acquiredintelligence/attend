@@ -23,6 +23,12 @@ export interface ProviderFailure {
 /** 429 codes that a retry never clears: billing and quota, which openai-node would retry anyway. */
 const QUOTA_CODES = new Set(['credit_balance_exhausted', 'organization_spend_limit_exceeded', 'project_spend_limit_exceeded', 'organization_usage_limit_exceeded', 'insufficient_quota']);
 
+/** How OpenAI (including the Decisions API's "exceeds the token limit"), Anthropic, Gemini, TypeSafe and OpenRouter word a request too long for the model. */
+const CONTEXT_LENGTH = /context[ _-]?(length|window)|max_tokens_exceeded|prompt is too long|input token count|too many (input )?tokens|token limit/i;
+// TypeSafe names its code without saying which body field carries it, so the raw text is checked when the error is made.
+const statusFailures = new WeakSet<Error>();
+const contextLengthFailures = new WeakSet<Error>();
+
 /** Statuses a provider returns when it rejects an image, when the request carried any. */
 const IMAGE_REJECTIONS = new Set([400, 413, 415, 422]);
 
@@ -31,10 +37,12 @@ const IMAGE_REJECTIONS = new Set([400, 413, 415, 422]);
  * `signal` aborted, in which case the signal's reason is thrown. A non-2xx response is classified
  * by `statusError`.
  */
-export async function postJson(provider: Provider, send: typeof fetch, endpoint: string, headers: Record<string, string>, body: unknown, signal: AbortSignal): Promise<unknown> {
+export async function postJson(provider: Provider, send: typeof fetch, endpoint: string, headers: Record<string, string>, body: string, signal: AbortSignal): Promise<unknown> {
+  // The judge renders the window across awaits before this, so the call may already be aborted.
+  signal.throwIfAborted();
   let res: Response;
   try {
-    res = await send(endpoint, { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json', ...headers }, signal });
+    res = await send(endpoint, { method: 'POST', body, headers: { 'content-type': 'application/json', ...headers }, signal });
   } catch (error) {
     signal.throwIfAborted();
     throw new Error(`${provider.name}: request failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
@@ -57,12 +65,25 @@ export function statusError(provider: Provider, res: Response, text: string): Er
   const retryable = res.status === 408 || res.status >= 500 || (res.status === 429 && !QUOTA_CODES.has(code ?? ''));
   const described = `${provider.name}: HTTP ${res.status}${message === '' ? '' : `: ${message}`}${requestId === null ? '' : ` (request ${requestId})`}`;
   const failure: ProviderFailure = { status: res.status, requestId, retryAfterMs: retryAfterMs(res.headers) };
-  return Object.assign(retryable ? new Error(described) : new PermanentError(described), failure);
+  const error = Object.assign(retryable ? new Error(described) : new PermanentError(described), failure);
+  statusFailures.add(error);
+  if ((res.status === 400 || res.status === 413) && CONTEXT_LENGTH.test(text)) contextLengthFailures.add(error);
+  return error;
 }
 
 /** True for an error from `statusError` whose status is one a provider uses to reject an image. */
 export function isImageRejection(error: unknown): boolean {
   return error instanceof Error && 'status' in error && typeof error.status === 'number' && IMAGE_REJECTIONS.has(error.status);
+}
+
+/**
+ * True for a 400 or 413 that names the model's context length: in the response text, for an error
+ * from `statusError`, or in the `code` or `message` of any other error, such as a vendor SDK's.
+ */
+export function isContextLengthRejection(error: unknown): boolean {
+  if (!(error instanceof Error) || !('status' in error) || (error.status !== 400 && error.status !== 413)) return false;
+  if (statusFailures.has(error)) return contextLengthFailures.has(error);
+  return CONTEXT_LENGTH.test(error.message) || ('code' in error && typeof error.code === 'string' && CONTEXT_LENGTH.test(error.code));
 }
 
 /**
