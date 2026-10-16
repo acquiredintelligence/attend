@@ -129,6 +129,20 @@ function heldStore(): { store: StateStore; hold(): void; release(): void } {
 
 const pendingOrResolved = (p: Promise<unknown>) => Promise.race([p.then(() => 'resolved'), drain().then(() => 'pending')]);
 
+/** A store whose every put takes a millisecond of real time, so a producer looping on `push` leaves room for timers to fire. */
+function pacedStore(): StateStore {
+  const inner = memoryStore();
+  return {
+    get: (scope) => inner.get(scope),
+    async put(record, expectedVersion) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      return inner.put(record, expectedVersion);
+    },
+    due: (now, limit) => inner.due(now, limit),
+    remove: (scope) => inner.remove(scope),
+  };
+}
+
 describe('createAttend', () => {
   test('a closing act settles after the grace, is judged with the configured context, and is delivered', async () => {
     const h = setup([{ route: 'queue', probabilities: { queue: 0.8, note: 0.2 }, predicates: { asked: 0.1 } }], {
@@ -845,6 +859,28 @@ describe('createAttend', () => {
     await stopping;
     expect(await slow.store.get('s')).toMatchObject({ version: 1, cursors: { k: '1' }, buffer: { entries: [{ id: 'x', kind: 'consequence' }] } });
     await attached;
+  });
+
+  test('an aborted run resolves while a producer keeps pushing on the same instance, and those pushes still persist', async () => {
+    const h = setup([], { store: pacedStore() });
+    let pushes = 0;
+    let stop = false;
+    const producer = (async () => {
+      while (!stop) {
+        pushes += 1;
+        await h.attend.push('s', [ev(`p${pushes}`, 'look')]);
+      }
+    })();
+    await realTick();
+    const stopping = h.stop();
+    const outcome = await Promise.race([stopping.then(() => 'resolved'), new Promise((resolve) => setTimeout(() => resolve('pending after 100 ms'), 100))]);
+    expect(outcome).toBe('resolved');
+    const pushesAtResolve = pushes;
+    await realTick();
+    stop = true;
+    await producer;
+    expect(pushes).toBeGreaterThan(pushesAtResolve);
+    expect((await h.store.get('s'))?.version).toBe(pushes);
   });
 
   test('an aborted run does not wait past the lease for a judge that never settles', async () => {

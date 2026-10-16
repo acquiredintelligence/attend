@@ -127,6 +127,8 @@ export function createAttend(config: AttendConfig): Attend {
   const attached = new Set<string>();
   /** Judge, sink and dead-letter calls in flight, each with the lease the reducer gave it. */
   const calls = new Map<Promise<void>, number>();
+  /** Release writes for calls no live runner would start. A stopping runner waits for them, so none is left for a closed store. */
+  const releases = new Set<Promise<void>>();
   let running: { signal: AbortSignal } | null = null;
 
   function observe(trace: Trace): void {
@@ -200,7 +202,8 @@ export function createAttend(config: AttendConfig): Attend {
    */
   function call(scope: string, result: Input['kind'], leaseUntil: number, work: () => Promise<void>, release: ReleasedInput): void {
     if (!running) {
-      void background(scope, release.kind, () => apply(scope, release));
+      const released = background(scope, release.kind, () => apply(scope, release)).finally(() => releases.delete(released));
+      releases.add(released);
       return;
     }
     const done = background(scope, result, work).finally(() => calls.delete(done));
@@ -361,8 +364,11 @@ export function createAttend(config: AttendConfig): Attend {
         for (const cancel of timers.values()) cancel();
         timers.clear();
         for (const controller of sources) controller.abort();
+        // Only the writes in flight now, not a producer's later pushes: those persist on their own and do not hold the runner.
+        const writes = [...lanes.values()];
         await Promise.all([...calls].map(([done, leaseUntil]) => settledOrExpired(done, leaseUntil)));
-        while (lanes.size > 0) await Promise.all(lanes.values());
+        await Promise.all(writes);
+        while (releases.size > 0) await Promise.all(releases);
       }
     },
   };
