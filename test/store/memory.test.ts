@@ -83,19 +83,16 @@ describe('freezingStore conformance', () => {
   for (const c of [...scopeStoreConformance(() => freezingStore(memoryStore())), ...decisionLogConformance(() => freezingStore(memoryStore()))]) test(c.name, c.run);
 });
 
-test('the unchanged-read case rejects a port that overwrites returned containers', async () => {
+test('a port that overwrites returned containers fails the unchanged-read case and the watched cases', async () => {
   const cases = scopeStoreConformance(() => byReference(memoryStore()));
-  for (const c of cases) {
-    if (c.name === 'what a read returned is unchanged by later commits, trims and removes') {
-      await expect(c.run()).rejects.toThrow('returned values unchanged');
-    } else {
-      await expect(c.run()).resolves.toBeUndefined();
-    }
-  }
+  const failed: string[] = [];
+  for (const c of cases) await c.run().catch(() => failed.push(c.name));
+  expect(failed).toContain('what a read returned is unchanged by later commits, trims and removes');
+  expect(failed.length).toBeGreaterThan(1);
   expect(cases.at(-1)?.name).toBe('what a read returned is unchanged by later commits, trims and removes');
 });
 
-test('freezingStore freezes committed snapshots, input events and append bodies', async () => {
+test('freezingStore freezes committed snapshots, input events, append bodies and what reads return', async () => {
   const inner = memoryStore();
   const store = freezingStore(inner);
   const saved = snapshot('s', 1);
@@ -112,8 +109,14 @@ test('freezingStore freezes committed snapshots, input events and append bodies'
   expect(() => { row.body.scope = 'changed'; }).toThrow(TypeError);
   expect(await inner.load('s')).toEqual({ version: 2, snapshot: snapshot('s', 1), tail: [logged('event')] });
   expect(await inner.log.find('decision', 'decision')).toEqual({ ...append('decision'), position: '1' });
+  const loaded = await store.load('s');
+  const found = await store.log.find('decision', 'decision');
+  const page = await store.log.read({ after: null, limit: 10 });
+  expect(Object.isFrozen(loaded) && Object.isFrozen(loaded?.tail)).toBe(true);
+  expect(Object.isFrozen(found) && Object.isFrozen(page) && Object.isFrozen(page.rows)).toBe(true);
+  expect(() => { (page.rows as unknown[]).push(1); }).toThrow(TypeError);
+  expect(await store.log.epoch()).toBe(await inner.log.epoch());
   expect(store.durable).toBe(false);
-  expect(store.log).toBe(inner.log);
   expect(store.close).toBeUndefined();
 });
 

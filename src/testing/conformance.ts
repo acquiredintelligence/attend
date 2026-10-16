@@ -70,13 +70,46 @@ async function rejects(run: () => Promise<unknown>): Promise<void> {
 
 type StoreCase = [string, (store: ScopeStore) => Promise<void>];
 
+/**
+ * The store under test, with every value its reads return kept beside a structuredClone. Every case
+ * checks on success that none of them changed, so each read shape any case uses also checks aliasing.
+ */
+function watched(inner: ScopeStore): { store: ScopeStore; check: () => void } {
+  const kept: [unknown, unknown][] = [];
+  const keep = async <T>(pending: Promise<T>): Promise<T> => {
+    const value = await pending;
+    kept.push([value, structuredClone(value)]);
+    return value;
+  };
+  const log = inner.log;
+  const store: ScopeStore = {
+    durable: inner.durable,
+    load: (scope) => keep(inner.load(scope)),
+    commit: (writes) => keep(inner.commit(writes)),
+    due: (now, limit, after) => keep(inner.due(now, limit, after)),
+    remove: (scope) => inner.remove(scope),
+    log: {
+      epoch: () => log.epoch(),
+      bounds: () => keep(log.bounds()),
+      read: (query) => keep(log.read(query)),
+      find: (kind, id) => keep(log.find(kind, id)),
+      wait: (after, blockMs, signal) => log.wait(after, blockMs, signal),
+      trim: (retention) => log.trim(retention),
+      compare: (a, b) => log.compare(a, b),
+    },
+    ...(inner.close ? { close: () => inner.close?.() ?? Promise.resolve() } : {}),
+  };
+  return { store, check: () => kept.forEach(([value, clone], i) => assertEqual(value, clone, `returned value ${i} unchanged by later calls`)) };
+}
+
 function casesFor(make: () => Promise<ScopeStore> | ScopeStore, cases: StoreCase[]): ConformanceCase[] {
   return cases.map(([name, run]) => ({
     name,
     async run() {
-      const store = await make();
+      const { store, check } = watched(await make());
       try {
         await run(store);
+        check();
       } finally {
         await store.close?.();
       }
@@ -224,7 +257,7 @@ export function scopeStoreConformance(make: () => Promise<ScopeStore> | ScopeSto
         return value;
       };
       const first: Snapshot = { version: 2, record: record('s', 2), policy, reducer: 1 };
-      await store.commit([write('s', 0, { inputs: [logged('a'), logged('b')], snapshot: first, appends: [append('one')], due: 1000 }), write('t', 0)]);
+      await store.commit([write('s', 0, { inputs: [logged('a'), logged('b')], snapshot: first, appends: [append('one')], due: 1000 }), write('t', 0), write('u', 0, { due: 1000 })]);
       await keep(store.load('s'));
       await keep(store.load('t'));
       await store.commit([write('s', 2, { appends: [letter('two')] })]);
@@ -233,11 +266,19 @@ export function scopeStoreConformance(make: () => Promise<ScopeStore> | ScopeSto
       for (const query of [{}, { scope: 's' }, { scopePrefix: 's' }, { kinds: ['deadLetter' as const] }]) await keep(store.log.read({ after: null, limit: 10, ...query }));
       await keep(store.log.read({ after: bounds.first, limit: 10 }));
       await keep(store.log.read({ after: bounds.last, limit: 10 }));
+      await keep(store.log.read({ after: null, limit: 10, routes: ['interrupt'] }));
+      await keep(store.log.read({ after: null, limit: 10, sinceAt: 0 }));
+      await keep(store.log.read({ after: bounds.first, limit: 10, scope: 's' }));
+      const page = await keep(store.log.read({ after: null, limit: 1 }));
+      const [firstDue] = await keep(store.due(1000, 1));
+      const [secondDue] = await keep(store.due(1000, 1, firstDue));
+      await keep(store.due(1000, 1, secondDue));
       await keep(store.log.find('decision', 'one'));
       await keep(store.due(1000, 10));
-      assertEqual(await store.commit([write('s', 3, { inputs: [logged('c')], appends: [append('one', 's', 'queue', 2000), letter('two', 's', 'sink', 2000)], due: 1000 }), write('t', 1)]), ['ok', 'ok'], 'duplicate appends commit');
+      assertEqual(await store.commit([write('s', 3, { inputs: [logged('c')], appends: [append('one', 's', 'queue', 2000), letter('two', 's', 'sink', 2000)], due: 1500 }), write('t', 1)]), ['ok', 'ok'], 'duplicate appends commit');
       assertEqual(await store.commit([write('s', 4, { inputs: [logged('d')], appends: [append('three')], due: 2000 })]), ['ok'], 'later commit');
       await keep(store.log.find('decision', 'three'));
+      await keep(store.log.read({ after: page.checked, limit: 1 }));
       await keep(store.log.find('deadLetter', 'two'));
       await keep(store.log.bounds());
       await keep(store.due(2000, 10));
@@ -248,6 +289,7 @@ export function scopeStoreConformance(make: () => Promise<ScopeStore> | ScopeSto
       await keep(store.log.bounds());
       await keep(store.due(3000, 10));
       await keep(store.load('s'));
+      await store.log.trim({ olderThanMs: 1 });
       await store.remove('s');
       assertEqual(await store.commit([write('s', 0, { snapshot: { version: 1, record: record('s', 1), policy, reducer: 2 }, appends: [append('six')] })]), ['ok'], 're-created');
       for (const [value, clone] of kept) assertEqual(value, clone, 'returned values unchanged');
@@ -424,11 +466,14 @@ export function decisionLogConformance(make: () => Promise<ScopeStore> | ScopeSt
     const together = (name: string, run: (a: ScopeStore, b: ScopeStore) => Promise<void>): ConformanceCase => ({
       name,
       async run() {
-        const [a, b] = await concurrent();
+        const [rawA, rawB] = await concurrent();
+        const [a, b] = [watched(rawA), watched(rawB)];
         try {
-          await run(a, b);
+          await run(a.store, b.store);
+          a.check();
+          b.check();
         } finally {
-          await Promise.all([a.close?.(), b.close?.()]);
+          await Promise.all([a.store.close?.(), b.store.close?.()]);
         }
       },
     });

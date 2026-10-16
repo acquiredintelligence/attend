@@ -224,13 +224,21 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
-/** For tests: deep-freezes every snapshot, logged input and decision append at commit, so code that mutates committed data throws. */
+/** For tests: deep-freezes every snapshot, logged input and decision append at commit, and everything a read returns, so code that mutates committed or returned data throws. */
 export function freezingStore(inner: ScopeStore): ScopeStore {
   return {
     durable: inner.durable,
-    log: inner.log,
-    load: (scope) => inner.load(scope),
-    due: (now, limit, after) => inner.due(now, limit, after),
+    log: {
+      epoch: () => inner.log.epoch(),
+      bounds: () => inner.log.bounds().then(deepFreeze),
+      read: (query) => inner.log.read(query).then(deepFreeze),
+      find: (kind, id) => inner.log.find(kind, id).then(deepFreeze),
+      wait: (after, blockMs, signal) => inner.log.wait(after, blockMs, signal),
+      trim: (retention) => inner.log.trim(retention),
+      compare: (a, b) => inner.log.compare(a, b),
+    },
+    load: (scope) => inner.load(scope).then(deepFreeze),
+    due: (now, limit, after) => inner.due(now, limit, after).then(deepFreeze),
     remove: (scope) => inner.remove(scope),
     commit(writes) {
       for (const write of writes) {
