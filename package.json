@@ -74,7 +74,16 @@
     "test": "vitest run",
     "check": "pnpm typecheck && pnpm test && pnpm build && pnpm check:docs",
     "demo": "pnpm build && node --experimental-strip-types examples/demo.ts",
-    "check:docs": "node scripts/check-snippets.mjs"
+    "check:docs": "node scripts/check-snippets.mjs",
+    "test:oracle": "vitest run -c vitest.oracle.config.ts",
+    "bench:selfcheck": "pnpm build && vitest run -c bench/vitest.config.mjs",
+    "bench:openloop": "node bench/openloop.mjs",
+    "bench:latency": "node bench/latency.mjs",
+    "bench:stores": "node bench/stores.mjs",
+    "bench:alloc": "node bench/alloc.mjs",
+    "bench:suite": "node bench/suite.mjs",
+    "bench:validate": "node bench/validate.mjs",
+    "bench:gates": "node bench/gates.mjs"
   },
   "peerDependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
