@@ -1,0 +1,10 @@
+/**
+ * The store conformance suite and the crash suite, run against `memoryStore`. Swap in your own
+ * adapter's factory. Run with `pnpm build && node --test examples/adapter-suites.ts`.
+ */
+import { test } from 'node:test';
+import { memoryStore } from 'attend';
+import { crashSuite, storeConformance } from 'attend/testing';
+
+for (const c of storeConformance(() => memoryStore())) test(c.name, c.run);
+for (const c of crashSuite(() => memoryStore())) test(c.name, c.run);
