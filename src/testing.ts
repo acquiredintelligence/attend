@@ -578,7 +578,7 @@ async function multiSession(store: ScopeStore, crash: { commit: number; point: C
   let pending = 0;
   let victim: number | null = null;
   const strikeState: { struck: { snapshot: boolean; effect: boolean } | null } = { struck: null };
-  const instances: { attend: Attend; controller: AbortController; done: Promise<void>; dead: boolean }[] = [];
+  const instances: { attend: Attend; controller: AbortController; done: Promise<void>; dead: boolean; reloading: Set<string> }[] = [];
   const judge: Judge = async (input) => {
     const has = (id: string) => input.window.events.some((event) => event.id === `${input.scope}/${id}`);
     if (has('f')) throw new PermanentError('refused');
@@ -593,6 +593,8 @@ async function multiSession(store: ScopeStore, crash: { commit: number; point: C
   function start(index: number) {
     const controller = new AbortController();
     const state = { dead: false };
+    // After a conflict the shell backs off in real time, then reloads the scope: no store call is in flight meanwhile.
+    const reloading = new Set<string>();
     const guard = async <T>(work: () => Promise<T>): Promise<T> => {
       if (state.dead) throw new CrashError();
       pending += 1;
@@ -601,7 +603,7 @@ async function multiSession(store: ScopeStore, crash: { commit: number; point: C
     };
     const view: ScopeStore = {
       ...store,
-      load: (scope) => guard(() => store.load(scope)),
+      load: (scope) => guard(() => { reloading.delete(scope); return store.load(scope); }),
       due: (now, limit, after) => guard(() => store.due(now, limit, after)),
       remove: (scope) => guard(() => store.remove(scope)),
       log: {
@@ -622,25 +624,28 @@ async function multiSession(store: ScopeStore, crash: { commit: number; point: C
           strikeState.struck = { snapshot, effect };
           victim = index;
           state.dead = true;
+          reloading.clear();
           controller.abort();
           throw new CrashError();
         };
         strike('before');
         const outcomes = await store.commit(writes);
+        writes.forEach((write, i) => { if (outcomes[i] === 'conflict') reloading.add(write.scope); });
         groups.push({ scopes: writes.map((write) => write.scope), outcomes, snapshot, effect });
         strike('after');
         return outcomes;
       }),
     };
     const attend = createAttend({ store: view, clock, kind: sessionKind, judge, settle: SESSION_POLICY,
+      observe: (trace) => { if (trace.kind === 'abandoned') reloading.delete(trace.scope); },
       sink: { async deliver(decision) { if (decision.route === 'interrupt') throw new Error('sink down'); delivered.add(decision.id); } },
       deadLetter: (letter) => { letters.add(letter.id); } });
-    return { attend, controller, get dead() { return state.dead; }, done: attend.run({ signal: controller.signal, sweepMs: 10000 }) };
+    return { attend, controller, reloading, get dead() { return state.dead; }, done: attend.run({ signal: controller.signal, sweepMs: 10000 }) };
   }
 
   instances.push(start(0), start(1));
   const idle = async () => {
-    do { await drainCopies(); await drain(); } while (pending > 0);
+    do { await drainCopies(); await drain(); } while (pending > 0 || instances.some((instance) => instance.reloading.size > 0));
   };
   const check = () => { if (victim !== null) throw new CrashError(); };
   const survive = async (work: () => Promise<void>) => {
