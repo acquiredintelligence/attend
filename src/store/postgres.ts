@@ -60,7 +60,7 @@ export function postgresStore(client: PostgresClient, options?: PostgresStoreOpt
   const p = tablePrefix(options?.prefix, { lowercase: true });
   const horizon = 'h AS MATERIALIZED (SELECT pg_snapshot_xmin(pg_current_snapshot()) AS xid)';
   const position = "txid::text || '.' || n::text";
-  const head = `SELECT ${position} FROM ${p}decisions, h WHERE txid < h.xid ORDER BY txid DESC, n DESC LIMIT 1`;
+  const head = `SELECT ${position} FROM ${p}decisions, h WHERE txid < (SELECT xid FROM h) ORDER BY txid DESC, n DESC LIMIT 1`;
   let ownTxid: bigint | undefined;
   let visible = 0n;
   let epoch: Promise<string> | undefined;
@@ -104,14 +104,14 @@ export function postgresStore(client: PostgresClient, options?: PostgresStoreOpt
     async bounds() {
       await settle();
       const { rows } = await client.query(`WITH ${horizon} SELECT
-        (SELECT ${position} FROM ${p}decisions, h WHERE txid < h.xid ORDER BY txid, n LIMIT 1) AS first,
+        (SELECT ${position} FROM ${p}decisions, h WHERE txid < (SELECT xid FROM h) ORDER BY txid, n LIMIT 1) AS first,
         (${head}) AS last`);
       return { first: nullableText(column(rows[0], 'first')), last: nullableText(column(rows[0], 'last')) };
     },
     async find(kind, id) {
       await settle();
       const { rows } = await client.query(`WITH ${horizon} SELECT d.*, ${position} AS position FROM ${p}decisions d, h
-        WHERE kind = $1 AND id = $2 AND txid < h.xid`, [kind, id]);
+        WHERE kind = $1 AND id = $2 AND txid < (SELECT xid FROM h)`, [kind, id]);
       return rows.length === 0 ? null : decisionRow(rows[0]);
     },
     async read(query) {
@@ -119,7 +119,7 @@ export function postgresStore(client: PostgresClient, options?: PostgresStoreOpt
       await settle();
       const values: unknown[] = [];
       const bind = (value: unknown) => { values.push(value); return `$${values.length}`; };
-      const where = ['txid < h.xid'];
+      const where = ['txid < (SELECT xid FROM h)'];
       if (after) where.push(`(txid, n) > (${bind(after.txid)}::xid8, ${bind(after.n)}::int)`);
       if (query.scope !== undefined) where.push(`scope = ${bind(query.scope)}`);
       if (query.scopePrefix !== undefined) where.push(`starts_with(scope, ${bind(query.scopePrefix)})`);
@@ -213,7 +213,7 @@ export function postgresStore(client: PostgresClient, options?: PostgresStoreOpt
       }
       if (ctes.length === 0) return;
       await client.query(`WITH ${horizon}, visible AS NOT MATERIALIZED (
-        SELECT txid, n, at FROM ${p}decisions, h WHERE txid < h.xid
+        SELECT txid, n, at FROM ${p}decisions, h WHERE txid < (SELECT xid FROM h)
       ), head AS (SELECT txid, n FROM visible ORDER BY txid DESC, n DESC LIMIT 1),
       oldest AS (SELECT txid, n FROM visible ORDER BY txid, n LIMIT 1),
       ${ctes.join(', ')}, floor AS (
