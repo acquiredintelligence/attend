@@ -47,6 +47,12 @@ export interface McpEventsTestServer {
   stray(kind: string, subscriptionId: string | number | null, params: Record<string, unknown>): Promise<void>;
   /** `nextPollMs` in poll results; null leaves the field out. Default 1000. */
   nextPollMs: number | null;
+  /**
+   * Send a stream's backlog without awaiting each notification, so the whole burst lands in
+   * the client's inbox at once, the way a socket hands over a buffered replay. Default false:
+   * each notification is awaited, which paces the server to the client's emits.
+   */
+  burst: boolean;
 }
 
 const ListRequest = z.object({ method: z.literal('events/list'), params: z.object({ cursor: z.string().optional() }).optional() });
@@ -113,11 +119,15 @@ export function mcpEventsTestServer(events: EventSpec[]): McpEventsTestServer {
     stream.pumping = true;
     try {
       const log = logOf(stream.name);
+      const inFlight: Promise<void>[] = [];
       while (stream.next < log.length) {
         const occurrence = log[stream.next];
         stream.next += 1;
-        await stream.send('event', stream.replay ? { ...occurrence, cursor: String(stream.next) } : { ...occurrence });
+        const sent = stream.send('event', stream.replay ? { ...occurrence, cursor: String(stream.next) } : { ...occurrence });
+        if (api.burst) inFlight.push(sent);
+        else await sent;
       }
+      await Promise.all(inFlight);
     } finally {
       stream.pumping = false;
     }
@@ -176,6 +186,7 @@ export function mcpEventsTestServer(events: EventSpec[]): McpEventsTestServer {
   const api: McpEventsTestServer = {
     requests,
     nextPollMs: 1000,
+    burst: false,
     async connect() {
       if (transport) await transport.close();
       const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();

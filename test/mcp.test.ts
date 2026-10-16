@@ -88,6 +88,40 @@ function heldStore(): { store: StateStore; hold(): void; release(): void } {
 
 const deliveredIds = (h: ReturnType<typeof setup>) => h.delivered().flatMap((d) => d.ids);
 
+/** A store whose every put takes `ms` of real time, the way a database round trip does. */
+function slowStore(ms: number): StateStore {
+  const inner = memoryStore();
+  return {
+    get: (scope) => inner.get(scope),
+    async put(record, expectedVersion) {
+      await new Promise((resolve) => setTimeout(resolve, ms));
+      return inner.put(record, expectedVersion);
+    },
+    due: (now, limit) => inner.due(now, limit),
+    remove: (scope) => inner.remove(scope),
+  };
+}
+
+const ingestedTotals = (h: ReturnType<typeof setup>) => {
+  const ingested = h.traces.flatMap((t) => (t.kind === 'ingested' ? [t] : []));
+  return { count: ingested.reduce((n, t) => n + t.count, 0), duplicates: ingested.reduce((n, t) => n + t.duplicates, 0) };
+};
+
+/**
+ * Drive the fake clock a second at a time, letting real I/O run between ticks, until `total`
+ * events reached the sink or `budgetMs` of wall time passed. Returns the wall time taken.
+ */
+async function catchUp(h: ReturnType<typeof setup>, total: number, budgetMs: number): Promise<number> {
+  const started = performance.now();
+  while (deliveredIds(h).length < total && performance.now() - started < budgetMs) {
+    await h.clock.advance(1000);
+    await settle();
+  }
+  return performance.now() - started;
+}
+
+const BACKLOG = Array.from({ length: 2500 }, (_, i) => `e${i + 1}`);
+
 describe('mcpEventsSource over a real Client and Server', () => {
   test('poll mode: events reach the sink as decisions and the cursor goes back to the server under the source key', async () => {
     const server = mcpEventsTestServer(ALPHA);
@@ -460,6 +494,47 @@ describe('mcpEventsSource over a real Client and Server', () => {
     await h.stop();
   });
 
+  test('a burst backlog past maxBuffered on a slow store catches up: each overflow persists what it holds before reopening', async () => {
+    const server = mcpEventsTestServer(ALPHA);
+    server.burst = true;
+    const client = await server.connect();
+    const h = setup([{ route: 'queue' }], slowStore(1));
+    await server.append('alpha', ...BACKLOG.map((id) => occ(id)));
+    void h.attach('s', client, { mode: 'stream' });
+    // Three stream cycles, each a handful of 1 ms writes: well under a second. The livelock
+    // never finishes, and one write per event would spend 2.5 s in the store alone.
+    const elapsed = await catchUp(h, BACKLOG.length, 5000);
+    expect({ delivered: deliveredIds(h).length, under5s: elapsed < 5000 }).toEqual({ delivered: 2500, under5s: true });
+    expect(deliveredIds(h)).toEqual(BACKLOG);
+    expect(ingestedTotals(h)).toEqual({ count: 2500, duplicates: 0 });
+    expect(h.errors).toEqual([
+      { kind: 'overflow', buffered: 1000 },
+      { kind: 'overflow', buffered: 1000 },
+    ]);
+    expect(h.streamRequests(server)).toEqual([
+      { name: 'alpha', cursor: null },
+      { name: 'alpha', cursor: '999' },
+      { name: 'alpha', cursor: '1998' },
+    ]);
+    expect((await h.store.get('s'))?.cursors).toEqual({ [KEY]: '2500' });
+    await h.stop();
+  }, 20_000);
+
+  test('a burst backlog past maxBuffered on a memory store reaches the sink once each, in order', async () => {
+    const server = mcpEventsTestServer(ALPHA);
+    server.burst = true;
+    const client = await server.connect();
+    const h = setup();
+    await server.append('alpha', ...BACKLOG.map((id) => occ(id)));
+    void h.attach('s', client, { mode: 'stream' });
+    const elapsed = await catchUp(h, BACKLOG.length, 5000);
+    expect({ delivered: deliveredIds(h).length, under5s: elapsed < 5000 }).toEqual({ delivered: 2500, under5s: true });
+    expect(deliveredIds(h)).toEqual(BACKLOG);
+    expect(ingestedTotals(h)).toEqual({ count: 2500, duplicates: 0 });
+    expect((await h.store.get('s'))?.cursors).toEqual({ [KEY]: '2500' });
+    await h.stop();
+  }, 20_000);
+
   test('a stream with no notification for idleTimeoutMs is reported idle and reopened from the committed cursor', async () => {
     const server = mcpEventsTestServer(ALPHA);
     const client = await server.connect();
@@ -501,6 +576,22 @@ describe('mcpEventsSource over a real Client and Server', () => {
     await expect(attached).rejects.toThrow('attend/mcp: the Client closed; reconnect it and attach again');
     await expect(attached).rejects.toBeInstanceOf(PermanentError);
     await expect(attached).rejects.toMatchObject({ cause: { code: -32000 } });
+    await h.stop();
+  });
+
+  test('a Client closed between polls, or before an auto-mode list, ends the subscription with the same PermanentError', async () => {
+    const server = mcpEventsTestServer(ALPHA);
+    const client = await server.connect();
+    const h = setup();
+    const polling = h.attend.attach('s', h.source(client, { pollMs: 1000 }));
+    void polling.catch(() => undefined);
+    await settle();
+    expect(server.requests.map((r) => r.method)).toEqual(['events/poll']);
+    await client.close();
+    await h.clock.advance(1000);
+    await expect(polling).rejects.toThrow('attend/mcp: the Client closed; reconnect it and attach again');
+    await expect(polling).rejects.toBeInstanceOf(PermanentError);
+    await expect(h.attend.attach('t', h.source(client, { mode: 'auto' }))).rejects.toThrow('attend/mcp: the Client closed; reconnect it and attach again');
     await h.stop();
   });
 
