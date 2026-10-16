@@ -19,7 +19,7 @@
     "event-driven"
   ],
   "engines": {
-    "node": ">=22.5"
+    "node": ">=22.13"
   },
   "packageManager": "pnpm@12.8.1",
   "sideEffects": false,
@@ -68,7 +68,8 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "check": "pnpm typecheck && pnpm test && pnpm build"
+    "check": "pnpm typecheck && pnpm test && pnpm build",
+    "demo": "pnpm build && node examples/demo.ts"
   },
   "peerDependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

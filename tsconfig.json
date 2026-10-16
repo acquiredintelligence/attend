@@ -1,7 +1,9 @@
 {
   "compilerOptions": {
     "target": "ES2023",
-    "lib": ["ES2023"],
+    "lib": [
+      "ES2023"
+    ],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "strict": true,
@@ -12,7 +14,21 @@
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
     "skipLibCheck": true,
-    "types": ["node"]
+    "types": [
+      "node"
+    ],
+    "paths": {
+      "attend": [
+        "./src/index.ts"
+      ],
+      "attend/*": [
+        "./src/*.ts"
+      ]
+    }
   },
-  "include": ["src", "test", "examples"]
+  "include": [
+    "src",
+    "test",
+    "examples"
+  ]
 }
