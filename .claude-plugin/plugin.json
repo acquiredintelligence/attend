@@ -1,0 +1,9 @@
+{
+  "name": "attend",
+  "version": "0.0.0",
+  "description": "An Agent Skill for wiring attend, the attention layer that decides when an event should wake an agent.",
+  "author": { "name": "Acquired Intelligence" },
+  "license": "MIT",
+  "homepage": "https://github.com/acquiredintelligence/attend",
+  "repository": "https://github.com/acquiredintelligence/attend"
+}
