@@ -11,6 +11,9 @@
  *    on the other inputs, so a producer without a runner never strands an effect, and a stopped
  *    runner that releases a call never asks for another.
  * 3. Timers are state: `record.dueAt` is recomputed at the end of every step.
+ *
+ * The record it returns shares every part its input did not change: a handler never mutates a
+ * container it was given, it replaces it on the fresh top-level copy. The input is never touched.
  */
 import type {
   Batch,
@@ -18,6 +21,7 @@ import type {
   Buffer,
   DeadLetter,
   Decision,
+  Delivery,
   Effect,
   Entry,
   Event,
@@ -120,7 +124,7 @@ export function step(config: StepConfig, record: ScopeRecord, input: EventsInput
 export function step(config: StepConfig, record: ScopeRecord, input: Input, now: number): Stepped;
 export function step(config: StepConfig, record: ScopeRecord, input: Input, now: number): Stepped {
   const ctx: Ctx = { config, now, out: [] };
-  let r = dispatch(ctx, structuredClone(record), input.kind, input);
+  let r = dispatch(ctx, { ...record }, input.kind, input);
   if (!UNSWEPT.has(input.kind)) r = sweep(ctx, r);
   r.dueAt = nextDue(config.policy, r);
   return { record: r, effects: ctx.out };
@@ -140,6 +144,8 @@ function ingest(ctx: Ctx, r: ScopeRecord, input: EventsInput): ScopeRecord {
   const known = new Set<string>(r.seen);
   for (const e of r.buffer.entries) known.add(e.id);
   for (const e of r.batch?.window.events ?? []) known.add(e.id);
+  const entries = [...r.buffer.entries];
+  const seen = [...r.seen];
   let duplicates = 0;
   for (const e of input.events) {
     if (known.has(e.id)) {
@@ -147,16 +153,17 @@ function ingest(ctx: Ctx, r: ScopeRecord, input: EventsInput): ScopeRecord {
       continue;
     }
     known.add(e.id);
-    r.buffer.entries.push({ ...e, kind: ctx.config.kind(e), seenAt: ctx.now });
-    r.seen.push(e.id);
+    entries.push({ ...e, kind: ctx.config.kind(e), seenAt: ctx.now });
+    seen.push(e.id);
   }
-  r.seen = keepLast(r.seen, ctx.config.policy.seenCount);
+  r.seen = keepLast(seen, ctx.config.policy.seenCount);
+  r.buffer = { ...r.buffer, entries };
   prune(ctx, r);
   shedBuffer(ctx, r);
   const source = input.source ?? null;
-  if (source !== null && input.cursor !== undefined) r.cursors[source] = input.cursor;
+  if (source !== null && input.cursor !== undefined) r.cursors = { ...r.cursors, [source]: input.cursor };
   if (input.truncated) {
-    r.buffer.gap = true;
+    r.buffer = { ...r.buffer, gap: true };
     trace(ctx, { kind: 'gap', scope: r.scope, source, cursor: source === null ? null : (r.cursors[source] ?? null) });
   }
   trace(ctx, { kind: 'ingested', scope: r.scope, count: input.events.length - duplicates, duplicates });
@@ -177,15 +184,13 @@ function prune(ctx: Ctx, r: ScopeRecord): void {
     else kept.push(e);
   }
   if (stale.length === 0) return;
-  r.buffer.entries = kept;
-  r.buffer.dropped += stale.length;
+  r.buffer = { ...r.buffer, entries: kept, dropped: r.buffer.dropped + stale.length };
   trace(ctx, { kind: 'dropped', scope: r.scope, entries: stale, why: 'age' });
 }
 
 function shedBuffer(ctx: Ctx, r: ScopeRecord): void {
   const { entries, dropped } = shed(ctx, r.scope, r.buffer.entries, r.buffer.dropped);
-  r.buffer.entries = entries;
-  r.buffer.dropped = dropped;
+  if (entries !== r.buffer.entries) r.buffer = { ...r.buffer, entries, dropped };
 }
 
 /** Drop the oldest sheddable entries until the list fits `maxEvents`. A list of acts stays as it is. */
@@ -315,7 +320,7 @@ function settleBuffer(ctx: Ctx, r: ScopeRecord, fired: SettleReason, mayWait: bo
   const buf = r.buffer;
   let forced = buf.forcedAt !== null;
   if (buf.entries.length === 0) {
-    r.buffer.forcedAt = null;
+    r.buffer = { ...buf, forcedAt: null };
     if (!held) return r;
     const window = { ...held.window, reason: settleReason(held.window.events, forced, held.window.reason) };
     return beginJudging(ctx, r, window, held.phase, false);
@@ -407,7 +412,7 @@ function onJudged(ctx: Ctx, r: ScopeRecord, input: Extract<Input, { kind: 'judge
       window,
       at: ctx.now,
     };
-    r.outbox.decisions.push({ item: { id: window.id, kind: 'decision', decision }, phase: { phase: 'retrying', attempt: 0, failures: 0, at: ctx.now } });
+    enqueue(r, 'decisions', { item: { id: window.id, kind: 'decision', decision }, phase: { phase: 'retrying', attempt: 0, failures: 0, at: ctx.now } });
   }
   r.batch = null;
   return r;
@@ -468,7 +473,7 @@ function failJudge(ctx: Ctx, r: ScopeRecord, window: Window, phase: Judging['pha
     attempts: phase.attempt,
     at: ctx.now,
   };
-  r.outbox.deadLetters.push({ item: { id: window.id, kind: 'deadLetter', letter }, phase: { phase: 'retrying', attempt: 0, failures: 0, at: ctx.now } });
+  enqueue(r, 'deadLetters', { item: { id: window.id, kind: 'deadLetter', letter }, phase: { phase: 'retrying', attempt: 0, failures: 0, at: ctx.now } });
   trace(ctx, { kind: 'deadLettered', scope: r.scope, letter });
   r.batch = null;
   return r;
@@ -483,6 +488,18 @@ function releaseJudge(ctx: Ctx, r: ScopeRecord, window: Window, phase: Judging['
 
 // ─── deliveries ──────────────────────────────────────────────────────────────
 
+function setLane(r: ScopeRecord, lane: OutboxLane, items: Delivery[]): void {
+  r.outbox = { ...r.outbox, [lane]: items };
+}
+
+function setHead(r: ScopeRecord, lane: OutboxLane, head: Delivery): void {
+  setLane(r, lane, [head, ...r.outbox[lane].slice(1)]);
+}
+
+function enqueue(r: ScopeRecord, lane: OutboxLane, item: Delivery): void {
+  setLane(r, lane, [...r.outbox[lane], item]);
+}
+
 /** Only a lane's head is ever in flight, so a result names the lane whose head it belongs to. */
 function liveDelivery(ctx: Ctx, r: ScopeRecord, deliveryId: string, attempt: number, input: Input['kind']): OutboxLane | null {
   for (const lane of LANES) {
@@ -496,7 +513,7 @@ function liveDelivery(ctx: Ctx, r: ScopeRecord, deliveryId: string, attempt: num
 function onDelivered(ctx: Ctx, r: ScopeRecord, input: Extract<Input, { kind: 'delivered' }>): ScopeRecord {
   const lane = liveDelivery(ctx, r, input.deliveryId, input.attempt, 'delivered');
   if (lane === null) return r;
-  r.outbox[lane].shift();
+  setLane(r, lane, r.outbox[lane].slice(1));
   trace(ctx, { kind: 'delivered', scope: r.scope, deliveryId: input.deliveryId });
   return r;
 }
@@ -523,14 +540,14 @@ function failDelivery(ctx: Ctx, r: ScopeRecord, lane: OutboxLane, message: strin
   const failures = d.phase.failures + 1;
   if (item.kind === 'deadLetter') {
     const at = ctx.now + deadLetterDelay(ctx.config.policy, failures);
-    r.outbox[lane][0] = { item, phase: { phase: 'retrying', attempt, failures, at } };
+    setHead(r, lane, { item, phase: { phase: 'retrying', attempt, failures, at } });
     trace(ctx, { kind: 'retrying', scope: r.scope, stage: 'deadLetter', id: item.id, attempt, at, message });
     return r;
   }
   const delay = permanent ? undefined : ctx.config.policy.retryBackoffMs[failures - 1];
   if (delay !== undefined) {
     const at = ctx.now + delay;
-    r.outbox[lane][0] = { item, phase: { phase: 'retrying', attempt, failures, at } };
+    setHead(r, lane, { item, phase: { phase: 'retrying', attempt, failures, at } });
     trace(ctx, { kind: 'retrying', scope: r.scope, stage: 'sink', id: item.id, attempt, at, message });
     return r;
   }
@@ -545,8 +562,8 @@ function failDelivery(ctx: Ctx, r: ScopeRecord, lane: OutboxLane, message: strin
     attempts: attempt,
     at: ctx.now,
   };
-  r.outbox[lane].shift();
-  r.outbox.deadLetters.push({ item: { id: item.id, kind: 'deadLetter', letter }, phase: { phase: 'retrying', attempt, failures: 0, at: ctx.now } });
+  setLane(r, lane, r.outbox[lane].slice(1));
+  enqueue(r, 'deadLetters', { item: { id: item.id, kind: 'deadLetter', letter }, phase: { phase: 'retrying', attempt, failures: 0, at: ctx.now } });
   trace(ctx, { kind: 'deadLettered', scope: r.scope, letter });
   return r;
 }
@@ -557,7 +574,7 @@ function releaseDelivery(ctx: Ctx, r: ScopeRecord, lane: OutboxLane): ScopeRecor
   if (!d || d.phase.phase !== 'inFlight') return r;
   const { item } = d;
   const { attempt, failures } = d.phase;
-  r.outbox[lane][0] = { item, phase: { phase: 'retrying', attempt: attempt - 1, failures, at: ctx.now } };
+  setHead(r, lane, { item, phase: { phase: 'retrying', attempt: attempt - 1, failures, at: ctx.now } });
   trace(ctx, { kind: 'released', scope: r.scope, stage: item.kind === 'decision' ? 'sink' : 'deadLetter', id: item.id, attempt });
   return r;
 }
@@ -579,7 +596,7 @@ function pumpLane(ctx: Ctx, r: ScopeRecord, lane: OutboxLane): ScopeRecord {
   if (!next || next.phase.phase !== 'retrying' || next.phase.at > ctx.now) return r;
   const attempt = next.phase.attempt + 1;
   const inFlight: InFlightDelivery = { item: next.item, phase: { phase: 'inFlight', attempt, failures: next.phase.failures, leaseUntil: ctx.now + ctx.config.policy.deliveryTimeoutMs } };
-  r.outbox[lane][0] = inFlight;
+  setHead(r, lane, inFlight);
   ctx.out.push({ kind: 'deliver', scope: r.scope, delivery: inFlight });
   trace(ctx, { kind: 'delivering', scope: r.scope, deliveryId: next.item.id, attempt });
   return r;
@@ -597,7 +614,7 @@ function onFlush(ctx: Ctx, r: ScopeRecord): ScopeRecord {
     trace(ctx, { kind: 'stale', scope: r.scope, input: 'flush', why: 'nothing to settle' });
     return r;
   }
-  r.buffer.forcedAt = ctx.now;
+  r.buffer = { ...r.buffer, forcedAt: ctx.now };
   return r;
 }
 

@@ -24,18 +24,22 @@ describe('memoryLog retention', () => {
 });
 
 describe('memoryStore isolation', () => {
-  test('a stored record is not aliased by the caller', async () => {
+  test('a stored record cannot be changed through the reference that was put', async () => {
     const store = memoryStore();
-    const record = { ...initialRecord('s'), version: 1, seen: ['a'] };
+    const record = { ...initialRecord('s'), version: 1, seen: ['a'], buffer: { entries: [], dropped: 0, gap: false, forcedAt: null } };
     await store.put(record, 0);
-    record.seen.push('b');
+    expect(() => record.seen.push('b')).toThrow(TypeError);
+    expect(() => {
+      record.buffer.gap = true;
+    }).toThrow(TypeError);
     expect((await store.get('s'))?.seen).toEqual(['a']);
   });
 
-  test('a record returned by get is not aliased by the store', async () => {
+  test('a record returned by get cannot be changed', async () => {
     const store = memoryStore();
     await store.put({ ...initialRecord('s'), version: 1, seen: ['a'] }, 0);
-    (await store.get('s'))?.seen.push('b');
+    const got = await store.get('s');
+    expect(() => got?.seen.push('b')).toThrow(TypeError);
     expect((await store.get('s'))?.seen).toEqual(['a']);
   });
 });

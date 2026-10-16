@@ -650,7 +650,7 @@ describe('createAttend', () => {
     const a = setup([{ route: 'skip' }], { store });
     const b = setup([{ route: 'skip' }], { store });
     await Promise.all([a.attend.push('s', [ev('a')]), b.attend.push('s', [ev('b')])]);
-    expect((await store.get('s'))?.seen.sort()).toEqual(['a', 'b']);
+    expect([...((await store.get('s'))?.seen ?? [])].sort()).toEqual(['a', 'b']);
     expect([...a.traces, ...b.traces]).toContainEqual({ kind: 'conflict', scope: 's', version: 0 });
     await a.stop();
     await b.stop();
