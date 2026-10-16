@@ -2,13 +2,13 @@
  * In-memory adapters: the reference implementation of both ports, the browser's store,
  * and what the conformance suites are first run against.
  */
-import { deepFreeze } from './internal/shared.js';
 import type { Event, EventLog, LogEntry, ScopeRecord, StateStore } from './types.js';
 
 /**
- * Keeps the records it is given, frozen, and hands them back as they are: `step` never mutates a
- * record and shares what it does not change, so a clone per put and get would cost the whole
- * window for nothing, and the freeze makes a mutation anywhere throw instead of corrupting the store.
+ * Keeps the records it is given and hands them back as they are: `step` never mutates a record
+ * and shares what it does not change, so a clone per put and get would cost the whole window
+ * for nothing. Nothing outside the core reaches a stored record: `push` copies each event on the
+ * way in, and `inspect`, the judge, the sink and the dead-letter handler each get a copy.
  */
 export function memoryStore(): StateStore {
   const rows = new Map<string, ScopeRecord>();
@@ -19,7 +19,7 @@ export function memoryStore(): StateStore {
     async put(record, expectedVersion) {
       const current = rows.get(record.scope)?.version ?? 0;
       if (current !== expectedVersion) return 'conflict';
-      rows.set(record.scope, deepFreeze(record));
+      rows.set(record.scope, record);
       return 'ok';
     },
     async due(now, limit) {

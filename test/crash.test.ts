@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { memoryStore } from '../src/memory.js';
 import { CrashError, crashSuite, harness, recordingSink, scriptedJudge, type ScriptedAnswer } from '../src/testing.js';
 import type { Event, Kind } from '../src/types.js';
+import { freezingStore } from './support/deep-freeze.js';
 
 const kind = (e: Event): Kind => (e.name === 'close' ? 'closing' : 'consequence');
 const ev = (id: string): Event => ({ id, at: 0, name: 'close', data: {} });
@@ -15,8 +16,8 @@ function setup(script: ScriptedAnswer[]) {
   return { h, judge, sink };
 }
 
-describe('crashSuite against memoryStore', () => {
-  for (const c of crashSuite(() => memoryStore())) test(c.name, c.run, 60_000);
+describe('crashSuite against memoryStore, every stored record frozen through', () => {
+  for (const c of crashSuite(() => freezingStore(memoryStore()))) test(c.name, c.run, 60_000);
 });
 
 describe('restart regressions', () => {

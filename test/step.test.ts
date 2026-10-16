@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { deepFreeze } from '../src/internal/shared.js';
+import { deepFreeze } from './support/deep-freeze.js';
 import { deadline, initialRecord, offeredRoutes, step as reduce, validate, windowId, type StepConfig } from '../src/step.js';
 import type { DeadLetter, Decision, Delivery, Entry, Event, EventsInput, FlushInput, Input, Kind, ReleasedInput, ScopeRecord, Stepped, TraceEffect, Window } from '../src/types.js';
 import { DEFAULT_POLICY } from '../src/types.js';

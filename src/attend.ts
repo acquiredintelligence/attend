@@ -5,7 +5,7 @@
 import { initialRecord, step, type StepConfig } from './step.js';
 import { ConflictError, isPermanent, OutboxFullError } from './errors.js';
 import { sleep, systemClock } from './internal/clock.js';
-import { assertNever, messageOf } from './internal/shared.js';
+import { assertNever, copyEvent, messageOf } from './internal/shared.js';
 import type {
   Clock,
   DeadLetter,
@@ -152,7 +152,8 @@ export function createAttend(config: AttendConfig): Attend {
    * Per-scope inputs are serialized in this process, so one process never races itself.
    * Events that queue behind a write in flight merge into one step and one write, and every
    * caller's promise is that write's. Any other input closes the merge, so the lane stays in
-   * arrival order.
+   * arrival order. An `events` input is owned here: `push` and a source's `emit` copy what the
+   * caller passed, so a merge may grow its list and the record may keep its events.
    */
   function apply(scope: string, input: Input): Promise<void> {
     const open = ingests.get(scope);
@@ -161,13 +162,12 @@ export function createAttend(config: AttendConfig): Attend {
       return open.done;
     }
     ingests.delete(scope);
-    const queued: Input = input.kind === 'events' ? { ...input, events: [...input.events] } : input;
     const previous = lanes.get(scope) ?? Promise.resolve();
     const next = previous.then(() => {
-      if (ingests.get(scope)?.input === queued) ingests.delete(scope);
-      return applyNow(scope, queued);
+      if (ingests.get(scope)?.input === input) ingests.delete(scope);
+      return applyNow(scope, input);
     });
-    if (queued.kind === 'events') ingests.set(scope, { input: queued, done: next });
+    if (input.kind === 'events') ingests.set(scope, { input, done: next });
     const settled = next.catch(() => undefined).finally(() => {
       if (lanes.get(scope) === settled) lanes.delete(scope);
     });
@@ -284,14 +284,14 @@ export function createAttend(config: AttendConfig): Attend {
       const live = config.context ? await config.context(scope, controller.signal) : {};
       const input: JudgeInput = {
         scope,
-        window: effect.window,
+        window: structuredClone(effect.window),
         routes: effect.offered.map((route) => {
           const criterion = config.criteria?.[route];
           return criterion === undefined ? { route } : { route, criterion };
         }),
         predicates: Object.entries({ ...config.predicates, ...live.predicates }).map(([name, question]) => ({ name, question })),
         facts: live.facts ?? {},
-        recent: effect.recent,
+        recent: structuredClone(effect.recent),
         now: clock.now(),
       };
       if (config.guidance !== undefined) input.guidance = config.guidance;
@@ -313,8 +313,8 @@ export function createAttend(config: AttendConfig): Attend {
     const cancel = clock.at(phase.leaseUntil, () => controller.abort(new Error('attend: delivery timed out')));
     let result: Input;
     try {
-      if (item.kind === 'decision') await config.sink.deliver(item.decision, controller.signal);
-      else await config.deadLetter(item.letter, controller.signal);
+      if (item.kind === 'decision') await config.sink.deliver(structuredClone(item.decision), controller.signal);
+      else await config.deadLetter(structuredClone(item.letter), controller.signal);
       result = { kind: 'delivered', deliveryId: item.id, attempt: phase.attempt };
     } catch (error) {
       result = { kind: 'deliveryFailed', deliveryId: item.id, attempt: phase.attempt, message: messageOf(error), permanent: isPermanent(error) };
@@ -339,9 +339,12 @@ export function createAttend(config: AttendConfig): Attend {
   }
 
   return {
-    push: (scope, events) => apply(scope, { kind: 'events', events }),
+    push: (scope, events) => apply(scope, { kind: 'events', events: events.map(copyEvent) }),
     flush: (scope) => apply(scope, { kind: 'flush' }),
-    inspect: (scope) => config.store.get(scope),
+    async inspect(scope) {
+      const record = await config.store.get(scope);
+      return record === null ? null : structuredClone(record);
+    },
 
     async attach(scope, source, options) {
       const slot = `${scope}\n${source.key}`;
@@ -354,7 +357,7 @@ export function createAttend(config: AttendConfig): Attend {
       sources.add(controller);
       let failures = 0;
       const emit = async (batch: SourceBatch) => {
-        await apply(scope, { kind: 'events', source: source.key, ...batch });
+        await apply(scope, { kind: 'events', source: source.key, ...batch, events: batch.events.map(copyEvent) });
         failures = 0;
       };
       try {
