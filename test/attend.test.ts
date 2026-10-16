@@ -754,28 +754,61 @@ describe('createAttend', () => {
     await h.stop();
   });
 
-  test('an aborted run waits for the judge in flight, persists its verdict, starts no delivery, and the next runner delivers after the lease', async () => {
+  test('an aborted run waits for the judge in flight, persists its verdict, releases the delivery it will not start, and the next runner delivers at once', async () => {
     const store = memoryStore();
     const held = heldJudge();
     const first = setup([], { store, judge: held.judge });
     await first.attend.push('s', [ev('a')]);
     await first.clock.advance(500);
     const stopping = first.stop();
-    expect(await Promise.race([stopping.then(() => 'resolved'), drain().then(() => 'pending')])).toBe('pending');
+    expect(await pendingOrResolved(stopping)).toBe('pending');
     held.release({ route: 'queue' });
     await stopping;
     expect(first.sink.delivered).toEqual([]);
     expect(await store.get('s')).toMatchObject({
       batch: null,
-      outbox: { decisions: [{ item: { id: ID_A, kind: 'decision' }, phase: { phase: 'inFlight', attempt: 1, leaseUntil: 11_500 } }], deadLetters: [] },
-      dueAt: 11_500,
+      outbox: { decisions: [{ item: { id: ID_A, kind: 'decision' }, phase: { phase: 'retrying', attempt: 0, failures: 0, at: 1500 } }], deadLetters: [] },
+      dueAt: 1500,
     });
+    expect(first.traces).toContainEqual({ kind: 'released', scope: 's', stage: 'sink', id: ID_A, attempt: 1 });
     const second = setup([], { store, config: { clock: first.clock } });
-    await first.clock.advance(10_000);
-    expect(second.traces).toContainEqual(expect.objectContaining({ kind: 'retrying', stage: 'sink', id: ID_A, message: 'delivery lease expired' }));
-    await first.clock.advance(1000);
-    expect(second.sink.delivered.map((d) => [d.id, d.route])).toEqual([[ID_A, 'queue']]);
+    await first.clock.advance(0);
+    expect(second.sink.delivered.map((d) => [d.id, d.route, d.at])).toEqual([[ID_A, 'queue', 1500]]);
+    expect(second.sink.attempts.get(ID_A)).toBe(1);
+    expect(second.traces.filter((t) => t.kind === 'retrying')).toEqual([]);
     expect(first.sink.delivered).toEqual([]);
+    await second.stop();
+  });
+
+  test('an aborted run releases the judge call for a window that settled on the late verdict, and the next runner judges it at once', async () => {
+    const store = memoryStore();
+    const held = heldJudge();
+    const first = setup([], { store, judge: held.judge });
+    await first.attend.push('s', [ev('a')]);
+    await first.clock.advance(500);
+    await first.attend.push('s', [ev('b')]);
+    await first.clock.advance(500);
+    const stopping = first.stop();
+    held.release({ route: 'queue' });
+    await stopping;
+    expect(held.calls.map((c) => c.window.id)).toEqual([ID_A]);
+    expect(await store.get('s')).toMatchObject({
+      batch: { window: { id: ID_B, reason: 'closing' }, phase: { phase: 'retrying', attempt: 0, failures: 0, at: 2000 } },
+      outbox: { decisions: [{ item: { id: ID_A }, phase: { phase: 'retrying', attempt: 0, failures: 0, at: 2000 } }], deadLetters: [] },
+      dueAt: 2000,
+    });
+    expect(first.traces.filter((t) => t.kind === 'released')).toEqual([
+      { kind: 'released', scope: 's', stage: 'sink', id: ID_A, attempt: 1 },
+      { kind: 'released', scope: 's', stage: 'judge', id: ID_B, attempt: 1 },
+    ]);
+    const second = setup([{ route: 'note' }], { store, config: { clock: first.clock } });
+    await first.clock.advance(0);
+    expect(second.judge.calls.map((c) => [c.window.id, c.window.reason])).toEqual([[ID_B, 'closing']]);
+    expect(second.sink.delivered.map((d) => [d.id, d.route, d.at])).toEqual([
+      [ID_A, 'queue', 2000],
+      [ID_B, 'note', 2000],
+    ]);
+    expect(second.traces.filter((t) => t.kind === 'retrying')).toEqual([]);
     await second.stop();
   });
 

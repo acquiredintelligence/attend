@@ -22,6 +22,7 @@ import type {
   Judgment,
   JsonObject,
   Kind,
+  ReleasedInput,
   Route,
   ScopeRecord,
   SettlePolicy,
@@ -66,10 +67,12 @@ export interface AttendConfig {
 export interface RunOptions {
   /**
    * Aborting stops the sweep, the timers and the attached sources and starts no further judge,
-   * sink or dead-letter call. `run` then resolves once the calls already in flight have settled
-   * and persisted their results, or their leases have expired, and once every write this
-   * instance had in flight has landed, so the store may be closed as soon as it resolves.
-   * Whatever this runner left undone, the next runner takes up when its lease expires.
+   * sink or dead-letter call: one the reducer asks for after that is released at once, with no
+   * failure counted, so the next runner takes it up on its first tick. `run` then resolves once
+   * the calls already in flight have settled and persisted their results, or their leases have
+   * expired, and once every write this instance had in flight has landed, so the store may be
+   * closed as soon as it resolves. A call that outlived its lease is taken up by the next
+   * runner when that lease expires.
    */
   signal: AbortSignal;
   /** How often to ask the store for due scopes. The only path for scopes written by other processes. Default 1000. */
@@ -191,10 +194,16 @@ export function createAttend(config: AttendConfig): Attend {
     });
   }
 
-  /** Only a live runner starts a call; one it does not start is recovered by the next runner when its lease expires. */
-  function call(scope: string, input: Input['kind'], leaseUntil: number, work: () => Promise<void>): void {
-    if (!running) return;
-    const done = background(scope, input, work).finally(() => calls.delete(done));
+  /**
+   * Only a live runner starts a call. One it will not start is released instead, so the next
+   * runner takes it up on its first tick rather than when the lease expires.
+   */
+  function call(scope: string, result: Input['kind'], leaseUntil: number, work: () => Promise<void>, release: ReleasedInput): void {
+    if (!running) {
+      void background(scope, release.kind, () => apply(scope, release));
+      return;
+    }
+    const done = background(scope, result, work).finally(() => calls.delete(done));
     calls.set(done, leaseUntil);
   }
 
@@ -216,10 +225,14 @@ export function createAttend(config: AttendConfig): Attend {
         observe(effect.trace);
         return;
       case 'judge':
-        call(scope, 'judged', effect.leaseUntil, () => runJudge(scope, effect));
+        call(scope, 'judged', effect.leaseUntil, () => runJudge(scope, effect), { kind: 'judgeReleased', batchId: effect.batchId, attempt: effect.attempt });
         return;
       case 'deliver':
-        call(scope, 'delivered', effect.delivery.phase.leaseUntil, () => runDeliver(scope, effect));
+        call(scope, 'delivered', effect.delivery.phase.leaseUntil, () => runDeliver(scope, effect), {
+          kind: 'deliveryReleased',
+          deliveryId: effect.delivery.item.id,
+          attempt: effect.delivery.phase.attempt,
+        });
         return;
       default:
         return assertNever(effect);
