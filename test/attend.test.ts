@@ -19,6 +19,7 @@ const kind = (e: Event): Kinded => {
 
 const ev = (id: string, name = 'close'): Event => ({ id, at: 0, name, data: {}, text: `${name} ${id}` });
 const ID_A = 'af63dc4c8601ec8c';
+const ID_B = 'af63df4c8601f1a5';
 const ID_AB = 'e5beb1190415e670';
 
 function setup(script: ScriptedAnswer[], extra?: { settle?: Partial<SettlePolicy>; judge?: Judge; store?: StateStore; config?: Partial<AttendConfig> }) {
@@ -247,6 +248,54 @@ describe('createAttend', () => {
     await h.clock.advance(1000 + 4000);
     expect(letters).toHaveLength(1);
     expect(await h.attend.inspect('s')).toMatchObject({ outbox: [] });
+    await h.stop();
+  });
+
+  test('a dead-letter handler that always throws never holds back a later decision', async () => {
+    const deadLetter = async () => {
+      throw new Error('handler down');
+    };
+    const h = setup([{ fail: 'no', permanent: true }, { route: 'queue' }], { config: { deadLetter } });
+    await h.attend.push('s', [ev('a')]);
+    await h.clock.advance(500);
+    await h.attend.push('s', [ev('b')]);
+    await h.clock.advance(500);
+    expect(h.sink.delivered.map((d) => d.id)).toEqual([ID_B]);
+    expect((await h.attend.inspect('s'))?.outbox).toEqual([
+      {
+        id: ID_A,
+        kind: 'deadLetter',
+        letter: {
+          id: ID_A,
+          scope: 's',
+          stage: 'judge',
+          window: { id: ID_A, events: [{ ...ev('a'), kind: 'closing', seenAt: 1000 }], reason: 'closing', waits: 0, dropped: 0, gap: false, settledAt: 1500 },
+          decision: null,
+          message: 'no',
+          permanent: true,
+          attempts: 1,
+          at: 1500,
+        },
+        phase: 'retrying',
+        attempt: 1,
+        at: 2500,
+      },
+    ]);
+    await h.stop();
+  });
+
+  test('a dead letter whose handler keeps throwing retries with doubling backoff up to the cap', async () => {
+    let calls = 0;
+    const deadLetter = async () => {
+      calls += 1;
+      throw new Error('handler down');
+    };
+    const h = setup([{ fail: 'no', permanent: true }], { config: { deadLetter } });
+    await h.attend.push('s', [ev('a')]);
+    await h.clock.advance(500 + 173_000);
+    expect(calls).toBe(7);
+    expect(h.traces.flatMap((t) => (t.kind === 'retrying' && t.stage === 'deadLetter' ? [t.at] : []))).toEqual([2500, 6500, 22_500, 54_500, 114_500, 174_500, 234_500]);
+    expect((await h.attend.inspect('s'))?.outbox).toMatchObject([{ id: ID_A, kind: 'deadLetter', phase: 'retrying', attempt: 7, at: 234_500 }]);
     await h.stop();
   });
 

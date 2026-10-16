@@ -419,6 +419,24 @@ describe('delivery', () => {
     expect(later.record.outbox[0]).toMatchObject({ phase: 'retrying', attempt: 40, at: 70_800 });
   });
 
+  test('a dead letter in flight does not hold back a decision behind it', () => {
+    const letter = { id: ID_B, scope, stage: 'judge' as const, window: { ...windowA, id: ID_B }, decision: null, message: 'down', permanent: true, attempts: 1, at: 0 };
+    const stuck = { id: ID_B, kind: 'deadLetter' as const, letter, phase: 'inFlight' as const, attempt: 3, leaseUntil: 10_000 };
+    const before: ScopeRecord = {
+      ...base(),
+      outbox: [stuck, { id: ID_A, kind: 'decision', decision: decisionA, phase: 'retrying', attempt: 0, at: 0 }],
+    };
+    const { record, effects } = step(cfg, before, { kind: 'tick' }, 100);
+    expect(record.outbox).toEqual([stuck, { id: ID_A, kind: 'decision', decision: decisionA, phase: 'inFlight', attempt: 1, leaseUntil: 10_100 }]);
+    expect(effects).toEqual([
+      { kind: 'deliver', scope, delivery: { id: ID_A, kind: 'decision', decision: decisionA, phase: 'inFlight', attempt: 1, leaseUntil: 10_100 } },
+      { kind: 'trace', trace: { kind: 'delivering', scope, deliveryId: ID_A, attempt: 1 } },
+    ]);
+    expect(record.dueAt).toBe(10_000);
+    const acked = step(cfg, record, { kind: 'delivered', deliveryId: ID_A, attempt: 1 }, 200);
+    expect(acked.record.outbox).toEqual([stuck]);
+  });
+
   test('deliveries leave one at a time, oldest first', () => {
     const second: Decision = { ...decisionA, id: ID_B };
     const before: ScopeRecord = {

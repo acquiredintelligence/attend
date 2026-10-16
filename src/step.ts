@@ -70,6 +70,17 @@ function isSheddable(entry: Kinded): boolean {
   return entry.kind === 'consequence' || entry.kind === 'context';
 }
 
+/**
+ * The outbox is two lanes told apart by `kind`, so a dead-letter handler that is down never
+ * holds a decision back. Each lane delivers one at a time, oldest first.
+ */
+const LANES = ['decision', 'deadLetter'] as const;
+type Lane = (typeof LANES)[number];
+
+function laneHead(r: ScopeRecord, lane: Lane): number {
+  return r.outbox.findIndex((d) => d.kind === lane);
+}
+
 interface Ctx {
   config: StepConfig;
   now: number;
@@ -232,8 +243,10 @@ function nextDue(policy: SettlePolicy, r: ScopeRecord): number | null {
     const d = deadline(policy, r.buffer);
     if (d) times.push(d.at);
   }
-  const head = r.outbox[0];
-  if (head) times.push(head.phase === 'inFlight' ? head.leaseUntil : head.at);
+  for (const lane of LANES) {
+    const head = r.outbox[laneHead(r, lane)];
+    if (head) times.push(head.phase === 'inFlight' ? head.leaseUntil : head.at);
+  }
   return times.length === 0 ? null : Math.min(...times);
 }
 
@@ -458,7 +471,8 @@ function deadLetterDelay(policy: SettlePolicy, attempt: number): number {
 
 /**
  * A failed attempt at `r.outbox[i]`: a decision retries through the backoff list and then
- * becomes a dead letter; a dead letter retries with capped backoff, whatever the error.
+ * becomes a dead letter, leaving the decision lane; a dead letter retries with capped
+ * backoff, whatever the error.
  */
 function failDelivery(ctx: Ctx, r: ScopeRecord, i: number, message: string, permanent: boolean): ScopeRecord {
   const d = r.outbox[i];
@@ -493,19 +507,27 @@ function failDelivery(ctx: Ctx, r: ScopeRecord, i: number, message: string, perm
   return r;
 }
 
-/** One delivery in flight at a time, oldest first. An expired lease is one failed attempt. */
 function pumpOutbox(ctx: Ctx, r: ScopeRecord): ScopeRecord {
-  const head = r.outbox[0];
+  for (const lane of LANES) r = pumpLane(ctx, r, lane);
+  return r;
+}
+
+/** One delivery per lane in flight at a time, oldest first. An expired lease is one failed attempt. */
+function pumpLane(ctx: Ctx, r: ScopeRecord, lane: Lane): ScopeRecord {
+  let i = laneHead(r, lane);
+  const head = r.outbox[i];
   if (!head) return r;
   if (head.phase === 'inFlight') {
     if (head.leaseUntil > ctx.now) return r;
-    r = failDelivery(ctx, r, 0, 'delivery lease expired', false);
+    r = failDelivery(ctx, r, i, 'delivery lease expired', false);
+    // A decision that just spent its last attempt is now a dead letter, so this lane's head moved.
+    i = laneHead(r, lane);
   }
-  const next = r.outbox[0];
+  const next = r.outbox[i];
   if (!next || next.phase !== 'retrying' || next.at > ctx.now) return r;
   const attempt = next.attempt + 1;
   const inFlight: InFlightDelivery = { ...itemOf(next), phase: 'inFlight', attempt, leaseUntil: ctx.now + ctx.config.policy.deliveryTimeoutMs };
-  r.outbox[0] = inFlight;
+  r.outbox[i] = inFlight;
   ctx.out.push({ kind: 'deliver', scope: r.scope, delivery: inFlight });
   trace(ctx, { kind: 'delivering', scope: r.scope, deliveryId: next.id, attempt });
   return r;

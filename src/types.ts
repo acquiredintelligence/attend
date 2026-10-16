@@ -204,7 +204,7 @@ export interface ScopeRecord {
   seen: string[];
   buffer: Buffer;
   batch: Batch | null;
-  /** Oldest first. Delivered one at a time. */
+  /** Oldest first. Decisions and dead letters are separate lanes by `kind`; each lane delivers one at a time. */
   outbox: Delivery[];
   /** Oldest first, bounded by `recentCount`. */
   recent: Verdict[];
