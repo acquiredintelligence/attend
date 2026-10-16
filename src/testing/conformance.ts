@@ -228,10 +228,18 @@ export function scopeStoreConformance(make: () => Promise<ScopeStore> | ScopeSto
         due: await store.due(1000, 10),
       };
       const before = structuredClone(returned);
-      await store.commit([write('s', 3, { inputs: [logged('c')], appends: [append('three')], due: 2000 })]);
+      assertEqual(await store.commit([write('s', 3, { inputs: [logged('c')], appends: [append('one', 's', 'queue', 2000), letter('two', 's', 'sink', 2000)], due: 1000 })]), ['ok'], 'duplicate appends commit');
+      assertEqual(await store.commit([write('s', 4, { inputs: [logged('d')], appends: [append('three')], due: 2000 })]), ['ok'], 'later commit');
+      await store.log.find('decision', 'three');
+      await store.log.find('deadLetter', 'two');
+      await store.log.bounds();
+      await store.due(2000, 10);
       await store.log.trim({ maxRows: 1 });
-      await store.commit([write('s', 4, { snapshot: { version: 5, record: record('s', 5), policy, reducer: 1 }, appends: [append('four'), letter('five')], due: null })]);
+      assertEqual(await store.commit([write('s', 5, { snapshot: { version: 6, record: record('s', 6), policy, reducer: 1 }, appends: [append('four'), letter('five')], due: null })]), ['ok'], 'snapshot commit');
       await store.log.read({ after: null, limit: 10 });
+      await store.log.find('decision', 'one');
+      await store.log.bounds();
+      await store.due(3000, 10);
       await store.load('s');
       await store.remove('s');
       assertEqual(returned, before, 'returned values unchanged');
