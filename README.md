@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/banner.jpg" alt="An abstract head drawn in green contour lines, eyes closed, with a comic-style hit mark at its top left where a stream of green dots converges" width="100%">
+</p>
+
 <h1 align="center">attend</h1>
 
 <p align="center">Decide when an event should wake your agent.</p>
