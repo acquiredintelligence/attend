@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { Fanout } from './fanout.js';
 import type { Attend } from '../shell/types.js';
 import type { DecisionLog, Position } from '../store/types.js';
 import type { DeliveredRoute, Entry, JsonObject, Route, SettleReason } from '../core/types.js';
@@ -159,6 +160,8 @@ export interface SubscriptionFilter {
   minProbability: number;
   stage?: 'judge' | 'sink';
   include: 'notice' | 'events';
+  /** Granted prefixes a row's scope must start with one of: set when the principal holds several grants and the arguments name neither scope nor scopePrefix. */
+  grants?: readonly string[];
 }
 
 /** `scopes` are granted prefixes; `['']` grants every scope. */
@@ -187,16 +190,27 @@ export interface EventsServerOptions {
   payload?: { maxEventsBytes?: number };
 }
 
-/** The slice of the MCP SDK's request `extra` the handlers use. */
-export interface McpRequestExtraLike {
-  requestId: string | number;
-  signal: AbortSignal;
-  sendNotification(notification: { method: string; params?: object }): Promise<void>;
+/** A JSON-RPC request as the MCP SDK hands it to `fallbackRequestHandler`. */
+export interface McpRequestLike {
+  jsonrpc: '2.0';
+  id: string | number;
+  method: string;
+  params?: { [key: string]: unknown };
 }
 
-/** The slice of an SDK `Server` that `install` uses: zod-free registration through the fallback handler. */
+/** The slice of the MCP SDK 2.x request context the handlers use. */
+export interface McpRequestContextLike {
+  mcpReq: {
+    id: string | number;
+    signal: AbortSignal;
+    notify(notification: { method: string; params?: { [key: string]: unknown } }): Promise<void>;
+  };
+}
+
+/** The slice of an MCP SDK 2.x `Server` that `install` uses: capability registration before connect, and one zod-free fallback handler. */
 export interface McpServerLike {
-  fallbackRequestHandler?: (request: { method: string; params?: unknown }, extra: McpRequestExtraLike) => Promise<unknown>;
+  registerCapabilities(capabilities: { extensions?: Record<string, JsonObject>; tools?: JsonObject }): void;
+  fallbackRequestHandler?(request: McpRequestLike, ctx: McpRequestContextLike): Promise<{ [key: string]: unknown }>;
 }
 
 export type HttpRoute = (req: IncomingMessage, res: ServerResponse) => void | Promise<void>;
@@ -233,6 +247,10 @@ export interface ServerContext {
   readonly log: DecisionLog;
   readonly options: EventsServerOptions;
   readonly descriptors: readonly EventDescriptor[];
+  /** Aborts when `EventsServer.close()` runs: long polls answer at once, and P9's streams end with their final frame. */
+  readonly signal: AbortSignal;
+  /** The process's shared tail cache and fan-out index (design §6.9), built by `createFanout(log)` on first read of this property and closed by `EventsServer.close()`. Phase P9 implements it; poll and the tools never read it. */
+  readonly fanout: Fanout;
 }
 
 /** NDJSON lines. */

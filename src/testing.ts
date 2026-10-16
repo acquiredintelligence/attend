@@ -313,6 +313,7 @@ export function logConformance(make: () => Promise<EventLog> | EventLog, options
   return cases.map(([name, run]) => ({ name, run: async () => run(await make()) }));
 }
 export { decisionLogConformance, scopeStoreConformance } from './testing/conformance.js';
+export { eventsWireConformance, type WireTarget } from './testing/wire.js';
 export { suggestThreshold } from './core/threshold.js';
 export type { SuggestThresholdOptions, ThresholdCandidate, ThresholdSuggestion } from './core/threshold.js';
 

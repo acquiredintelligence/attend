@@ -22,6 +22,7 @@ import { PermanentError } from './errors.js';
 import { sleep, systemClock } from './internal/clock.js';
 import { stableJson } from './internal/json.js';
 import { assertNever, messageOf } from './internal/shared.js';
+import type { AttendEventName, AttentionDeadLetterData, AttentionDecisionData, DeadLetterArguments, DecisionArguments } from './server/types.js';
 import type { Clock, Event, JsonObject, Source, SourceBatch } from './types.js';
 
 export interface McpEventsOptions {
@@ -532,4 +533,108 @@ function classify(error: unknown): Error {
 /** The SDK fails an in-flight request with -32000 on close, but a later one with a bare, code-less "Not connected"; both get this. */
 function closedClient(cause: unknown): PermanentError {
   return new PermanentError('attend/mcp: the Client closed; reconnect it and attach again', cause === undefined ? undefined : { cause });
+}
+
+/** Options for consuming decisions with a durable cursor. */
+export interface DecisionFeedOptions {
+  /** Default 'attention.decision'. */
+  name?: AttendEventName;
+  arguments?: DecisionArguments | DeadLetterArguments;
+  /** The last cursor persisted. Null starts from now. */
+  cursor: string | null;
+  maxAgeMs?: number;
+  /** `auto` streams when `events/list` offers push, else polls. Default `auto`. */
+  mode?: 'stream' | 'poll' | 'auto';
+  /** A stream with no frame for this long counts as dead (twice the heartbeat). Default 30,000. */
+  idleTimeoutMs?: number;
+  signal: AbortSignal;
+}
+
+/** Persist `cursor` from every item, `cursor` items included, before acting on the next one. Dedup on `eventId`. */
+export type DecisionFeedItem =
+  | { kind: 'decision'; eventId: string; data: AttentionDecisionData; cursor: string | null }
+  | { kind: 'deadLetter'; eventId: string; data: AttentionDeadLetterData; cursor: string | null }
+  | { kind: 'cursor'; cursor: string | null; truncated: boolean };
+
+/** Subscribes through `mcpEventsSource` and yields one item at a time; the subscription waits while the caller handles an item. */
+export async function* decisionFeed(client: Client, options: DecisionFeedOptions): AsyncIterable<DecisionFeedItem> {
+  const controller = new AbortController();
+  const signal = AbortSignal.any([options.signal, controller.signal]);
+  const source = mcpEventsSource(client, {
+    name: options.name ?? 'attention.decision',
+    ...(options.arguments === undefined ? {} : { arguments: { ...options.arguments } }),
+    ...(options.mode === undefined ? {} : { mode: options.mode }),
+    ...(options.maxAgeMs === undefined ? {} : { maxAgeMs: options.maxAgeMs }),
+    idleTimeoutMs: options.idleTimeoutMs ?? 30_000,
+  });
+  let committed = options.cursor;
+  let pending: { batch: SourceBatch; release: () => void } | undefined;
+  let failure: unknown;
+  let ended = false;
+  let wake: () => void = () => undefined;
+  const onAbort = () => { pending?.release(); wake(); };
+  signal.addEventListener('abort', onAbort, { once: true });
+  const running = (async () => {
+    try {
+      while (!signal.aborted) {
+        try {
+          await source.subscribe(committed, (batch) => new Promise<void>((release) => {
+            if (signal.aborted) { release(); return; }
+            pending = { batch, release };
+            wake();
+          }), signal);
+          return;
+        } catch (error) {
+          if (signal.aborted) return;
+          if (error instanceof PermanentError) throw error;
+          await sleep(systemClock(), 1000, signal);
+        }
+      }
+    } catch (error) {
+      failure = error;
+    } finally {
+      ended = true;
+      wake();
+    }
+  })();
+  try {
+    while (!signal.aborted) {
+      if (!pending) {
+        if (ended) {
+          if (failure !== undefined) throw failure;
+          return;
+        }
+        await new Promise<void>((resolve) => { wake = resolve; });
+        continue;
+      }
+      const { batch, release } = pending;
+      try {
+        const items: DecisionFeedItem[] = [];
+        const next = batch.cursor ?? committed;
+        if (batch.truncated) items.push({ kind: 'cursor', cursor: batch.events.length > 0 ? committed : next, truncated: true });
+        const delivered = batch.events.filter((event) => event.name === 'attention.decision' || event.name === 'attention.deadLetter');
+        for (const [index, event] of delivered.entries()) {
+          const cursor = index === delivered.length - 1 ? next : committed;
+          if (event.name === 'attention.decision') items.push({ kind: 'decision', eventId: event.id, data: event.data as unknown as AttentionDecisionData, cursor });
+          if (event.name === 'attention.deadLetter') items.push({ kind: 'deadLetter', eventId: event.id, data: event.data as unknown as AttentionDeadLetterData, cursor });
+        }
+        if (delivered.length === 0 && next !== committed && (!batch.truncated || batch.events.length > 0)) {
+          items.push({ kind: 'cursor', cursor: next, truncated: false });
+        }
+        for (const item of items) {
+          if (signal.aborted) return;
+          committed = item.cursor;
+          yield item;
+        }
+      } finally {
+        pending = undefined;
+        release();
+      }
+    }
+  } finally {
+    controller.abort();
+    signal.removeEventListener('abort', onAbort);
+    pending?.release();
+    await running;
+  }
 }
