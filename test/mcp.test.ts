@@ -459,7 +459,7 @@ describe('mcpEventsSource over a real Client and Server', () => {
 
     slow.release();
     await settle();
-    expect(h.errors).toEqual([{ kind: 'overflow', buffered: 2 }]);
+    expect(h.errors).toEqual([{ kind: 'overflow', buffered: 2, reopenMs: 0 }]);
     expect(h.streamRequests(server)).toEqual([
       { name: 'alpha', cursor: null },
       { name: 'alpha', cursor: '3' },
@@ -474,7 +474,7 @@ describe('mcpEventsSource over a real Client and Server', () => {
     await h.stop();
   });
 
-  test('without cursors an overflow still reports and reopens, and only the dropped events are lost', async () => {
+  test('without cursors an overflow reports the reopen pause, waits it out before reopening, and only the dropped events are lost', async () => {
     const server = mcpEventsTestServer([{ name: 'alpha', delivery: ['push'], replay: false }]);
     const client = await server.connect();
     const slow = heldStore();
@@ -486,8 +486,12 @@ describe('mcpEventsSource over a real Client and Server', () => {
     await settle();
     slow.release();
     await settle();
-    expect(h.errors).toEqual([{ kind: 'overflow', buffered: 2 }]);
-    await h.clock.advance(1000);
+    await h.clock.advance(999);
+    await settle();
+    expect(h.streamRequests(server)).toEqual([{ name: 'alpha', cursor: null }]);
+    expect(h.errors).toEqual([{ kind: 'overflow', buffered: 2, reopenMs: 1000 }]);
+    await h.clock.advance(1);
+    await settle();
     expect(h.streamRequests(server)).toEqual([
       { name: 'alpha', cursor: null },
       { name: 'alpha', cursor: null },
@@ -512,8 +516,8 @@ describe('mcpEventsSource over a real Client and Server', () => {
     expect(deliveredIds(h)).toEqual(BACKLOG);
     expect(ingestedTotals(h)).toEqual({ count: 2500, duplicates: 0 });
     expect(h.errors).toEqual([
-      { kind: 'overflow', buffered: 1000 },
-      { kind: 'overflow', buffered: 1000 },
+      { kind: 'overflow', buffered: 1000, reopenMs: 0 },
+      { kind: 'overflow', buffered: 1000, reopenMs: 0 },
     ]);
     expect(h.streamRequests(server)).toEqual([
       { name: 'alpha', cursor: null },
