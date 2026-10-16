@@ -21,7 +21,6 @@ Picture an agent that watches your app. The app never stops talking: log lines, 
 attend holds each scope's events until they add up to something, asks a judge what the agent should do, and hands your app one decision. Your app keeps the final say in how that decision runs. In the sample below, a failed build waits, and the user's question wakes the agent with both.
 
 ```ts
-```ts
 import { createAttend, defaultNotice, memoryStore, routes, type Decision } from '@acquiredintelligence/attend';
 
 const tell = (decision: Decision) => console.log(`[${decision.route}]\n${defaultNotice(decision)}`);
@@ -40,17 +39,14 @@ await attend.push('session-1', [
   { id: 'e2', at: Date.now(), name: 'user.message', data: {}, text: 'can you look?' },
 ]);
 ```
-```
 
 The build failure alone never wakes the agent. The user's message settles the window at once, and the agent hears both lines in one notice:
 
-```text
 ```text
 [interrupt]
 Build 4521 failed: 1 test
 can you look?
 Attend to this now, even mid-task.
-```
 ```
 
 ## Install
@@ -65,7 +61,6 @@ attend needs Node 22.13 or later and ships ESM only. The engine has no runtime d
 
 In a clone of this repo, `pnpm demo` streams a short CI story from a real MCP Events server into attend and prints what the agent hears. It needs no API key and no database. The source is [`examples/demo.ts`](examples/demo.ts).
 
-```text
 ```text
 attend demo: a CI server streams MCP Events, and attend decides what the agent hears.
 
@@ -96,7 +91,6 @@ attend demo: a CI server streams MCP Events, and attend decides what the agent h
 
 7 events in, 2 deliveries out. Waking on every event would have run the agent 7 times.
 ```
-```
 
 attend held the log lines until the failed test closed the window. The judge chose `wait`, so the user's comment joined the held window, and one interrupt carried all six events to the agent. The deploy arrived as a `note`.
 
@@ -111,7 +105,6 @@ attend held the log lines until the failed test closed the window. The judge cho
 
 ## How it works
 
-```text
 ```text
   app events (the firehose)
         |   push() in-process, or NDJSON over HTTP to attend serve
@@ -133,7 +126,6 @@ attend held the log lines until the failed test closed the window. The judge cho
         v
   your agent reacts (barge in, take it next turn, add context, offer the user a prompt);
   your app decides how each route is carried out
-```
 ```
 
 The judge picks the route, and your app carries it out. `interrupt` means the agent should hear this now, and your handler decides whether that cancels the turn, steers it or shows a banner. Raw events never leave attend. Only settled, judged decisions do. [How attend works](docs/how-it-works.md) walks through each step, and [the reference](docs/reference.md) lists every kind, route and default.
