@@ -21,6 +21,9 @@
   "engines": {
     "node": ">=22.13"
   },
+  "bin": {
+    "attend": "./dist/cli.js"
+  },
   "packageManager": "pnpm@12.8.1",
   "sideEffects": false,
   "files": [
@@ -49,6 +52,10 @@
     "./mcp": {
       "types": "./dist/mcp.d.ts",
       "default": "./dist/mcp.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "default": "./dist/server.js"
     },
     "./llm": {
       "types": "./dist/llm.d.ts",
