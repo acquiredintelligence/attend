@@ -79,6 +79,9 @@ export function httpHandler(context: ServerContext, install: EventsServer['insta
         text = Buffer.concat(chunks).toString('utf8');
         try { body = JSON.parse(text); }
         catch { json(res, 400, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error: Invalid JSON' } }); return; }
+        if (Array.isArray(body) && body.some((entry: unknown) => entry !== null && typeof entry === 'object' && 'method' in entry && entry.method === 'events/stream')) {
+          json(res, 400, { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid Request: events/stream cannot be sent in a batch' } }); return;
+        }
       }
       const request = sdk.isJSONRPCRequest(body) ? body : undefined;
       id = request?.id ?? null;
@@ -147,6 +150,7 @@ export function httpHandler(context: ServerContext, install: EventsServer['insta
         let finish: () => void = () => undefined;
         const entry = { id: request.id, session: sessionId, principal: principal.id, abort, done: new Promise<void>((resolve) => { finish = resolve; }) };
         streams.add(entry);
+        const release = legacy && sessionId ? sessions.hold(sessionId) : () => undefined;
         try {
           const result = await streamEvents(context, params, principal, request.id, send, abort.signal);
           if (!abort.signal.aborted && !terminating) { await write(`data: ${JSON.stringify({ jsonrpc: '2.0', id: request.id, result })}\n\n`); res.end(); }
@@ -158,7 +162,7 @@ export function httpHandler(context: ServerContext, install: EventsServer['insta
           }
           await termination;
           if (abort.signal.aborted && !res.destroyed) res.end();
-        } finally { clearInterval(timer); session?.abort.signal.removeEventListener('abort', sessionStop); streams.delete(entry); finish(); }
+        } finally { release(); clearInterval(timer); session?.abort.signal.removeEventListener('abort', sessionStop); streams.delete(entry); finish(); }
         return;
       }
       if (sdk.isJSONRPCNotification(body) && body.method === 'notifications/cancelled') {

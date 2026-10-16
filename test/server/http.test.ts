@@ -1,5 +1,6 @@
 import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from 'node:http';
 import { once } from 'node:events';
+import { setImmediate as yieldTurn } from 'node:timers/promises';
 import { afterEach, expect, test, vi } from 'vitest';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { Server, SUPPORTED_PROTOCOL_VERSIONS, DEFAULT_NEGOTIATED_PROTOCOL_VERSION, isJsonContentType } from '@modelcontextprotocol/server';
@@ -13,6 +14,8 @@ import { guardStream } from '../../src/server/guard.js';
 import { createSessions } from '../../src/server/sessions.js';
 import { streamUsage } from '../../src/server/stream.js';
 import { SUBSCRIPTION_ID_META, type EventsServerOptions, type HttpHandlerOptions, type ServerContext, type Principal } from '../../src/server/types.js';
+
+vi.mock('node:timers/promises', { spy: true });
 
 const name = 'attention.decision';
 const all: Principal = { id: 'local', scopes: [''] };
@@ -125,6 +128,72 @@ test('HTTP guard rejects invalid transport headers and null principals without o
   expect(accepted.res.statusCode).toBe(200);
 });
 
+for (const era of ['legacy', 'modern'] as const) {
+  for (const mixed of [false, true]) {
+    for (const method of [undefined, 'batch']) test(`rejects ${mixed ? 'mixed' : 'single'} stream batch in ${era} with ${method ?? 'no'} Mcp-Method`, async () => {
+      const principal = vi.fn(() => all);
+      const t = await target({ maxStreamsPerPrincipal: 1, principal });
+      const headers: Record<string, string> = { ...(era === 'legacy' ? legacy : modern) };
+      if (era === 'legacy') headers['Mcp-Session-Id'] = (await t.initialize()).session;
+      delete headers['Mcp-Method'];
+      if (method) headers['Mcp-Method'] = method;
+      principal.mockClear();
+      const body = [
+        ...(mixed ? [{ jsonrpc: '2.0', id: 2, method: 'events/poll', params: { name } }] : []),
+        { jsonrpc: '2.0', id: 1, method: 'events/stream', params: { name } },
+      ];
+      const abort = new AbortController();
+      try {
+        const response = await fetch(t.url, { method: 'POST', headers, body: JSON.stringify(body), signal: abort.signal });
+        expect(response.status).toBe(400);
+        expect(await response.json()).toEqual({ jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid Request: events/stream cannot be sent in a batch' } });
+      } finally { abort.abort(); }
+      expect(principal).not.toHaveBeenCalled();
+      expect(t.context.fanout.size).toBe(0);
+      expect(streamUsage(t.context).count).toBe(0);
+      const normal = await stream(t.url, 'normal', {}, { ...headers, 'Mcp-Method': 'events/stream' });
+      await eventually(() => normal.frames.length, 1);
+      expect(normal.res.statusCode).toBe(200);
+      expect(normal.frames[0]?.method).toBe('notifications/events/active');
+      expect(streamUsage(t.context).count).toBe(1);
+    });
+  }
+}
+
+test('rejects a stream batch member even without a valid JSON-RPC envelope', async () => {
+  const t = await target();
+  const response = await fetch(t.url, { method: 'POST', headers: modern, body: JSON.stringify([null, 1, 'events/stream', {}, { method: 'events/stream' }]) });
+  expect(response.status).toBe(400);
+  expect(await response.json()).toEqual({ jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid Request: events/stream cannot be sent in a batch' } });
+  expect(t.context.fanout.size).toBe(0);
+});
+
+for (const era of ['legacy', 'modern'] as const) test(`forwards a batch without streams to the SDK in ${era}`, async () => {
+  const t = await target();
+  const headers: Record<string, string> = { ...(era === 'legacy' ? legacy : modern), 'Mcp-Method': 'batch' };
+  if (era === 'legacy') headers['Mcp-Session-Id'] = (await t.initialize()).session;
+  const response = await fetch(t.url, { method: 'POST', headers, body: JSON.stringify([{ jsonrpc: '2.0', id: 1, method: 'events/list', params: { cursor: 'invalid' } }]) });
+  expect(response.status).toBe(era === 'legacy' ? 200 : 400);
+  if (era === 'legacy') {
+    const data = (await response.text()).split('\n').find((line) => line.startsWith('data: '));
+    expect(JSON.parse(data?.slice(6) ?? 'null')).toEqual({ jsonrpc: '2.0', id: 1, error: { code: -32602, message: 'Unknown cursor', data: { field: 'cursor', reason: 'unknown cursor' } } });
+  } else {
+    expect(await response.json()).toEqual({ jsonrpc: '2.0', id: null, error: { code: -32000, message: 'Bad Request: Mcp-Session-Id header is required' } });
+  }
+  expect(t.context.fanout.size).toBe(0);
+});
+
+test('HTTP catch-up yields after every 64 frames', async () => {
+  const t = await target();
+  const ids = Array.from({ length: 640 }, (_, i) => `catch-up-${i}`);
+  await t.commit(ids.map((id) => append(id)));
+  vi.mocked(yieldTurn).mockClear();
+  const s = await stream(t.url, 'yield', { cursor: `v1.${await t.context.epoch()}.` });
+  await eventually(s.ids, ids);
+  expect(s.frames[0]?.method).toBe('notifications/events/active');
+  expect(yieldTurn).toHaveBeenCalledTimes(10);
+});
+
 for (const id of [23, 'string-id']) test(`SSE active, event and heartbeat frames preserve ${id}`, async () => {
   const t = await target({ heartbeatMs: 50 });
   const s = await stream(t.url, id);
@@ -198,6 +267,106 @@ test('session table caps, refreshes, expires and disposes entries', () => {
   const second = sessions.open()!; sessions.close(second);
   expect(sessions.touch(second)).toBe(false);
   expect(closed).toEqual([first, second]); sessions.dispose();
+});
+
+test('held sessions survive sweep and lazy expiry, then get a full idle interval on release', () => {
+  vi.useFakeTimers();
+  const closed: string[] = [];
+  const sessions = createSessions({ max: 1, idleMs: 100, onClose: (id) => closed.push(id) });
+  try {
+    const id = sessions.open()!;
+    const release = sessions.hold(id);
+    vi.advanceTimersByTime(350);
+    expect(closed).toEqual([]);
+    expect(sessions.touch(id)).toBe(true);
+    expect(sessions.open()).toBeNull();
+    vi.setSystemTime(Date.now() + 350);
+    expect(sessions.touch(id)).toBe(true);
+    release();
+    vi.advanceTimersByTime(99);
+    release();
+    expect(closed).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(sessions.touch(id)).toBe(false);
+    expect(closed).toEqual([id]);
+  } finally { sessions.dispose(); }
+});
+
+test('only the last session hold release restarts idle expiry', () => {
+  vi.useFakeTimers();
+  const closed: string[] = [];
+  const sessions = createSessions({ max: 1, idleMs: 100, onClose: (id) => closed.push(id) });
+  try {
+    const id = sessions.open()!;
+    const first = sessions.hold(id);
+    const second = sessions.hold(id);
+    vi.advanceTimersByTime(250);
+    first(); first();
+    vi.advanceTimersByTime(250);
+    expect(closed).toEqual([]);
+    expect(sessions.touch(id)).toBe(true);
+    second();
+    vi.advanceTimersByTime(99);
+    expect(closed).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(sessions.touch(id)).toBe(false);
+    expect(closed).toEqual([id]);
+  } finally { sessions.dispose(); }
+});
+
+test('explicit session close and dispose close held entries', () => {
+  vi.useFakeTimers();
+  const closed: string[] = [];
+  const sessions = createSessions({ max: 1, idleMs: 100, onClose: (id) => closed.push(id) });
+  try {
+    const first = sessions.open()!;
+    const releaseFirst = sessions.hold(first);
+    sessions.close(first);
+    expect(sessions.touch(first)).toBe(false);
+    expect(closed).toEqual([first]);
+    releaseFirst(); releaseFirst();
+    const second = sessions.open()!;
+    const releaseSecond = sessions.hold(second);
+    sessions.dispose();
+    releaseSecond();
+    expect(sessions.touch(second)).toBe(false);
+    expect(closed).toEqual([first, second]);
+  } finally { sessions.dispose(); }
+});
+
+test('HTTP open stream holds its session until disconnect, then restarts idle expiry', async () => {
+  const idleMs = 300;
+  let closed = false;
+  const t = await target({ heartbeatMs: 50 }, { sessions: { idleMs }, newServer: () => {
+    const server = new Server({ name: 'held', version: '1' }, { capabilities: {} });
+    const close = server.close.bind(server);
+    server.close = async () => { closed = true; await close(); }; return server;
+  } });
+  const session = await t.initialize();
+  const headers = { ...legacy, 'Mcp-Session-Id': session.session };
+  const s = await stream(t.url, 'held', {}, headers);
+  await eventually(() => s.frames.length, 1);
+  for (let i = 1; i <= 4; i++) {
+    await eventually(() => s.ended() || s.frames.filter((frame) => frame.method === 'notifications/events/heartbeat').length >= i * 5, true);
+    expect(s.ended()).toBe(false);
+    await t.commit([append(`held-${i}`)]);
+    await eventually(s.ids, Array.from({ length: i }, (_, j) => `held-${j + 1}`));
+  }
+  expect(closed).toBe(false);
+  expect(s.ended()).toBe(false);
+  const active = await t.post('events/list', {}, headers);
+  expect(active.status).toBe(200);
+  expect(await active.text()).toContain('"resultType":"complete"');
+  s.req.destroy(); s.res.destroy();
+  await eventually(() => streamUsage(t.context).count, 0);
+  expect(t.context.fanout.size).toBe(0);
+  const released = await t.post('events/list', {}, headers);
+  expect(released.status).toBe(200);
+  expect(await released.text()).toContain('"resultType":"complete"');
+  await eventually(() => closed, true);
+  const expired = await t.post('events/list', {}, headers);
+  expect(expired.status).toBe(404);
+  expect(await expired.json()).toEqual({ jsonrpc: '2.0', id: 1, error: { code: -32001, message: 'Session not found' } });
 });
 
 test('HTTP initialize uses capped sessions, binds principals and DELETE closes the server', async () => {
