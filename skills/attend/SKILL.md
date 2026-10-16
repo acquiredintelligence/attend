@@ -111,7 +111,7 @@ const attend = createAttend({
   sink: routes({ interrupt: async () => {}, queue: async () => {}, note: async () => {}, ask: async () => {} }),
   deadLetter: async () => {},
   guidance: 'A coding agent for the acme/shop repo. Its user cares about failing tests on main.',
-  observe: (trace) => console.debug('attend', trace.kind, trace.scope),
+  observe: (trace) => console.debug('attend', trace.kind),
 });
 
 const controller = new AbortController();

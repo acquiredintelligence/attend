@@ -3,13 +3,14 @@
  * suites, the crash harness and the crash suite. Runner-agnostic: the suites return named
  * async cases that any test runner can register.
  */
-import type { Clock, DeadLetter, Decision, Event, EventLog, Judge, JudgeInput, Judgment, Kind, ScopeRecord, SettlePolicy, Sink, StateStore, Trace } from './types.js';
-import { initialRecord } from './step.js';
+import type { Clock, DeadLetter, Decision, Event, EventLog, Judge, JudgeInput, Judgment, Kind, ScopeRecord, SettlePolicy, Sink, ScopeStore, Trace } from './types.js';
 import { PermanentError } from './errors.js';
 import { createAttend, type Attend, type AttendConfig } from './attend.js';
 import { memoryStore } from './memory.js';
 import { assertEqual, assertOk } from './internal/assert.js';
 import { drain } from './internal/clock.js';
+import { drainCopies } from './shell/copy.js';
+import { readRecord } from './shell/read.js';
 
 export { drain } from './internal/clock.js';
 
@@ -45,9 +46,15 @@ export function fakeClock(start = 0): FakeClock {
         now = Math.max(now, next.at);
         timers.splice(timers.indexOf(next), 1);
         next.fn();
+        await drainCopies();
+        await drain();
+        await drainCopies();
         await drain();
       }
       now = Math.max(now, at);
+      await drainCopies();
+      await drain();
+      await drainCopies();
       await drain();
     },
     advance(ms) {
@@ -116,114 +123,6 @@ export function recordingSink(): RecordingSink {
 export interface ConformanceCase {
   name: string;
   run(): Promise<void>;
-}
-
-const record = (scope: string, version: number, dueAt: number | null): ScopeRecord => ({ ...initialRecord(scope), version, dueAt });
-
-/**
- * Every guarantee in `StateStore`'s doc comments, as cases. `make` returns a fresh, empty
- * store per case. Run them with your runner:
- *   for (const c of storeConformance(() => memoryStore())) test(c.name, c.run)
- */
-export function storeConformance(make: () => Promise<StateStore> | StateStore): ConformanceCase[] {
-  const cases: [string, (store: StateStore) => Promise<void>][] = [
-    [
-      'get of a missing scope is null',
-      async (store) => {
-        assertEqual(await store.get('missing'), null, 'get');
-      },
-    ],
-    [
-      'put at version 0 creates and get returns a deep-equal record',
-      async (store) => {
-        const r: ScopeRecord = {
-          ...record('s', 1, 42),
-          cursors: { 'log:s': 'c1', 'mcp:alpha:{}': null },
-          seen: ['a', 'b'],
-          buffer: { entries: [{ id: 'a', at: 1, name: 'n', data: { nested: { list: [1, 'two', null, true] }, text: 'héllo 🌍' }, kind: 'closing', seenAt: 5 }], dropped: 1, gap: true, forcedAt: null },
-          recent: [{ id: 'x', route: 'note', at: 3 }],
-        };
-        assertEqual(await store.put(r, 0), 'ok', 'put');
-        assertEqual(await store.get('s'), r, 'round trip');
-      },
-    ],
-    [
-      'put at a stale version conflicts and leaves the record unchanged',
-      async (store) => {
-        await store.put(record('s', 1, 10), 0);
-        await store.put(record('s', 2, 20), 1);
-        assertEqual(await store.put(record('s', 2, 99), 1), 'conflict', 'stale put');
-        assertEqual(await store.get('s'), record('s', 2, 20), 'unchanged');
-      },
-    ],
-    [
-      'put at version 0 on an existing scope conflicts',
-      async (store) => {
-        await store.put(record('s', 1, null), 0);
-        assertEqual(await store.put(record('s', 1, null), 0), 'conflict', 'create twice');
-      },
-    ],
-    [
-      'N concurrent puts at one version give exactly one ok',
-      async (store) => {
-        await store.put(record('s', 1, null), 0);
-        const results = await Promise.all(Array.from({ length: 20 }, (_, i) => store.put(record('s', 2, i), 1)));
-        assertEqual(results.filter((r) => r === 'ok').length, 1, 'exactly one winner');
-        const stored = await store.get('s');
-        assertEqual(stored?.version, 2, 'winner persisted');
-      },
-    ],
-    [
-      'due returns only dueAt <= now, ascending, honouring limit',
-      async (store) => {
-        await store.put(record('late', 1, 300), 0);
-        await store.put(record('early', 1, 100), 0);
-        await store.put(record('mid', 1, 200), 0);
-        await store.put(record('future', 1, 1000), 0);
-        assertEqual(await store.due(300, 10), ['early', 'mid', 'late'], 'ascending');
-        assertEqual(await store.due(300, 2), ['early', 'mid'], 'limit');
-        assertEqual(await store.due(99, 10), [], 'none due');
-      },
-    ],
-    [
-      'due excludes null dueAt and a put that clears dueAt removes the scope',
-      async (store) => {
-        await store.put(record('idle', 1, null), 0);
-        await store.put(record('busy', 1, 5), 0);
-        assertEqual(await store.due(10, 10), ['busy'], 'null excluded');
-        await store.put(record('busy', 2, null), 1);
-        assertEqual(await store.due(10, 10), [], 'cleared');
-      },
-    ],
-    [
-      'remove then get is null and put at version 0 succeeds again',
-      async (store) => {
-        await store.put(record('s', 1, 1), 0);
-        await store.remove('s');
-        assertEqual(await store.get('s'), null, 'removed');
-        assertEqual(await store.due(10, 10), [], 'not due');
-        assertEqual(await store.put(record('s', 1, null), 0), 'ok', 'recreated');
-      },
-    ],
-    [
-      'scopes that are prefixes of each other or hold punctuation stay separate',
-      async (store) => {
-        const scopes = ['a', 'a/b', 'a:b', 'a%b', 'ünï', 'a/b/c'];
-        for (const [i, scope] of scopes.entries()) await store.put(record(scope, 1, i), 0);
-        for (const [i, scope] of scopes.entries()) assertEqual((await store.get(scope))?.dueAt, i, scope);
-      },
-    ],
-    [
-      'a record at maxEvents round-trips',
-      async (store) => {
-        const entries = Array.from({ length: 250 }, (_, i) => ({ id: `e${i}`, at: i, name: 'n', data: { i }, kind: 'passive' as const, seenAt: i }));
-        const r: ScopeRecord = { ...record('s', 1, 1), buffer: { entries, dropped: 0, gap: false, forcedAt: null } };
-        await store.put(r, 0);
-        assertEqual(await store.get('s'), r, 'large round trip');
-      },
-    ],
-  ];
-  return cases.map(([name, run]) => ({ name, run: async () => run(await make()) }));
 }
 
 const event = (id: string): Event => ({ id, at: 0, name: 'n', data: { id } });
@@ -339,7 +238,7 @@ export interface HarnessOptions {
   /** Default 'scope'. */
   scope?: string;
   /** Default `memoryStore()`. */
-  store?: StateStore;
+  store?: ScopeStore;
   /** The clock's start. Default 0. */
   start?: number;
   /** Default 1000. */
@@ -348,14 +247,14 @@ export interface HarnessOptions {
 
 export interface Harness {
   readonly clock: FakeClock;
-  readonly store: StateStore;
+  readonly store: ScopeStore;
   readonly scope: string;
   /** The current instance; a new one after `restart()`. */
   readonly attend: Attend;
   readonly deadLetters: DeadLetter[];
   readonly traces: Trace[];
   /** Commits so far, across instances. `crashAt` counts the same way. */
-  readonly puts: number;
+  readonly commits: number;
   /** True from a crash until `restart()`. */
   readonly crashed: boolean;
   /** Push into the scope and wait until the runner has nothing left to do. Throws `CrashError` if a crash struck. */
@@ -368,8 +267,8 @@ export interface Harness {
   idle(): Promise<void>;
   /** Kill the runner now. The store keeps whatever was committed. */
   crash(): void;
-  /** Schedule a crash at the nth commit from now, counting `puts` so far. */
-  crashAt(put: number, point: CrashPoint): void;
+  /** Schedule a crash at the nth commit from now, counting `commits` so far. */
+  crashAt(commit: number, point: CrashPoint): void;
   /** Start a fresh runner over the same store, as a restarted process would, and let it recover. */
   restart(): Promise<void>;
   /** Stop the runner gracefully. */
@@ -389,9 +288,9 @@ export function harness(config: HarnessConfig, options?: HarnessOptions): Harnes
   const sweepMs = options?.sweepMs ?? 1000;
   const deadLetters: DeadLetter[] = [];
   const traces: Trace[] = [];
-  let puts = 0;
+  let commits = 0;
   let pending = 0;
-  let schedule: { put: number; point: CrashPoint } | null = null;
+  let schedule: { commit: number; point: CrashPoint } | null = null;
   let crashed = false;
 
   interface Instance {
@@ -421,33 +320,42 @@ export function harness(config: HarnessConfig, options?: HarnessOptions): Harnes
       }
     };
     const strike = (n: number, point: CrashPoint) => {
-      if (schedule === null || schedule.put !== n || schedule.point !== point) return;
+      if (schedule === null || schedule.commit !== n || schedule.point !== point) return;
       schedule = null;
       crashed = true;
       state.dead = true;
       controller.abort();
       throw new CrashError();
     };
-    const store: StateStore = {
-      get: (s) => guard(() => inner.get(s)),
-      due: (now, limit) => guard(() => inner.due(now, limit)),
-      remove: (s) => guard(() => inner.remove(s)),
-      put: (record, expected) =>
-        guard(async () => {
-          puts += 1;
-          const n = puts;
-          strike(n, 'before');
-          const result = await inner.put(record, expected);
-          strike(n, 'after');
-          return result;
-        }),
+    const store: ScopeStore = {
+      durable: inner.durable,
+      load: (scope) => guard(() => inner.load(scope)),
+      due: (now, limit, after) => guard(() => inner.due(now, limit, after)),
+      remove: (scope) => guard(() => inner.remove(scope)),
+      log: {
+        epoch: () => guard(() => inner.log.epoch()),
+        bounds: () => guard(() => inner.log.bounds()),
+        read: (query) => guard(() => inner.log.read(query)),
+        find: (kind, id) => guard(() => inner.log.find(kind, id)),
+        wait: (after, ms, signal) => guard(() => inner.log.wait(after, ms, signal)),
+        trim: (retention) => guard(() => inner.log.trim(retention)),
+        compare: (a, b) => inner.log.compare(a, b),
+      },
+      commit: (writes) => guard(async () => {
+        commits += 1;
+        const n = commits;
+        strike(n, 'before');
+        const result = await inner.commit(writes);
+        strike(n, 'after');
+        return result;
+      }),
     };
     const attend = createAttend({
       ...config,
       store,
       clock,
       deadLetter: async (letter, signal) => {
-        await config.deadLetter?.(letter, signal);
+        if (typeof config.deadLetter === 'function') await config.deadLetter(letter, signal);
         deadLetters.push(letter);
       },
       observe: (t) => {
@@ -462,6 +370,7 @@ export function harness(config: HarnessConfig, options?: HarnessOptions): Harnes
 
   async function idle(): Promise<void> {
     for (;;) {
+      await drainCopies();
       await drain();
       if (pending === 0) return;
     }
@@ -494,8 +403,8 @@ export function harness(config: HarnessConfig, options?: HarnessOptions): Harnes
     get attend() {
       return current.attend;
     },
-    get puts() {
-      return puts;
+    get commits() {
+      return commits;
     },
     get crashed() {
       return crashed;
@@ -514,8 +423,8 @@ export function harness(config: HarnessConfig, options?: HarnessOptions): Harnes
     crash() {
       die(current);
     },
-    crashAt(put, point) {
-      schedule = { put: puts + put, point };
+    crashAt(commit, point) {
+      schedule = { commit: commits + commit, point };
     },
     async restart() {
       die(current);
@@ -528,7 +437,7 @@ export function harness(config: HarnessConfig, options?: HarnessOptions): Harnes
       current.controller.abort();
       await current.done;
     },
-    inspect: () => inner.get(scope),
+    inspect: () => readRecord(inner, scope, { decisions: config.sink === 'log' ? 'log' : 'lane', deadLetters: config.deadLetter === 'log' ? 'log' : 'lane' }),
   };
 }
 
@@ -558,7 +467,7 @@ const SESSION_POLICY: Partial<SettlePolicy> = { judgeTimeoutMs: 1000, deliveryTi
  * act is left to resolve under the worst stranded lease before the next one settles, so
  * the windows, and so the ids, are the same in every run.
  */
-async function session(store: StateStore, crash: { put: number; point: CrashPoint } | null): Promise<{ decisions: string[]; letters: string[]; puts: number }> {
+async function session(store: ScopeStore, crash: { commit: number; point: CrashPoint } | null): Promise<{ decisions: string[]; letters: string[]; commits: number }> {
   const delivered = new Set<string>();
   const flaked = new Set<string>();
   const judge: Judge = async (input) => {
@@ -582,7 +491,7 @@ async function session(store: StateStore, crash: { put: number; point: CrashPoin
     },
   };
   const h = harness({ judge, sink, kind: sessionKind, settle: SESSION_POLICY }, { store, sweepMs: 10_000 });
-  if (crash) h.crashAt(crash.put, crash.point);
+  if (crash) h.crashAt(crash.commit, crash.point);
   const survive = async (op: () => Promise<void>) => {
     try {
       await op();
@@ -615,7 +524,8 @@ async function session(store: StateStore, crash: { put: number; point: CrashPoin
   await advance(600);
   await advance(60_000);
   await h.stop();
-  return { decisions: [...delivered].sort(), letters: [...new Set(h.deadLetters.map((l) => l.id))].sort(), puts: h.puts };
+  await store.close?.();
+  return { decisions: [...delivered].sort(), letters: [...new Set(h.deadLetters.map((l) => l.id))].sort(), commits: h.commits };
 }
 
 /** The window ids the session produces in scope `scope`: `a` and `e` are delivered, `b,d` and `f` are dead letters. */
@@ -627,13 +537,13 @@ const SESSION_LETTERS = ['cf892adfae850515', 'eaf0348d05594776'];
  * once per commit boundary with a crash injected there, restarting over the same store.
  * Every run must produce the same set of delivered decision ids and dead-letter ids.
  */
-export function crashSuite(make: () => Promise<StateStore> | StateStore): ConformanceCase[] {
+export function crashSuite(make: () => Promise<ScopeStore> | ScopeStore): ConformanceCase[] {
   const survives = (point: CrashPoint) => async () => {
     const clean = await session(await make(), null);
-    for (let put = 1; put <= clean.puts; put += 1) {
-      const crashed = await session(await make(), { put, point });
-      assertEqual(crashed.decisions, clean.decisions, `decisions after a crash ${point} commit ${put}`);
-      assertEqual(crashed.letters, clean.letters, `dead letters after a crash ${point} commit ${put}`);
+    for (let commit = 1; commit <= clean.commits; commit += 1) {
+      const crashed = await session(await make(), { commit, point });
+      assertEqual(crashed.decisions, clean.decisions, `decisions after a crash ${point} commit ${commit}`);
+      assertEqual(crashed.letters, clean.letters, `dead letters after a crash ${point} commit ${commit}`);
     }
   };
   return [
@@ -649,3 +559,181 @@ export function crashSuite(make: () => Promise<StateStore> | StateStore): Confor
     { name: 'the same ids survive a crash after every commit', run: survives('after') },
   ];
 }
+
+interface MultiGroup {
+  scopes: string[];
+  outcomes: readonly import('./store/types.js').CommitOutcome[];
+  snapshot: boolean;
+  effect: boolean;
+}
+
+async function multiSession(store: ScopeStore, crash: { commit: number; point: CrashPoint } | null) {
+  const clock = fakeClock();
+  const groups: MultiGroup[] = [];
+  const delivered = new Set<string>();
+  const letters = new Set<string>();
+  const flaked = new Set<string>();
+  const scopes = ['m/x', 'm/y', 'm/z'];
+  let commits = 0;
+  let pending = 0;
+  let victim: number | null = null;
+  const strikeState: { struck: { snapshot: boolean; effect: boolean } | null } = { struck: null };
+  const instances: { attend: Attend; controller: AbortController; done: Promise<void>; dead: boolean }[] = [];
+  const judge: Judge = async (input) => {
+    const has = (id: string) => input.window.events.some((event) => event.id === `${input.scope}/${id}`);
+    if (has('f')) throw new PermanentError('refused');
+    if (has('e') && !flaked.has(input.window.id)) {
+      flaked.add(input.window.id);
+      throw new Error('flaky');
+    }
+    if (has('b') && !has('d') && input.routes.some((route) => route.route === 'wait')) return { route: 'wait' };
+    return { route: has('d') ? 'interrupt' : has('e') ? 'note' : has('g') ? 'skip' : 'queue' };
+  };
+
+  function start(index: number) {
+    const controller = new AbortController();
+    const state = { dead: false };
+    const guard = async <T>(work: () => Promise<T>): Promise<T> => {
+      if (state.dead) throw new CrashError();
+      pending += 1;
+      try { return await work(); }
+      finally { pending -= 1; }
+    };
+    const view: ScopeStore = {
+      ...store,
+      load: (scope) => guard(() => store.load(scope)),
+      due: (now, limit, after) => guard(() => store.due(now, limit, after)),
+      remove: (scope) => guard(() => store.remove(scope)),
+      log: {
+        epoch: () => guard(() => store.log.epoch()),
+        bounds: () => guard(() => store.log.bounds()),
+        read: (query) => guard(() => store.log.read(query)),
+        find: (kind, id) => guard(() => store.log.find(kind, id)),
+        wait: (after, ms, signal) => guard(() => store.log.wait(after, ms, signal)),
+        trim: (retention) => guard(() => store.log.trim(retention)),
+        compare: (a, b) => store.log.compare(a, b),
+      },
+      commit: (writes) => guard(async () => {
+        const n = ++commits;
+        const snapshot = writes.some((write) => write.snapshot !== null);
+        const effect = writes.some((write) => write.inputs.some(({ input }) => input.kind === 'tick' || input.kind === 'judged' || input.kind === 'judgeFailed'));
+        const strike = (point: CrashPoint) => {
+          if (strikeState.struck !== null || crash?.commit !== n || crash.point !== point) return;
+          strikeState.struck = { snapshot, effect };
+          victim = index;
+          state.dead = true;
+          controller.abort();
+          throw new CrashError();
+        };
+        strike('before');
+        const outcomes = await store.commit(writes);
+        groups.push({ scopes: writes.map((write) => write.scope), outcomes, snapshot, effect });
+        strike('after');
+        return outcomes;
+      }),
+    };
+    const attend = createAttend({ store: view, clock, kind: sessionKind, judge, settle: SESSION_POLICY,
+      sink: { async deliver(decision) { if (decision.route === 'interrupt') throw new Error('sink down'); delivered.add(decision.id); } },
+      deadLetter: (letter) => { letters.add(letter.id); } });
+    return { attend, controller, get dead() { return state.dead; }, done: attend.run({ signal: controller.signal, sweepMs: 10000 }) };
+  }
+
+  instances.push(start(0), start(1));
+  const idle = async () => {
+    do { await drainCopies(); await drain(); } while (pending > 0);
+  };
+  const check = () => { if (victim !== null) throw new CrashError(); };
+  const survive = async (work: () => Promise<void>) => {
+    try { await work(); await idle(); check(); }
+    catch (error) {
+      if (!(error instanceof CrashError) || victim === null) throw error;
+      const index = victim;
+      await instances[index]!.done;
+      victim = null;
+      instances[index] = start(index);
+      await idle();
+      await work();
+      await idle();
+      check();
+    }
+  };
+  const push = (index: number, id: string, name: string, targets = scopes) => survive(async () => {
+    await Promise.all(targets.map((scope) => instances[index]!.attend.push(scope, [{ id: `${scope}/${id}`, at: 0, name, data: {}, text: `${name} ${id}` }])));
+  });
+  const advance = (ms: number) => {
+    const target = clock.now() + ms;
+    return survive(async () => {
+      for (let next = clock.nextAt(); next !== null && next <= target; next = clock.nextAt()) {
+        await clock.set(next);
+        await idle();
+        check();
+      }
+      await clock.set(target);
+    });
+  };
+  try {
+    await idle();
+    await push(0, 'a', 'close');
+    await advance(600);
+    await advance(8000);
+    await push(1, 'c', 'out', ['m/x']);
+    await push(0, 'h', 'close');
+    await advance(600);
+    await advance(8000);
+    await push(1, 'b', 'look');
+    await advance(4100);
+    await push(0, 'd', 'close');
+    await advance(600);
+    await advance(25000);
+    await push(1, 'e', 'say');
+    await advance(1500);
+    await advance(8000);
+    await push(0, 'f', 'close');
+    await advance(600);
+    await advance(8000);
+    await push(1, 'g', 'close');
+    await advance(600);
+    await advance(60000);
+    return { decisions: [...delivered].sort(), letters: [...letters].sort(), groups, commits, struck: strikeState.struck };
+  } finally {
+    for (const instance of instances) instance.controller.abort();
+    await Promise.all(instances.map((instance) => instance.done));
+    await store.close?.();
+  }
+}
+
+/** Cross-scope recovery, including mixed conflicts, snapshots and effect-start boundaries. */
+export function multiScopeCrashSuite(make: () => Promise<ScopeStore> | ScopeStore): ConformanceCase[] {
+  const verify = (result: Awaited<ReturnType<typeof multiSession>>) => {
+    assertEqual(result.decisions, MULTI_DECISIONS, 'multi-scope decisions');
+    assertEqual(result.letters, MULTI_LETTERS, 'multi-scope dead letters');
+  };
+  const survives = (point: CrashPoint) => async () => {
+    const clean = await multiSession(await make(), null);
+    verify(clean);
+    let snapshots = 0;
+    let effects = 0;
+    for (let commit = 1; commit <= clean.commits; commit += 1) {
+      const result = await multiSession(await make(), { commit, point });
+      verify(result);
+      if (result.struck?.snapshot) snapshots += 1;
+      if (result.struck?.effect) effects += 1;
+    }
+    assertOk(snapshots > 0, 'crashed during a snapshot');
+    assertOk(effects > 0, 'crashed between commit and effect start');
+  };
+  return [
+    { name: 'three scopes group commits and isolate a conflict beside successful writes', async run() {
+      const result = await multiSession(await make(), null);
+      verify(result);
+      assertOk(result.groups.some((group) => group.scopes.length === 3), 'a group of three');
+      assertOk(result.groups.some((group) => group.outcomes.includes('conflict') && group.outcomes.includes('ok')), 'mixed outcomes');
+      assertOk(result.groups.some((group) => group.snapshot), 'a snapshot commit');
+    } },
+    { name: 'three scopes keep their ids after a crash before every group', run: survives('before') },
+    { name: 'three scopes keep their ids after a crash after every group', run: survives('after') },
+  ];
+}
+
+const MULTI_DECISIONS = ['4b0d164deed6032f', '57926a9b506cd3a1', '57926e9b506cda6d', '6be88691d9775406', '6be88f91d9776351', '6be89391d9776a1d', 'd29b92ea485105d3', 'd29b96ea48510c9f', 'd29b9dea48511884'];
+const MULTI_LETTERS = ['51a3be624f9cf887', '57926b9b506cd554', '6be89091d9776504', 'ba2ddaa47740a48a', 'c43155c9c7ae9dd8', 'd29b93ea48510786'];

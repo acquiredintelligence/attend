@@ -1,6 +1,7 @@
-import type { Clock, DeadLetter, DeliveredRoute, Effect, Event, Input, JsonObject, Judge, JudgeImage, Kind, Route, ScopeRecord, ScopeState, SettlePolicy, Sink, Source, Trace } from '../core/types.js';
-import type { DecisionKind, DecisionRow, ScopeStore, ScopeWrite } from '../store/types.js';
+import type { Clock, DeadLetter, DeliveredRoute, Effect, Event, Input, JsonObject, Judge, JudgeImage, Kind, Route, ScopeRecord, ScopeState, SettlePolicy, DecisionAppend, LoggedInput, Sink, Source, Trace } from '../core/types.js';
+import type { DecisionKind, DecisionRow, ScopeStore, ScopeWrite, SerializedWrite } from '../store/types.js';
 
+/** A handler for a window that exhausted judge or sink delivery. */
 export type DeadLetterHandler = (letter: DeadLetter, signal: AbortSignal) => void | Promise<void>;
 
 /** Live context fetched when the judge is called, and again on every retry. */
@@ -10,6 +11,7 @@ export interface JudgeContext {
   predicates?: Record<string, string>;
 }
 
+/** Process-wide intake limits. */
 export interface AdmissionOptions {
   /** Raw, loading and unapplied inputs per process before push rejects with BackpressureError. Default 20,000. */
   maxQueuedInputs?: number;
@@ -17,6 +19,7 @@ export interface AdmissionOptions {
   maxLagMs?: number;
 }
 
+/** Store, effects, policy and resource limits for an instance. */
 export interface AttendConfig {
   store: ScopeStore;
   judge: Judge;
@@ -43,7 +46,7 @@ export interface AttendConfig {
   observe?: (trace: Trace) => void;
   clock?: Clock;
   admission?: AdmissionOptions;
-  /** Judge calls in flight per process. Past it, calls are deferred with `judgeDeferred`. Default: no cap. */
+  /** Positive integer cap on judge calls in flight per process. Past it, calls are deferred with `judgeDeferred`. Default: no cap. */
   judgeConcurrency?: number;
   /** Idle quiescent scopes are dropped from the cache after this long. Default 300,000. */
   cache?: { idleMs?: number };
@@ -56,6 +59,7 @@ export interface RunOptions {
   sweepLimit?: number;
 }
 
+/** Limits a decision-log subscription by scope, route or row kind. */
 export interface DecisionFilter {
   scope?: string;
   scopePrefix?: string;
@@ -63,6 +67,7 @@ export interface DecisionFilter {
   kinds?: readonly DecisionKind[];
 }
 
+/** Cursor, retention horizon and cancellation for a subscription. */
 export interface DecisionReadOptions {
   /** A cursor from an earlier page or from MCP Events. Null starts from now. */
   cursor?: string | null;
@@ -71,6 +76,7 @@ export interface DecisionReadOptions {
   signal: AbortSignal;
 }
 
+/** Copied rows and the cursor checked through this page. */
 export interface DecisionCursorPage {
   rows: DecisionRow[];
   /** The same `v1.<epoch>.<position>` cursor MCP subscribers get. */
@@ -79,6 +85,7 @@ export interface DecisionCursorPage {
   truncated: boolean;
 }
 
+/** Intake, inspection, subscriptions and runner lifecycle. */
 export interface Attend {
   /** As today. May also reject with BackpressureError. */
   push(scope: string, events: Event[]): Promise<void>;
@@ -93,26 +100,44 @@ export interface Attend {
   run(options: RunOptions): Promise<void>;
 }
 
-/** Shell-internal: one per scope in the shell's slot map. */
+/** An input and its callers, retained until commit or abandonment. */
+export interface RawInput {
+  input: Input;
+  signal: AbortSignal | undefined;
+  rejectHook: ((error: unknown) => void) | undefined;
+  done: Promise<void>;
+  resolve(): void;
+  reject(error: unknown): void;
+  count: number;
+  conflicts: number;
+}
+
+/** The owned state, queued callers and persistence accounting for one scope. */
 export interface ScopeSlot {
+  scope: string;
   state: ScopeState | null;
   loading: Promise<void> | null;
-  /** The write in the open group, still taking inputs. Its waiters resolve when it commits. */
   staged: StagedWrite | null;
-  /** The write in a group being committed. While it is set, inputs queue raw and same-source events merge. */
   inflight: StagedWrite | null;
-  queued: Input[];
+  queued: RawInput[];
   tailBytes: number;
+  tailCount: number;
   snapshotBytes: number;
+  snapshotNeeded: boolean;
+  forceWrite: boolean;
+  storedDue: number | null | undefined;
   lastTouch: number;
 }
 
+/** An open write and the raw inputs and effects whose fate it determines. */
 export interface StagedWrite {
-  write: ScopeWrite;
-  /** Kept so a conflict can reload and re-apply them, up to 8 times. */
-  raw: Input[];
+  write: ScopeWrite & { inputs: LoggedInput[]; appends: DecisionAppend[] };
+  raw: RawInput[];
   effects: Effect[];
-  waiters: { resolve: () => void; reject: (error: unknown) => void }[];
+  bytes: number;
+  snapshotBytes: number;
+  state: ScopeState;
+  serialized: SerializedWrite | undefined;
 }
 
 /** Shell-internal: smart batching, one group in flight per store, writes sorted by scope, bisect on failure. */
@@ -125,7 +150,7 @@ export interface CommitQueue {
 /** Shell-internal: one min-heap, one native timer, lazy re-arm, `sliceUs` of work per macrotask. */
 export interface Scheduler {
   arm(scope: string, dueAt: number | null): void;
-  /** How late the most recent due entry fired. */
+  /** Current lateness of the earliest queued entry, or zero when nothing is overdue. */
   lagMs(): number;
   stop(): void;
 }

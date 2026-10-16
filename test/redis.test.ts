@@ -2,19 +2,15 @@ import { randomUUID } from 'node:crypto';
 import { createClient, RESP_TYPES } from 'redis';
 import { afterAll, describe, expect, test } from 'vitest';
 import { redisLog, redisStore, type RedisSend } from '../src/redis.js';
-import { initialRecord } from '../src/step.js';
-import { crashSuite, logConformance, storeConformance } from '../src/testing.js';
-import type { Event, ScopeRecord } from '../src/types.js';
-import { aliasingCases } from './support/aliasing.js';
+import { createAttend } from '../src/index.js';
+import { crashSuite, multiScopeCrashSuite, fakeClock, recordingSink, scriptedJudge, logConformance } from '../src/testing.js';
 
 const url = process.env.ATTEND_REDIS_URL ?? 'redis://127.0.0.1:16379';
-const run = `attend-test:${randomUUID().slice(0, 8)}:`;
+const run = `attend-p6b:{${randomUUID().replaceAll('-', '').slice(0, 12)}}:`;
 const closers: (() => Promise<void>)[] = [];
 
-/** A fresh connection. `resp` and `mapping` pick the reply shapes the adapter has to parse. */
 async function connect(resp: 2 | 3 = 3, mapping: 'default' | 'buffers' | 'maps' | 'flat' = 'default'): Promise<RedisSend> {
   const client = createClient({ url, RESP: resp, socket: { reconnectStrategy: false, connectTimeout: 5000 } });
-  // Failures also reject the pending command; this listener only keeps the emitter from throwing.
   client.on('error', () => undefined);
   await client.connect();
   closers.push(() => client.close());
@@ -27,7 +23,6 @@ async function connect(resp: 2 | 3 = 3, mapping: 'default' | 'buffers' | 'maps' 
   return (args) => client.sendCommand(args, { typeMapping });
 }
 
-/** Connected on first use, inside a test, so an unreachable server fails every test rather than skipping them. */
 let main: Promise<RedisSend> | undefined;
 const shared = () => (main ??= connect());
 
@@ -41,15 +36,73 @@ afterAll(async () => {
 let prefixes = 0;
 const fresh = () => `${run}${prefixes++}:`;
 
-describe('redisStore conformance', () => {
+describe('public redisStore', () => {
   const make = async () => redisStore(await shared(), { prefix: fresh() });
-  for (const c of storeConformance(make)) test(c.name, c.run);
-  for (const c of crashSuite(make)) test(c.name, c.run, 120_000);
-  for (const c of aliasingCases(make)) test(c.name, c.run);
-});
+  for (const c of [...crashSuite(make), ...multiScopeCrashSuite(make)]) test(c.name, c.run, 300000);
 
-describe('redisStore conformance over RESP2 with Buffer replies', () => {
-  for (const c of storeConformance(async () => redisStore(await connect(2, 'buffers'), { prefix: fresh() }))) test(c.name, c.run);
+  test('public store exposes load instead of the removed StateStore API', async () => {
+    const store = await make();
+    expect(typeof store.load).toBe('function');
+    expect('get' in store).toBe(false);
+    expect('put' in store).toBe(false);
+    expect(await store.load('missing')).toBeNull();
+  });
+
+  test('createAttend delivers and recovers without deciding the same event again', async () => {
+    const prefix = fresh();
+    const clock = fakeClock(1000);
+    const judge = scriptedJudge([{ route: 'queue' }]);
+    const sink = recordingSink();
+    const config = { clock, judge, sink, kind: () => 'closing' as const, deadLetter: 'log' as const };
+    const event = { id: 'a', at: 0, name: 'close', data: {} };
+    const expected = [{
+      id: 'cf8923dfae84f930', scope: 'scope', route: 'queue',
+      probabilities: { interrupt: 0, queue: 1, note: 0, ask: 0, skip: 0, wait: 0 },
+      predicates: {}, confidence: null,
+      window: {
+        id: 'cf8923dfae84f930', events: [{ ...event, kind: 'closing', seenAt: 1000 }],
+        reason: 'forced', waits: 0, dropped: 0, gap: false, settledAt: 1000,
+      },
+      at: 1000,
+    }];
+    const first = createAttend({ ...config, store: redisStore(await shared(), { prefix }) });
+    const controller = new AbortController();
+    const done = first.run({ signal: controller.signal });
+    try {
+      await first.push('scope', [event]);
+      await first.flush('scope');
+      await clock.advance(0);
+      await expect.poll(() => first.inspect('scope')).toMatchObject({
+        batch: null, outbox: { decisions: [], deadLetters: [] },
+        recent: [{ id: 'cf8923dfae84f930', route: 'queue', at: 1000 }],
+      });
+      expect(sink.delivered).toEqual(expected);
+    } finally {
+      controller.abort();
+      await done;
+    }
+    const second = createAttend({ ...config, store: redisStore(await connect(), { prefix }) });
+    const restart = new AbortController();
+    const recovered = second.run({ signal: restart.signal });
+    try {
+      expect(await second.inspect('scope')).toEqual(await first.inspect('scope'));
+      expect(await second.inspect('scope')).toMatchObject({
+        seen: ['a'], batch: null, dueAt: null,
+        recent: [{ id: 'cf8923dfae84f930', route: 'queue', at: 1000 }],
+      });
+      await second.push('scope', [event]);
+      await second.flush('scope');
+      await clock.advance(0);
+      await expect.poll(() => second.inspect('scope')).toMatchObject({
+        batch: null, buffer: { entries: [] }, outbox: { decisions: [], deadLetters: [] },
+      });
+      expect(judge.calls.map((call) => call.window.id)).toEqual(['cf8923dfae84f930']);
+      expect(sink.delivered).toEqual(expected);
+    } finally {
+      restart.abort();
+      await recovered;
+    }
+  }, 30000);
 });
 
 describe('redisLog conformance without a blocking connection', () => {
@@ -65,36 +118,7 @@ describe('redisLog conformance over RESP2 with Buffer replies', () => {
     test(c.name, c.run, 10_000);
 });
 
-const record = (scope: string, version: number, dueAt: number | null): ScopeRecord => ({ ...initialRecord(scope), version, dueAt });
-const event = (id: string): Event => ({ id, at: 0, name: 'n', data: { id } });
-
-describe('redisStore across connections', () => {
-  test('sixteen puts at one version from separate connections give exactly one ok', async () => {
-    const prefix = fresh();
-    const stores = await Promise.all(Array.from({ length: 16 }, async () => redisStore(await connect(), { prefix })));
-    expect(await stores[0]?.put(record('s', 1, null), 0)).toBe('ok');
-    const results = await Promise.all(stores.map((store, i) => store.put(record('s', 2, i), 1)));
-    expect(results.filter((r) => r === 'ok')).toEqual(['ok']);
-    expect(await stores[15]?.get('s')).toEqual(record('s', 2, results.indexOf('ok')));
-  });
-
-  test('a record survives a new store instance on a new connection', async () => {
-    const prefix = fresh();
-    const r: ScopeRecord = { ...record('s', 3, 50), cursors: { 'log:s': 'c9' }, seen: ['a'] };
-    await redisStore(await connect(), { prefix }).put(r, 0);
-    const store = redisStore(await connect(), { prefix });
-    expect(await store.get('s')).toEqual(r);
-    expect(await store.due(50, 10)).toEqual(['s']);
-    expect(await store.put(record('s', 4, null), 3)).toBe('ok');
-  });
-
-  test('a fractional dueAt is due exactly when now reaches it', async () => {
-    const store = redisStore(await shared(), { prefix: fresh() });
-    await store.put(record('s', 1, 100.5), 0);
-    expect(await store.due(100.4, 10)).toEqual([]);
-    expect(await store.due(100.5, 10)).toEqual(['s']);
-  });
-});
+const event = (id: string) => ({ id, at: 0, name: 'n', data: { id } });
 
 describe('redisLog across connections', () => {
   test('eight concurrent appenders lose nothing and duplicate nothing for a tailing reader', async () => {

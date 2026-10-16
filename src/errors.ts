@@ -33,7 +33,7 @@ export class OutboxFullError extends Error {
 }
 
 /**
- * `push` and `flush` reject with this once the compare-and-swap budget is spent against
+ * `push`, `end` and `flush` reject with this once the compare-and-swap budget is spent against
  * other writers. Safe to retry: every input is idempotent and leases recover in-flight work.
  */
 export class ConflictError extends Error {
@@ -42,5 +42,17 @@ export class ConflictError extends Error {
     super(`attend: gave up on scope "${scope}" after ${attempts} conflicts`);
     this.name = 'ConflictError';
     this.scope = scope;
+  }
+}
+
+/** Intake exceeded the queued-input or scheduler-lag limit. */
+export class BackpressureError extends Error {
+  readonly retryAfterMs: number;
+  readonly queued: number;
+  constructor(retryAfterMs: number, queued: number) {
+    super(`attend: over the admission limit with ${queued} inputs queued; retry in ${retryAfterMs} ms`);
+    this.name = 'BackpressureError';
+    this.retryAfterMs = retryAfterMs;
+    this.queued = queued;
   }
 }

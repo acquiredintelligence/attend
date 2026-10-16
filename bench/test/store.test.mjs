@@ -82,9 +82,13 @@ test.each([['WAL', 'NORMAL'], ['DELETE', 'FULL']])('SQLite reads back %s/%s from
   try { expect(opened.durability).toEqual({ store: 'sqlite', journalMode, synchronous, worker: false }); }
   finally { await opened.close(); }
 });
-test('SQLite worker mode rejects the state port', async () => {
+test('SQLite worker mode opens on the scope port and rejects the state port', async () => {
   const build = await loadBuild(dist);
-  await expect(openStore(build, { store: 'sqlite', journalMode: 'WAL', synchronous: 'NORMAL', worker: true })).rejects.toThrow('worker mode needs the scope store port');
+  expect(build.port).toBe('scope');
+  const opened = await openStore(build, { store: 'sqlite', journalMode: 'WAL', synchronous: 'NORMAL', worker: true });
+  try { expect(opened.durability).toEqual({ store: 'sqlite', journalMode: 'WAL', synchronous: 'NORMAL', worker: true }); }
+  finally { await opened.close(); }
+  await expect(openStore({ ...build, port: 'state' }, { store: 'sqlite', journalMode: 'WAL', synchronous: 'NORMAL', worker: true })).rejects.toThrow('worker mode needs the scope store port');
 });
 test('stores CLI produces a validated SQLite report with bound record bytes', async () => {
   const result = await cli('stores', ['--dist', dist, '--store', 'sqlite', '--workloads', '5x20', '--max-windows', '50']);

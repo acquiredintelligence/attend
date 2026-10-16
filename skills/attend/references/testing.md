@@ -104,16 +104,17 @@ test('a decision stranded by a crash is delivered once after the restart', async
 
 ## Adapter suites
 
-To test your own `StateStore` or `EventLog`, register the suites with your runner:
+To test your own `ScopeStore` or `EventLog`, register the suites with your runner:
 
 ```ts
 import { test } from 'node:test';
-import { memoryLog, memoryStore } from 'attend';
-import { crashSuite, logConformance, storeConformance } from 'attend/testing';
+import { memoryStore } from 'attend';
+import { crashSuite, multiScopeCrashSuite, scopeStoreConformance, decisionLogConformance } from 'attend/testing';
 
-for (const c of storeConformance(() => memoryStore())) test(c.name, c.run);
+for (const c of scopeStoreConformance(() => memoryStore())) test(c.name, c.run);
 for (const c of crashSuite(() => memoryStore())) test(c.name, c.run);
-for (const c of logConformance(() => memoryLog(), { canBlock: true })) test(c.name, c.run);
+for (const c of decisionLogConformance(() => memoryStore())) test(c.name, c.run);
+for (const c of multiScopeCrashSuite(() => memoryStore())) test(c.name, c.run);
 ```
 
 Replace the memory adapters with factories for yours. Each factory call must return a fresh, empty adapter: for a database, use a new table or key prefix per call. Set `canBlock` to whether `read` waits for `blockMs`.

@@ -24,11 +24,16 @@ export function drain(): Promise<void> {
   return new Promise((resolve) => (typeof setImmediate === 'function' ? setImmediate(resolve) : setTimeout(resolve, 0)));
 }
 
+/** Wall-clock timers, with already-due work scheduled on the next immediate. */
 export function systemClock(): Clock {
   const MAX_DELAY = 2 ** 31 - 1;
   return {
     now: () => Date.now(),
     at(at, fn) {
+      if (at <= Date.now()) {
+        const immediate = setImmediate(fn);
+        return () => clearImmediate(immediate);
+      }
       const timer = setTimeout(fn, Math.min(Math.max(0, at - Date.now()), MAX_DELAY));
       return () => clearTimeout(timer);
     },
