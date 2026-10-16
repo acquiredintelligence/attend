@@ -19,6 +19,7 @@ import type {
   Input,
   Judge,
   JudgeEffect,
+  JudgeImage,
   JudgeInput,
   Judgment,
   JsonObject,
@@ -60,6 +61,13 @@ export interface AttendConfig {
   /** Static questions the judge answers beside the route, by name. */
   predicates?: Record<string, string>;
   context?: (scope: string, signal: AbortSignal) => JudgeContext | Promise<JudgeContext>;
+  /**
+   * Images for the judge, fetched when it is called and again on every retry: a screenshot of
+   * what the user sees, say. A throw or a timeout costs the call its images, never the call.
+   */
+  capture?: (scope: string, signal: AbortSignal) => Promise<JudgeImage[] | JudgeImage | null>;
+  /** How long `capture` may take before the judge runs without images. Default 500. */
+  captureTimeoutMs?: number;
   /** Every trace the reducer emits, plus the shell's own. Optional; nothing else observes. */
   observe?: (trace: Trace) => void;
   clock?: Clock;
@@ -295,6 +303,8 @@ export function createAttend(config: AttendConfig): Attend {
         now: clock.now(),
       };
       if (config.guidance !== undefined) input.guidance = config.guidance;
+      const images = config.capture ? await capture(config.capture, scope, batchId, controller.signal) : [];
+      if (images.length > 0) input.images = images;
       const judgment: unknown = await config.judge(input, controller.signal);
       result = isJudgment(judgment)
         ? { kind: 'judged', batchId, attempt, judgment }
@@ -305,6 +315,27 @@ export function createAttend(config: AttendConfig): Attend {
       cancel();
     }
     await apply(scope, result);
+  }
+
+  /** The captured images, or none after a throw or `captureTimeoutMs`, with one trace to say so. */
+  async function capture(fn: NonNullable<AttendConfig['capture']>, scope: string, batchId: string, judgeSignal: AbortSignal): Promise<JudgeImage[]> {
+    const controller = new AbortController();
+    const onJudgeAbort = () => controller.abort(judgeSignal.reason);
+    judgeSignal.addEventListener('abort', onJudgeAbort, { once: true });
+    const cancel = clock.at(clock.now() + (config.captureTimeoutMs ?? 500), () => controller.abort(new Error('attend: capture timed out')));
+    const timedOut = new Promise<never>((_, reject) => controller.signal.addEventListener('abort', () => reject(controller.signal.reason), { once: true }));
+    try {
+      const result = await Promise.race([fn(scope, controller.signal), timedOut]);
+      return result === null ? [] : Array.isArray(result) ? result : [result];
+    } catch (error) {
+      observe({ kind: 'captureFailed', scope, batchId, message: messageOf(error) });
+      return [];
+    } finally {
+      cancel();
+      judgeSignal.removeEventListener('abort', onJudgeAbort);
+      // Settle the race's loser so a late abort never reports an unhandled rejection.
+      timedOut.catch(() => undefined);
+    }
   }
 
   async function runDeliver(scope: string, effect: DeliverEffect): Promise<void> {
