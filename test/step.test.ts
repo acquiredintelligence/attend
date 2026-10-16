@@ -1,7 +1,15 @@
 import { describe, expect, test } from 'vitest';
-import { deadline, initialRecord, offeredRoutes, step, validate, windowId, type StepConfig } from '../src/step.js';
-import type { DeadLetter, Decision, Delivery, Entry, Event, Kind, ScopeRecord, Window } from '../src/types.js';
+import { deepFreeze } from './support/deep-freeze.js';
+import { deadline, initialRecord, offeredRoutes, step as reduce, validate, windowId, type StepConfig } from '../src/step.js';
+import type { DeadLetter, Decision, Delivery, Entry, Event, EventsInput, FlushInput, Input, Kind, ReleasedInput, ScopeRecord, Stepped, TraceEffect, Window } from '../src/types.js';
 import { DEFAULT_POLICY } from '../src/types.js';
+
+/** Every record this suite steps is frozen through, so a reducer that mutates its input throws here (modules are strict). */
+function step(config: StepConfig, record: ScopeRecord, input: EventsInput | FlushInput | ReleasedInput, now: number): Stepped<TraceEffect>;
+function step(config: StepConfig, record: ScopeRecord, input: Input, now: number): Stepped;
+function step(config: StepConfig, record: ScopeRecord, input: Input, now: number): Stepped {
+  return reduce(config, deepFreeze(record), input, now);
+}
 
 const kind = (e: Event): Kind => {
   switch (e.name) {

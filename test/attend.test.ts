@@ -395,6 +395,58 @@ describe('createAttend', () => {
     await h.stop();
   });
 
+  test('an observer that mutates trace payloads does not change the stored record', async () => {
+    const observed: string[] = [];
+    const h = setup([{ route: 'queue' }], {
+      settle: { maxEvents: 1 },
+      config: {
+        sink: {
+          deliver: () => {
+            throw new PermanentError('refused');
+          },
+        },
+        deadLetter: () => {
+          throw new Error('handler down');
+        },
+        observe: (trace) => {
+          if (trace.kind === 'deadLettered') {
+            observed.push(trace.kind);
+            trace.letter.message = 'changed';
+            const entry = trace.letter.window.events[0];
+            if (entry) entry.data['handled'] = true;
+            if (trace.letter.decision) trace.letter.decision.route = 'interrupt';
+            trace.letter.window.events.length = 0;
+          }
+          if (trace.kind === 'dropped') {
+            observed.push(trace.kind);
+            const entry = trace.entries[0];
+            if (entry) entry.data['handled'] = true;
+            trace.entries.length = 0;
+          }
+        },
+      },
+    });
+    await h.attend.push('s', [ev('a')]);
+    await h.clock.advance(500);
+    await h.attend.push('s', [ev('b', 'out'), ev('c', 'out')]);
+    expect(observed).toEqual(['deadLettered', 'dropped']);
+    expect(await h.attend.inspect('s')).toMatchObject({
+      buffer: { entries: [{ id: 'c', data: {} }], dropped: 1 },
+      outbox: {
+        deadLetters: [{
+          item: {
+            letter: {
+              message: 'refused',
+              window: { events: [{ id: 'a', data: {} }] },
+              decision: { route: 'queue', window: { events: [{ id: 'a', data: {} }] } },
+            },
+          },
+        }],
+      },
+    });
+    await h.stop();
+  });
+
   test('a malformed judgment is a retryable failure', async () => {
     const answers = ['{"nonsense":true}', '{"route":"queue"}'];
     const judge: Judge = async () => JSON.parse(answers.shift() ?? '{"route":"skip"}');
@@ -650,7 +702,7 @@ describe('createAttend', () => {
     const a = setup([{ route: 'skip' }], { store });
     const b = setup([{ route: 'skip' }], { store });
     await Promise.all([a.attend.push('s', [ev('a')]), b.attend.push('s', [ev('b')])]);
-    expect((await store.get('s'))?.seen.sort()).toEqual(['a', 'b']);
+    expect([...((await store.get('s'))?.seen ?? [])].sort()).toEqual(['a', 'b']);
     expect([...a.traces, ...b.traces]).toContainEqual({ kind: 'conflict', scope: 's', version: 0 });
     await a.stop();
     await b.stop();
@@ -760,6 +812,87 @@ describe('createAttend', () => {
     expect(reads).toBe(4);
     controller.abort();
     await done;
+  });
+
+  test('pushes that queue behind a write in flight land in one write, in order', async () => {
+    const held = heldStore();
+    let puts = 0;
+    const store: StateStore = { ...held.store, put: (r, v) => (puts += 1, held.store.put(r, v)) };
+    const { attend, traces, stop } = setup([{ route: 'skip' }], { store });
+    held.hold();
+    const first = attend.push('s', [ev('a')]);
+    await drain();
+    const queued = Promise.all([attend.push('s', [ev('b'), ev('c')]), attend.push('s', [ev('d')])]);
+    await drain();
+    expect(puts).toBe(1);
+    held.release();
+    await first;
+    await queued;
+    expect(puts).toBe(2);
+    expect((await store.get('s'))?.buffer.entries.map((e) => e.id)).toEqual(['a', 'b', 'c', 'd']);
+    expect(traces.filter((t) => t.kind === 'ingested')).toEqual([
+      { kind: 'ingested', scope: 's', count: 1, duplicates: 0 },
+      { kind: 'ingested', scope: 's', count: 3, duplicates: 0 },
+    ]);
+    await stop();
+  });
+
+  test('a flush between two pushes keeps them in separate writes, in arrival order', async () => {
+    const inner = memoryStore();
+    let puts = 0;
+    const store: StateStore = { ...inner, put: (r, v) => (puts += 1, inner.put(r, v)) };
+    const { attend, traces, stop } = setup([{ route: 'skip' }], { store });
+    await Promise.all([attend.push('s', [ev('a')]), attend.flush('s'), attend.push('s', [ev('b')])]);
+    expect(puts).toBe(3);
+    expect(traces.map((t) => t.kind)).toEqual(['ingested', 'ingested']);
+    expect((await store.get('s'))?.buffer).toMatchObject({ forcedAt: 1000, entries: [{ id: 'a' }, { id: 'b' }] });
+    await stop();
+  });
+
+  test('a merged write that fails rejects every push it carried', async () => {
+    const inner = memoryStore();
+    const store: StateStore = { ...inner, put: () => Promise.reject(new Error('disk full')) };
+    const { attend, stop } = setup([{ route: 'skip' }], { store });
+    const first = attend.push('s', [ev('a')]);
+    const second = attend.push('s', [ev('b')]);
+    await expect(first).rejects.toThrow('disk full');
+    await expect(second).rejects.toThrow('disk full');
+    expect(await inner.get('s')).toBeNull();
+    await stop();
+  });
+
+  test('batches a source emits without awaiting merge into one write with the last cursor and the gap kept', async () => {
+    const inner = memoryStore();
+    let puts = 0;
+    const store: StateStore = { ...inner, put: (r, v) => (puts += 1, inner.put(r, v)) };
+    const { attend, traces, stop } = setup([{ route: 'skip' }], { store });
+    const source: Source = {
+      key: 'src',
+      async subscribe(_cursor, emit) {
+        await Promise.all([emit({ events: [ev('a')], cursor: '1', truncated: true }), emit({ events: [ev('b')], cursor: '2' }), emit({ events: [ev('c')], cursor: '3' })]);
+      },
+    };
+    await attend.attach('s', source);
+    expect(puts).toBe(1);
+    expect(await store.get('s')).toMatchObject({ cursors: { src: '3' }, buffer: { gap: true, entries: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] } });
+    expect(traces.filter((t) => t.kind === 'gap')).toEqual([{ kind: 'gap', scope: 's', source: 'src', cursor: '3' }]);
+    await stop();
+  });
+
+  test('a due tick fires under a steady stream of writes faster than its timer', async () => {
+    const judge = scriptedJudge([{ route: 'skip' }]);
+    const attend = createAttend({ store: memoryStore(), judge, sink: recordingSink(), kind: () => 'continuous', deadLetter: () => undefined, settle: { maxEvents: 10 } });
+    const controller = new AbortController();
+    const running = attend.run({ signal: controller.signal, sweepMs: 60_000 });
+    let settledMidStream = false;
+    for (let i = 0; i < 400; i += 1) {
+      await attend.push('s', [ev(`e${i}`, 'drag')]);
+      await new Promise((resolve) => setImmediate(resolve));
+      if (judge.calls.length > 0) settledMidStream = true;
+    }
+    controller.abort();
+    await running;
+    expect(settledMidStream).toBe(true);
   });
 
   test('run resolves on abort and refuses to run twice', async () => {

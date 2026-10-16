@@ -7,6 +7,7 @@ import { sqliteLog, sqliteStore } from '../src/sqlite.js';
 import { initialRecord } from '../src/step.js';
 import { crashSuite, logConformance, storeConformance } from '../src/testing.js';
 import type { Event, ScopeRecord } from '../src/types.js';
+import { aliasingCases } from './support/aliasing.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'attend-sqlite-'));
 const opened: DatabaseSync[] = [];
@@ -43,6 +44,10 @@ for (const [where, make] of targets) {
     }, { canBlock: false })) test(c.name, c.run);
   });
 }
+
+describe('aliasing through sqliteStore', () => {
+  for (const c of aliasingCases(() => sqliteStore(open(':memory:')))) test(c.name, c.run);
+});
 
 const record = (scope: string, version: number, dueAt: number | null): ScopeRecord => ({ ...initialRecord(scope), version, dueAt });
 const event = (id: string): Event => ({ id, at: 0, name: 'n', data: { id } });

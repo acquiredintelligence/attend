@@ -5,7 +5,7 @@
 import { initialRecord, step, type StepConfig } from './step.js';
 import { ConflictError, isPermanent, OutboxFullError } from './errors.js';
 import { sleep, systemClock } from './internal/clock.js';
-import { assertNever, messageOf } from './internal/shared.js';
+import { assertNever, copyEvent, messageOf } from './internal/shared.js';
 import type {
   Clock,
   DeadLetter,
@@ -15,6 +15,7 @@ import type {
   Effect,
   Event,
   EventLog,
+  EventsInput,
   Input,
   Judge,
   JudgeEffect,
@@ -87,6 +88,11 @@ export interface Attend {
    * once persisted; never judges or delivers (the runner does, via `dueAt`). Safe from any
    * replica; idempotent on event ids. Rejects with `OutboxFullError` when either outbox lane
    * is at its cap, and with `ConflictError` after eight lost compare-and-swaps.
+   *
+   * Pushes that queue while the scope's write is in flight are ingested together in one write,
+   * and each resolves once that write has landed. `memoryStore` resolves without leaving the
+   * microtask queue, so a loop that awaits only `push` never lets the runner's timers fire and
+   * the open window grows until the loop yields to the event loop.
    */
   push(scope: string, events: Event[]): Promise<void>;
   /**
@@ -122,7 +128,7 @@ export function createAttend(config: AttendConfig): Attend {
   const stepConfig: StepConfig = { kind: config.kind, policy };
   const clock = config.clock ?? systemClock();
   const lanes = new Map<string, Promise<void>>();
-  const timers = new Map<string, () => void>();
+  const timers = new Map<string, { at: number; cancel: () => void }>();
   const sources = new Set<AbortController>();
   const attached = new Set<string>();
   /** Judge, sink and dead-letter calls in flight, each with the lease the reducer gave it. */
@@ -133,21 +139,47 @@ export function createAttend(config: AttendConfig): Attend {
 
   function observe(trace: Trace): void {
     try {
-      config.observe?.(trace);
+      config.observe?.(trace.kind === 'deadLettered' || trace.kind === 'dropped' ? structuredClone(trace) : trace);
     } catch {
       // An observer that throws must not take the runner down with it.
     }
   }
 
-  /** Per-scope inputs are serialized in this process, so one process never races itself. */
+  /** The `events` input at the tail of each lane that has not started: later events from the same source join it. */
+  const ingests = new Map<string, { input: EventsInput; done: Promise<void> }>();
+
+  /**
+   * Per-scope inputs are serialized in this process, so one process never races itself.
+   * Events that queue behind a write in flight merge into one step and one write, and every
+   * caller's promise is that write's. Any other input closes the merge, so the lane stays in
+   * arrival order. An `events` input is owned here: `push` and a source's `emit` copy what the
+   * caller passed, so a merge may grow its list and the record may keep its events.
+   */
   function apply(scope: string, input: Input): Promise<void> {
+    const open = ingests.get(scope);
+    if (open && input.kind === 'events' && input.source === open.input.source) {
+      merge(open.input, input);
+      return open.done;
+    }
+    ingests.delete(scope);
     const previous = lanes.get(scope) ?? Promise.resolve();
-    const next = previous.then(() => applyNow(scope, input));
+    const next = previous.then(() => {
+      if (ingests.get(scope)?.input === input) ingests.delete(scope);
+      return applyNow(scope, input);
+    });
+    if (input.kind === 'events') ingests.set(scope, { input, done: next });
     const settled = next.catch(() => undefined).finally(() => {
       if (lanes.get(scope) === settled) lanes.delete(scope);
     });
     lanes.set(scope, settled);
     return next;
+  }
+
+  /** Later events after earlier ones, the last cursor, and a gap if any batch reported one. */
+  function merge(open: EventsInput, input: EventsInput): void {
+    for (const event of input.events) open.events.push(event);
+    if (input.cursor !== undefined) open.cursor = input.cursor;
+    if (input.truncated) open.truncated = true;
   }
 
   async function applyNow(scope: string, input: Input): Promise<void> {
@@ -174,16 +206,17 @@ export function createAttend(config: AttendConfig): Attend {
   }
 
   function arm(scope: string, dueAt: number | null): void {
-    timers.get(scope)?.();
+    const armed = timers.get(scope);
+    // A due tick keeps its timer: replacing it on every write would start a fresh zero-delay timer each time and starve it under a steady stream.
+    if (armed && running && dueAt !== null && dueAt <= clock.now() && armed.at <= clock.now()) return;
+    armed?.cancel();
     timers.delete(scope);
     if (!running || dueAt === null) return;
-    timers.set(
-      scope,
-      clock.at(dueAt, () => {
-        timers.delete(scope);
-        tick(scope);
-      }),
-    );
+    const cancel = clock.at(dueAt, () => {
+      timers.delete(scope);
+      tick(scope);
+    });
+    timers.set(scope, { at: dueAt, cancel });
   }
 
   function tick(scope: string): void {
@@ -251,14 +284,14 @@ export function createAttend(config: AttendConfig): Attend {
       const live = config.context ? await config.context(scope, controller.signal) : {};
       const input: JudgeInput = {
         scope,
-        window: effect.window,
+        window: structuredClone(effect.window),
         routes: effect.offered.map((route) => {
           const criterion = config.criteria?.[route];
           return criterion === undefined ? { route } : { route, criterion };
         }),
         predicates: Object.entries({ ...config.predicates, ...live.predicates }).map(([name, question]) => ({ name, question })),
         facts: live.facts ?? {},
-        recent: effect.recent,
+        recent: structuredClone(effect.recent),
         now: clock.now(),
       };
       if (config.guidance !== undefined) input.guidance = config.guidance;
@@ -280,8 +313,8 @@ export function createAttend(config: AttendConfig): Attend {
     const cancel = clock.at(phase.leaseUntil, () => controller.abort(new Error('attend: delivery timed out')));
     let result: Input;
     try {
-      if (item.kind === 'decision') await config.sink.deliver(item.decision, controller.signal);
-      else await config.deadLetter(item.letter, controller.signal);
+      if (item.kind === 'decision') await config.sink.deliver(structuredClone(item.decision), controller.signal);
+      else await config.deadLetter(structuredClone(item.letter), controller.signal);
       result = { kind: 'delivered', deliveryId: item.id, attempt: phase.attempt };
     } catch (error) {
       result = { kind: 'deliveryFailed', deliveryId: item.id, attempt: phase.attempt, message: messageOf(error), permanent: isPermanent(error) };
@@ -306,9 +339,12 @@ export function createAttend(config: AttendConfig): Attend {
   }
 
   return {
-    push: (scope, events) => apply(scope, { kind: 'events', events }),
+    push: (scope, events) => apply(scope, { kind: 'events', events: events.map(copyEvent) }),
     flush: (scope) => apply(scope, { kind: 'flush' }),
-    inspect: (scope) => config.store.get(scope),
+    async inspect(scope) {
+      const record = await config.store.get(scope);
+      return record === null ? null : structuredClone(record);
+    },
 
     async attach(scope, source, options) {
       const slot = `${scope}\n${source.key}`;
@@ -321,7 +357,7 @@ export function createAttend(config: AttendConfig): Attend {
       sources.add(controller);
       let failures = 0;
       const emit = async (batch: SourceBatch) => {
-        await apply(scope, { kind: 'events', source: source.key, ...batch });
+        await apply(scope, { kind: 'events', source: source.key, ...batch, events: batch.events.map(copyEvent) });
         failures = 0;
       };
       try {
@@ -361,7 +397,7 @@ export function createAttend(config: AttendConfig): Attend {
         }
       } finally {
         running = null;
-        for (const cancel of timers.values()) cancel();
+        for (const timer of timers.values()) timer.cancel();
         timers.clear();
         for (const controller of sources) controller.abort();
         // Only the writes in flight now, not a producer's later pushes: those persist on their own and do not hold the runner.

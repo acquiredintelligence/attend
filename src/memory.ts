@@ -4,17 +4,22 @@
  */
 import type { Event, EventLog, LogEntry, ScopeRecord, StateStore } from './types.js';
 
+/**
+ * Keeps the records it is given and hands them back as they are: `step` never mutates a record
+ * and shares what it does not change, so a clone per put and get would cost the whole window
+ * for nothing. Nothing outside the core reaches a stored record: `push` copies each event on the
+ * way in, and `inspect`, the judge, the sink and the dead-letter handler each get a copy.
+ */
 export function memoryStore(): StateStore {
   const rows = new Map<string, ScopeRecord>();
   return {
     async get(scope) {
-      const row = rows.get(scope);
-      return row ? structuredClone(row) : null;
+      return rows.get(scope) ?? null;
     },
     async put(record, expectedVersion) {
       const current = rows.get(record.scope)?.version ?? 0;
       if (current !== expectedVersion) return 'conflict';
-      rows.set(record.scope, structuredClone(record));
+      rows.set(record.scope, record);
       return 'ok';
     },
     async due(now, limit) {
