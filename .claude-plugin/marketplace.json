@@ -1,0 +1,12 @@
+{
+  "name": "attend",
+  "description": "The attend Agent Skill, which teaches a coding agent to decide when events should wake an agent.",
+  "owner": { "name": "Acquired Intelligence" },
+  "plugins": [
+    {
+      "name": "attend",
+      "source": "./",
+      "description": "Teaches a coding agent to wire attend into an app: event kinds, stores, judges, idempotent sinks, MCP Events sources and fake-clock tests."
+    }
+  ]
+}
