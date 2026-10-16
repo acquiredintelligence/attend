@@ -3,9 +3,11 @@
  * suites, the crash harness and the crash suite. Runner-agnostic: the suites return named
  * async cases that any test runner can register.
  */
-import type { Clock, Decision, Event, EventLog, Judge, JudgeInput, Judgment, ScopeRecord, Sink, StateStore } from './types.js';
-import { initialRecord } from './step.js';
+import type { Clock, DeadLetter, Decision, Event, EventLog, Judge, JudgeInput, Judgment, Kinded, ScopeRecord, SettlePolicy, Sink, StateStore, Trace } from './types.js';
+import { hashIds, initialRecord } from './step.js';
 import { PermanentError } from './errors.js';
+import { createAttend, type Attend, type AttendConfig } from './attend.js';
+import { memoryStore } from './memory.js';
 
 // ─── clock ───────────────────────────────────────────────────────────────────
 
@@ -20,7 +22,7 @@ export interface FakeClock extends Clock {
 
 /** One macrotask: every microtask chain that does not wait on real I/O has drained after it. */
 export function drain(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0));
+  return new Promise((resolve) => (typeof setImmediate === 'function' ? setImmediate(resolve) : setTimeout(resolve, 0)));
 }
 
 export function fakeClock(start = 0): FakeClock {
@@ -328,4 +330,331 @@ export function logConformance(make: () => Promise<EventLog> | EventLog, options
         ],
   ];
   return cases.map(([name, run]) => ({ name, run: async () => run(await make()) }));
+}
+
+// ─── crash harness ───────────────────────────────────────────────────────────
+
+/** Thrown by a crashed instance's store, and by the harness once a scheduled crash struck. */
+export class CrashError extends Error {
+  constructor() {
+    super('attend: crashed');
+    this.name = 'CrashError';
+  }
+}
+
+/** Where a scheduled crash strikes relative to the nth commit: before it (nothing written) or after it (written, effects never started). */
+export type CrashPoint = 'before' | 'after';
+
+export type HarnessConfig = Omit<AttendConfig, 'store' | 'clock' | 'deadLetter'> & {
+  /** Optional here: the harness records every letter after the handler, if any, accepted it. */
+  deadLetter?: AttendConfig['deadLetter'];
+};
+
+export interface HarnessOptions {
+  /** Default 'scope'. */
+  scope?: string;
+  /** Default `memoryStore()`. */
+  store?: StateStore;
+  /** The clock's start. Default 0. */
+  start?: number;
+  /** Default 1000. */
+  sweepMs?: number;
+}
+
+export interface Harness {
+  readonly clock: FakeClock;
+  readonly store: StateStore;
+  readonly scope: string;
+  /** The current instance; a new one after `restart()`. */
+  readonly attend: Attend;
+  readonly deadLetters: DeadLetter[];
+  readonly traces: Trace[];
+  /** Commits so far, across instances. `crashAt` counts the same way. */
+  readonly puts: number;
+  /** True from a crash until `restart()`. */
+  readonly crashed: boolean;
+  /** Push into the scope and wait until the runner has nothing left to do. Throws `CrashError` if a crash struck. */
+  push(events: Event[]): Promise<void>;
+  /** Advance the clock, firing timers one at a time and draining after each. Throws `CrashError` at the instant a crash struck. */
+  advance(ms: number): Promise<void>;
+  flush(): Promise<void>;
+  /** Resolve once no store call is in flight. Work that waits on real time is invisible to it. */
+  idle(): Promise<void>;
+  /** Kill the runner now. The store keeps whatever was committed. */
+  crash(): void;
+  /** Schedule a crash at the nth commit from now, counting `puts` so far. */
+  crashAt(put: number, point: CrashPoint): void;
+  /** Start a fresh runner over the same store, as a restarted process would, and let it recover. */
+  restart(): Promise<void>;
+  /** Stop the runner gracefully. */
+  stop(): Promise<void>;
+  inspect(): Promise<ScopeRecord | null>;
+}
+
+/**
+ * Runs `createAttend` on one scope with a fake clock over a store it can crash at any
+ * commit. Judges, sinks and context must resolve without real time, or `idle()` cannot
+ * see them.
+ */
+export function harness(config: HarnessConfig, options?: HarnessOptions): Harness {
+  const scope = options?.scope ?? 'scope';
+  const inner = options?.store ?? memoryStore();
+  const clock = fakeClock(options?.start ?? 0);
+  const sweepMs = options?.sweepMs ?? 1000;
+  const deadLetters: DeadLetter[] = [];
+  const traces: Trace[] = [];
+  let puts = 0;
+  let pending = 0;
+  let schedule: { put: number; point: CrashPoint } | null = null;
+  let crashed = false;
+
+  interface Instance {
+    attend: Attend;
+    controller: AbortController;
+    done: Promise<void>;
+    /** Shared with the instance's store guard: once set, every store call it makes throws. */
+    state: { dead: boolean };
+  }
+
+  function die(instance: Instance): void {
+    crashed = true;
+    instance.state.dead = true;
+    instance.controller.abort();
+  }
+
+  function start(): Instance {
+    const controller = new AbortController();
+    const state = { dead: false };
+    const guard = async <T>(work: () => Promise<T>): Promise<T> => {
+      if (state.dead) throw new CrashError();
+      pending += 1;
+      try {
+        return await work();
+      } finally {
+        pending -= 1;
+      }
+    };
+    const strike = (n: number, point: CrashPoint) => {
+      if (schedule === null || schedule.put !== n || schedule.point !== point) return;
+      schedule = null;
+      crashed = true;
+      state.dead = true;
+      controller.abort();
+      throw new CrashError();
+    };
+    const store: StateStore = {
+      get: (s) => guard(() => inner.get(s)),
+      due: (now, limit) => guard(() => inner.due(now, limit)),
+      remove: (s) => guard(() => inner.remove(s)),
+      put: (record, expected) =>
+        guard(async () => {
+          puts += 1;
+          const n = puts;
+          strike(n, 'before');
+          const result = await inner.put(record, expected);
+          strike(n, 'after');
+          return result;
+        }),
+    };
+    const attend = createAttend({
+      ...config,
+      store,
+      clock,
+      deadLetter: async (letter, signal) => {
+        await config.deadLetter?.(letter, signal);
+        deadLetters.push(letter);
+      },
+      observe: (t) => {
+        traces.push(t);
+        config.observe?.(t);
+      },
+    });
+    return { attend, controller, done: attend.run({ signal: controller.signal, sweepMs }), state };
+  }
+
+  let current = start();
+
+  async function idle(): Promise<void> {
+    for (;;) {
+      await drain();
+      if (pending === 0) return;
+    }
+  }
+
+  function check(): void {
+    if (crashed) throw new CrashError();
+  }
+
+  return {
+    clock,
+    store: inner,
+    scope,
+    deadLetters,
+    traces,
+    get attend() {
+      return current.attend;
+    },
+    get puts() {
+      return puts;
+    },
+    get crashed() {
+      return crashed;
+    },
+    async push(events) {
+      await current.attend.push(scope, events);
+      await idle();
+      check();
+    },
+    async flush() {
+      await current.attend.flush(scope);
+      await idle();
+      check();
+    },
+    async advance(ms) {
+      const target = clock.now() + ms;
+      await idle();
+      check();
+      for (let next = clock.nextAt(); next !== null && next <= target; next = clock.nextAt()) {
+        await clock.set(next);
+        await idle();
+        check();
+      }
+      await clock.set(target);
+      await idle();
+      check();
+    },
+    idle,
+    crash() {
+      die(current);
+    },
+    crashAt(put, point) {
+      schedule = { put: puts + put, point };
+    },
+    async restart() {
+      die(current);
+      await current.done.catch(() => undefined);
+      crashed = false;
+      current = start();
+      await idle();
+    },
+    async stop() {
+      current.controller.abort();
+      await current.done;
+    },
+    inspect: () => inner.get(scope),
+  };
+}
+
+// ─── crash suite ─────────────────────────────────────────────────────────────
+
+const sessionKind = (e: Event): Kinded => {
+  switch (e.name) {
+    case 'close':
+      return { kind: 'closing' };
+    case 'say':
+      return { kind: 'flush' };
+    case 'look':
+      return { kind: 'passive' };
+    default:
+      return { kind: 'consequence' };
+  }
+};
+
+/** Short leases and backoffs, so a stranded call recovers well inside the gaps the session leaves between acts. */
+const SESSION_POLICY: Partial<SettlePolicy> = { judgeTimeoutMs: 1000, deliveryTimeoutMs: 2000, retryBackoffMs: [1000, 1000, 1000] };
+
+/**
+ * A scripted session over a store: a closing act delivered, a passive act the judge waits
+ * on and then merges with a closing act whose delivery exhausts the sink, a flush whose
+ * first judge call fails, an act the judge refuses for good, and an act the judge skips.
+ * Judge and sink decide from event ids, so a re-judged window gets the same answer. Each
+ * act is left to resolve under the worst stranded lease before the next one settles, so
+ * the windows, and so the ids, are the same in every run.
+ */
+async function session(store: StateStore, crash: { put: number; point: CrashPoint } | null): Promise<{ decisions: string[]; letters: string[]; puts: number }> {
+  const delivered = new Set<string>();
+  const flaked = new Set<string>();
+  const judge: Judge = async (input) => {
+    const ids = input.window.events.map((e) => e.id);
+    const has = (id: string) => ids.includes(id);
+    if (has('f')) throw new PermanentError('refused');
+    if (has('e') && !flaked.has(input.window.id)) {
+      flaked.add(input.window.id);
+      throw new Error('flaky');
+    }
+    if (has('b') && !has('d') && input.routes.some((r) => r.route === 'wait')) return { route: 'wait' };
+    if (has('d')) return { route: 'interrupt' };
+    if (has('e')) return { route: 'note' };
+    if (has('g')) return { route: 'skip' };
+    return { route: 'queue' };
+  };
+  const sink: Sink = {
+    async deliver(decision) {
+      if (decision.route === 'interrupt') throw new Error('sink down');
+      delivered.add(decision.id);
+    },
+  };
+  const h = harness({ judge, sink, kind: sessionKind, settle: SESSION_POLICY }, { store, sweepMs: 10_000 });
+  if (crash) h.crashAt(crash.put, crash.point);
+  const survive = async (op: () => Promise<void>) => {
+    try {
+      await op();
+    } catch (error) {
+      if (!(error instanceof CrashError)) throw error;
+      await h.restart();
+      await op();
+    }
+  };
+  const push = (id: string, name: string) => survive(() => h.push([{ id, at: 0, name, data: {}, text: `${name} ${id}` }]));
+  const advance = (ms: number) => {
+    const target = h.clock.now() + ms;
+    return survive(() => h.advance(target - h.clock.now()));
+  };
+  await push('a', 'close');
+  await advance(600);
+  await advance(8000);
+  await push('b', 'look');
+  await advance(4100);
+  await push('d', 'close');
+  await advance(600);
+  await advance(20_000);
+  await push('e', 'say');
+  await advance(1500);
+  await advance(8000);
+  await push('f', 'close');
+  await advance(600);
+  await advance(8000);
+  await push('g', 'close');
+  await advance(600);
+  await advance(60_000);
+  await h.stop();
+  return { decisions: [...delivered].sort(), letters: [...new Set(h.deadLetters.map((l) => l.id))].sort(), puts: h.puts };
+}
+
+/**
+ * Whole-runtime guarantee over a real adapter: the scripted session runs once cleanly, then
+ * once per commit boundary with a crash injected there, restarting over the same store.
+ * Every run must produce the same set of delivered decision ids and dead-letter ids.
+ */
+export function crashSuite(make: () => Promise<StateStore> | StateStore): ConformanceCase[] {
+  const survives = (point: CrashPoint) => async () => {
+    const clean = await session(await make(), null);
+    for (let put = 1; put <= clean.puts; put += 1) {
+      const crashed = await session(await make(), { put, point });
+      assertEqual(crashed.decisions, clean.decisions, `decisions after a crash ${point} commit ${put}`);
+      assertEqual(crashed.letters, clean.letters, `dead letters after a crash ${point} commit ${put}`);
+    }
+  };
+  return [
+    {
+      name: 'the scripted session delivers two decisions and two dead letters',
+      async run() {
+        const clean = await session(await make(), null);
+        assertEqual(clean.decisions, [hashIds(['a']), hashIds(['e'])].sort(), 'decisions');
+        assertEqual(clean.letters, [hashIds(['b', 'd']), hashIds(['f'])].sort(), 'dead letters');
+      },
+    },
+    { name: 'the same ids survive a crash before every commit', run: survives('before') },
+    { name: 'the same ids survive a crash after every commit', run: survives('after') },
+  ];
 }

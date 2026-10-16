@@ -1,0 +1,118 @@
+import { describe, expect, test } from 'vitest';
+import { memoryStore } from '../src/memory.js';
+import { CrashError, crashSuite, harness, recordingSink, scriptedJudge, type ScriptedAnswer } from '../src/testing.js';
+import type { Event, Kinded } from '../src/types.js';
+
+const kind = (e: Event): Kinded => (e.name === 'close' ? { kind: 'closing' } : { kind: 'consequence' });
+const ev = (id: string): Event => ({ id, at: 0, name: 'close', data: {} });
+const ID_A = 'af63dc4c8601ec8c';
+const ID_AB = 'e5beb1190415e670';
+
+function setup(script: ScriptedAnswer[]) {
+  const judge = scriptedJudge(script);
+  const sink = recordingSink();
+  const h = harness({ judge, sink, kind });
+  return { h, judge, sink };
+}
+
+describe('crashSuite against memoryStore', () => {
+  for (const c of crashSuite(() => memoryStore())) test(c.name, c.run, 60_000);
+});
+
+describe('restart regressions', () => {
+  test('an open window survives a restart and settles on time', async () => {
+    const { h, judge, sink } = setup([{ route: 'queue' }]);
+    await h.push([ev('a')]);
+    await h.restart();
+    await h.advance(499);
+    expect(judge.calls).toHaveLength(0);
+    await h.advance(1);
+    expect(judge.calls[0]?.window.events.map((e) => e.id)).toEqual(['a']);
+    expect(sink.delivered.map((d) => d.id)).toEqual([ID_A]);
+    await h.stop();
+  });
+
+  test('an open window whose deadline passed while down settles at the restart', async () => {
+    const { h, sink } = setup([{ route: 'queue' }]);
+    await h.push([ev('a')]);
+    h.crash();
+    await h.clock.set(5000);
+    await h.restart();
+    expect(sink.delivered.map((d) => d.id)).toEqual([ID_A]);
+    await h.stop();
+  });
+
+  test('a waiting window survives a restart and merges with the next settle', async () => {
+    const { h, judge, sink } = setup([{ route: 'wait' }, { route: 'queue' }]);
+    await h.push([ev('a')]);
+    await h.advance(500);
+    expect(await h.inspect()).toMatchObject({ batch: { phase: 'waiting', waits: 1 } });
+    await h.restart();
+    await h.push([ev('b')]);
+    await h.advance(500);
+    expect(judge.calls[1]?.window).toMatchObject({ id: ID_AB, waits: 1, events: [{ id: 'a' }, { id: 'b' }] });
+    expect(sink.delivered.map((d) => d.id)).toEqual([ID_AB]);
+    await h.stop();
+  });
+
+  test('an undelivered decision survives a crash between the judge and the sink', async () => {
+    const { h, sink } = setup([{ route: 'queue' }]);
+    await h.push([ev('a')]);
+    h.crashAt(2, 'after');
+    await expect(h.advance(500)).rejects.toBeInstanceOf(CrashError);
+    expect(sink.delivered).toEqual([]);
+    expect(await h.inspect()).toMatchObject({ outbox: [{ id: ID_A, kind: 'decision', phase: 'inFlight', attempt: 1, leaseUntil: 10_500 }] });
+    await h.restart();
+    expect(sink.delivered).toEqual([]);
+    await h.advance(10_000);
+    expect(h.traces).toContainEqual(expect.objectContaining({ kind: 'retrying', stage: 'sink', message: 'delivery lease expired' }));
+    await h.advance(1000);
+    expect(sink.delivered.map((d) => d.id)).toEqual([ID_A]);
+    expect(await h.inspect()).toMatchObject({ outbox: [] });
+    await h.stop();
+  });
+
+  test('a judge that always throws dead-letters after the retry budget, across a restart', async () => {
+    const { h, judge, sink } = setup([{ fail: 'down' }]);
+    await h.push([ev('a')]);
+    await h.advance(500 + 1000);
+    expect(judge.calls).toHaveLength(2);
+    await h.restart();
+    await h.advance(4000 + 16_000);
+    expect(judge.calls).toHaveLength(4);
+    expect(h.deadLetters.map((l) => [l.id, l.stage, l.attempts])).toEqual([[ID_A, 'judge', 4]]);
+    expect(sink.delivered).toEqual([]);
+    expect(await h.inspect()).toMatchObject({ batch: null, outbox: [] });
+    await h.stop();
+  });
+});
+
+describe('harness', () => {
+  test('a crash before a commit writes nothing; a crash after it writes but runs no effect', async () => {
+    const before = setup([{ route: 'queue' }]);
+    before.h.crashAt(1, 'before');
+    await expect(before.h.push([ev('a')])).rejects.toBeInstanceOf(CrashError);
+    expect(await before.h.inspect()).toBeNull();
+    expect(before.h.crashed).toBe(true);
+
+    const after = setup([{ route: 'queue' }]);
+    after.h.crashAt(2, 'after');
+    await after.h.push([ev('a')]);
+    await expect(after.h.advance(500)).rejects.toBeInstanceOf(CrashError);
+    expect(after.judge.calls).toHaveLength(0);
+    expect(await after.h.inspect()).toMatchObject({ version: 2, batch: { phase: 'judging' } });
+    await after.h.restart();
+    expect(after.h.crashed).toBe(false);
+    await after.h.stop();
+  });
+
+  test('a dead instance never writes again, even after a restart', async () => {
+    const { h } = setup([{ route: 'queue' }]);
+    const old = h.attend;
+    h.crash();
+    await h.restart();
+    await expect(old.push('scope', [ev('a')])).rejects.toBeInstanceOf(CrashError);
+    expect(await h.inspect()).toBeNull();
+    await h.stop();
+  });
+});
