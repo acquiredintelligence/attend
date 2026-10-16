@@ -2,7 +2,8 @@ import { describe, expect, test } from 'vitest';
 import { decisionsJudge } from '../src/decisions.js';
 import { isPermanent } from '../src/errors.js';
 import { DEFAULT_CRITERIA } from '../src/llm.js';
-import type { JudgeInput } from '../src/types.js';
+import type { JudgeImage, JudgeInput } from '../src/types.js';
+import { png } from './support/images.js';
 
 interface Call {
   url: string;
@@ -18,7 +19,13 @@ function fakeFetch(respond: (init: RequestInit | undefined) => Promise<Response>
   return { fetch, calls };
 }
 
-const json = (body: unknown, status = 200) => async () => new Response(JSON.stringify(body), { status });
+const json = (body: unknown, status = 200) => async (_init?: RequestInit) => new Response(JSON.stringify(body), { status });
+
+const bodyOf = (call: Call | undefined): Record<string, unknown> => (typeof call?.init?.body === 'string' ? JSON.parse(call.init.body) : {});
+
+const STATE_TEXT =
+  '{"window":{"reason":"closing","waits":0,"dropped":0,"gap":false,"events":[{"kind":"closing","name":"deploy","data":{"env":"prod"},"ago":"1.0s"}]},' +
+  '"facts":{},"recent":[],"predicates":{"asked":"Did the user ask for this?"}}';
 
 const input: JudgeInput = {
   scope: 's',
@@ -180,13 +187,19 @@ describe('decisionsJudge', () => {
     ]);
   });
 
-  test('408, 429, 5xx and network failures retry; other 4xx are permanent', async () => {
+  test('408, 429, 5xx and network failures retry; other 4xx and the billing and quota 429s are permanent', async () => {
     const respond: ((init: RequestInit | undefined) => Promise<Response>)[] = [
-      async () => new Response('{"error":{"message":"slow down"}}', { status: 429 }),
-      async () => new Response(null, { status: 503 }),
+      async () => new Response('{"error":{"message":"slow down","type":"rate_limit_error","code":"slow_down"}}', { status: 429, headers: { 'x-request-id': 'req_42' } }),
+      async () => new Response('{"error":{"message":"Rate limit reached for requests","type":"requests","code":null}}', { status: 429 }),
+      async () => new Response('{"error":{"message":"overloaded","type":"service_unavailable_error","code":"server_is_overloaded"}}', { status: 503 }),
       async () => new Response(null, { status: 408 }),
-      async () => new Response('{"error":{"message":"unknown question type"}}', { status: 400 }),
+      async () => new Response(null, { status: 500 }),
+      async () => new Response('{"error":{"message":"unknown question type","type":"invalid_request_error","param":"questions","code":null}}', { status: 400 }),
       async () => new Response(null, { status: 401 }),
+      async () => new Response('{"error":{"message":"no credits","type":"insufficient_quota","code":"credit_balance_exhausted"}}', { status: 429 }),
+      async () => new Response('{"error":{"message":"spend limit","type":"insufficient_quota","code":"project_spend_limit_exceeded"}}', { status: 429 }),
+      async () => new Response('{"error":{"message":"usage limit","type":"insufficient_quota","code":"organization_usage_limit_exceeded"}}', { status: 429 }),
+      async () => new Response('{"error":{"message":"quota","type":"insufficient_quota"}}', { status: 429 }),
       async () => {
         throw new TypeError('fetch failed');
       },
@@ -194,13 +207,40 @@ describe('decisionsJudge', () => {
     const results = [];
     for (const r of respond) results.push(await outcome(decisionsJudge({ apiKey: 'k', model: 'm', fetch: fakeFetch(r).fetch })(input, signal)));
     expect(results).toEqual([
-      ['Error', 'decisionsJudge: HTTP 429: {"error":{"message":"slow down"}}', false],
-      ['Error', 'decisionsJudge: HTTP 503', false],
+      ['Error', 'decisionsJudge: HTTP 429: slow down (request req_42)', false],
+      ['Error', 'decisionsJudge: HTTP 429: Rate limit reached for requests', false],
+      ['Error', 'decisionsJudge: HTTP 503: overloaded', false],
       ['Error', 'decisionsJudge: HTTP 408', false],
-      ['PermanentError', 'decisionsJudge: HTTP 400: {"error":{"message":"unknown question type"}}', true],
+      ['Error', 'decisionsJudge: HTTP 500', false],
+      ['PermanentError', 'decisionsJudge: HTTP 400: unknown question type', true],
       ['PermanentError', 'decisionsJudge: HTTP 401', true],
+      ['PermanentError', 'decisionsJudge: HTTP 429: no credits', true],
+      ['PermanentError', 'decisionsJudge: HTTP 429: spend limit', true],
+      ['PermanentError', 'decisionsJudge: HTTP 429: usage limit', true],
+      ['PermanentError', 'decisionsJudge: HTTP 429: quota', true],
       ['Error', 'decisionsJudge: request failed: fetch failed', false],
     ]);
+  });
+
+  test('a refusal of the route question is a PermanentError; a refused predicate is left unanswered', async () => {
+    const refusedRoute = fakeFetch(json({ answers: [{ type: 'refusal', name: 'route' }, { type: 'predicate', name: 'predicate_0', probability: 0.5 }] }));
+    expect(await outcome(decisionsJudge({ apiKey: 'k', model: 'm', fetch: refusedRoute.fetch })(input, signal))).toEqual([
+      'PermanentError',
+      'decisionsJudge: the model refused to answer the route question',
+      true,
+    ]);
+    const refusedPredicate = fakeFetch(json({ answers: [{ ...ROUTE_ANSWER, confidence: 0.9 }, { type: 'refusal', name: 'predicate_0' }] }));
+    expect(await decisionsJudge({ apiKey: 'k', model: 'm', fetch: refusedPredicate.fetch })(input, signal)).toEqual({ route: 'note', probabilities: { note: 1 }, predicates: {}, confidence: 0.9 });
+  });
+
+  test('too many predicates or duplicate names are a PermanentError before any call', async () => {
+    const fake = fakeFetch(json({ answers: [ROUTE_ANSWER] }));
+    const judge = decisionsJudge({ apiKey: 'k', model: 'm', fetch: fake.fetch });
+    const many = Array.from({ length: 200 }, (_, i) => ({ name: `p${i}`, question: 'Q?' }));
+    expect(await outcome(judge({ ...input, predicates: many }, signal))).toEqual(['PermanentError', 'decisionsJudge: 200 predicates plus the route is over the 200 questions the API takes', true]);
+    expect(await outcome(judge({ ...input, predicates: [many[0]!, many[0]!] }, signal))).toEqual(['PermanentError', 'decisionsJudge: predicate names must be unique, got p0, p0', true]);
+    expect(await outcome(judge({ ...input, predicates: many.slice(0, 199) }, signal))).toEqual(['resolved', '', false]);
+    expect(fake.calls).toHaveLength(1);
   });
 
   test("aborting the signal cancels the request and rejects with the signal's reason", async () => {
@@ -215,5 +255,71 @@ describe('decisionsJudge', () => {
     const reason = new Error('attend: judge timed out');
     controller.abort(reason);
     await expect(pending).rejects.toBe(reason);
+  });
+});
+
+describe('decisionsJudge images', () => {
+  const images: JudgeImage[] = [
+    { data: png(640, 480), mimeType: 'image/png' },
+    { data: 'UklGRg==', mimeType: 'image/webp' },
+  ];
+
+  test('sends the text and then each image as an input_image data URL in one user message', async () => {
+    const fake = fakeFetch(json({ answers: [ROUTE_ANSWER] }));
+    await decisionsJudge({ apiKey: 'k', model: 'm', fetch: fake.fetch, instructions: 'Pick.' })({ ...input, images }, signal);
+    expect(bodyOf(fake.calls[0])).toEqual({
+      model: 'm',
+      input: [
+        {
+          role: 'user',
+          content: [
+            { type: 'input_text', text: STATE_TEXT },
+            { type: 'input_image', image_url: `data:image/png;base64,${png(640, 480)}` },
+            { type: 'input_image', image_url: 'data:image/webp;base64,UklGRg==' },
+          ],
+        },
+      ],
+      questions: [
+        { type: 'choice', name: 'route', instructions: 'Pick.', choices: input.routes.map((r) => ({ value: r.route, description: r.criterion ?? DEFAULT_CRITERIA[r.route] })) },
+        { type: 'predicate', name: 'predicate_0', instructions: 'Did the user ask for this?' },
+      ],
+    });
+  });
+
+  test('keeps the first 128 images and reports the rest', async () => {
+    const fake = fakeFetch(json({ answers: [ROUTE_ANSWER] }));
+    const errors: string[] = [];
+    const given = Array.from({ length: 130 }, (): JudgeImage => ({ data: 'AAAA', mimeType: 'image/jpeg' }));
+    await decisionsJudge({ apiKey: 'k', model: 'm', fetch: fake.fetch, onImageError: (e) => errors.push(e.message) })({ ...input, images: given }, signal);
+    const message = (bodyOf(fake.calls[0]).input as { content: unknown[] }[])[0];
+    expect(message?.content).toHaveLength(129);
+    expect(errors).toEqual([
+      'decisionsJudge: image 128 dropped: the API takes at most 128 images per request',
+      'decisionsJudge: image 129 dropped: the API takes at most 128 images per request',
+    ]);
+  });
+
+  test('with images off the input is the plain text', async () => {
+    const fake = fakeFetch(json({ answers: [ROUTE_ANSWER] }));
+    await decisionsJudge({ apiKey: 'k', model: 'm', fetch: fake.fetch, images: false })({ ...input, images }, signal);
+    expect(bodyOf(fake.calls[0]).input).toBe(STATE_TEXT);
+  });
+
+  test('a 400 on a request with images is retried once as plain text, and the retry is reported', async () => {
+    const fake = fakeFetch(async (init) => {
+      const body = typeof init?.body === 'string' ? JSON.parse(init.body) : {};
+      return typeof body.input === 'string' ? json({ answers: [ROUTE_ANSWER] })(init) : json({ error: { message: 'Invalid image', type: 'invalid_request_error' } }, 400)(init);
+    });
+    const errors: string[] = [];
+    expect(await decisionsJudge({ apiKey: 'k', model: 'm', fetch: fake.fetch, onImageError: (e) => errors.push(e.message) })({ ...input, images }, signal)).toEqual({
+      route: 'note',
+      probabilities: { note: 1 },
+      predicates: {},
+    });
+    expect(fake.calls.map((c) => typeof bodyOf(c).input)).toEqual(['object', 'string']);
+    expect(errors).toEqual(['decisionsJudge: the provider rejected the request with its 2 images, retrying without them: decisionsJudge: HTTP 400: Invalid image']);
+    const twice = fakeFetch(json({ error: { message: 'bad' } }, 400));
+    expect(await outcome(decisionsJudge({ apiKey: 'k', model: 'm', fetch: twice.fetch })({ ...input, images }, signal))).toEqual(['PermanentError', 'decisionsJudge: HTTP 400: bad', true]);
+    expect(twice.calls).toHaveLength(2);
   });
 });
