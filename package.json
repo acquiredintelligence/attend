@@ -1,6 +1,6 @@
 {
   "name": "attend",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "The attention layer for agents: decide when an event should wake your agent.",
   "license": "MIT",
   "type": "module",
