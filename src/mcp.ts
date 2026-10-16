@@ -148,13 +148,15 @@ const wrappedTransports = new WeakSet<Transport>();
 const closings = new WeakMap<Transport, AbortSignal>();
 
 /**
- * Aborts when `transport` closes. The SDK sets `transport.onclose` at connect and clears
- * `client.transport` inside it, so a wrapper installed after connect fires once the Client
- * already reads as closed.
+ * Aborts when the connection `transport` carries right now closes. The SDK sets
+ * `transport.onclose` at connect and clears `client.transport` inside it, so a wrapper
+ * installed after connect fires once the Client already reads as closed. A signal that has
+ * fired belongs to a connection that is gone; a live transport that still maps to one has been
+ * reconnected since, and gets a fresh signal around the new connection's `onclose`.
  */
 function closingOf(transport: Transport): AbortSignal {
   let signal = closings.get(transport);
-  if (!signal) {
+  if (!signal || signal.aborted) {
     const controller = new AbortController();
     const onclose = transport.onclose;
     transport.onclose = () => {

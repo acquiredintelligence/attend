@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { createAttend, PermanentError } from '../src/attend.js';
 import { mcpEventsSource, type McpEventsError, type McpEventsOptions } from '../src/mcp.js';
 import { memoryStore } from '../src/memory.js';
@@ -659,6 +659,47 @@ describe('mcpEventsSource over a real Client and Server', () => {
     const outcome = await Promise.race([streaming.then(() => 'resolved', (error: unknown) => error), settle().then(() => 'pending')]);
     expect(outcome).toBeInstanceOf(PermanentError);
     expect(outcome).toMatchObject({ message: 'attend/mcp: the Client closed; reconnect it and attach again' });
+    await h.stop();
+  });
+
+  test('a Client closed and reconnected on the same transport still paces its polls and its reopens', async () => {
+    const server = mcpEventsTestServer(ALPHA);
+    server.nextPollMs = null;
+    const transport = server.reconnectable();
+    const client = new Client({ name: 'attend-test', version: '0.0.0' });
+    await client.connect(transport);
+    const h = setup();
+    const polling = h.attend.attach('s', h.source(client, { pollMs: 1000 }));
+    void polling.catch(() => undefined);
+    await settle();
+    await client.close();
+    await expect(polling).rejects.toBeInstanceOf(PermanentError);
+
+    await client.connect(transport);
+    void h.attach('s', client, { pollMs: 1000 });
+    void h.attach('t', client, { mode: 'stream' });
+    await settle();
+    await server.terminate('alpha');
+    await settle();
+    // Real time, in which a source that no longer pauses makes thousands of requests.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await h.clock.advance(999);
+    await settle();
+    const sinceReconnect = () => server.requests.slice(1).map((r) => [r.method, r.params]);
+    const counts = () => ({ polls: sinceReconnect().filter(([m]) => m === 'events/poll').length, streams: sinceReconnect().filter(([m]) => m === 'events/stream').length });
+    expect(counts()).toEqual({ polls: 1, streams: 1 });
+    expect(sinceReconnect()).toEqual([
+      ['events/poll', { name: 'alpha', cursor: '0' }],
+      ['events/stream', { name: 'alpha', cursor: null }],
+    ]);
+    await h.clock.advance(1);
+    await settle();
+    expect(sinceReconnect()).toEqual([
+      ['events/poll', { name: 'alpha', cursor: '0' }],
+      ['events/stream', { name: 'alpha', cursor: null }],
+      ['events/poll', { name: 'alpha', cursor: '0' }],
+      ['events/stream', { name: 'alpha', cursor: '0' }],
+    ]);
     await h.stop();
   });
 
