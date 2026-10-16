@@ -104,7 +104,7 @@ test('a decision stranded by a crash is delivered once after the restart', async
 
 ## Adapter suites
 
-To test your own `StateStore` or `EventLog`, register the suites with your runner:
+To test your own `ScopeStore` or `EventLog`, register the suites with your runner:
 
 ```ts
 import { test } from 'node:test';

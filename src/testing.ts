@@ -3,8 +3,7 @@
  * suites, the crash harness and the crash suite. Runner-agnostic: the suites return named
  * async cases that any test runner can register.
  */
-import type { Clock, DeadLetter, Decision, Event, EventLog, Judge, JudgeInput, Judgment, Kind, ScopeRecord, SettlePolicy, Sink, StateStore, ScopeStore, Trace } from './types.js';
-import { initialRecord } from './step.js';
+import type { Clock, DeadLetter, Decision, Event, EventLog, Judge, JudgeInput, Judgment, Kind, ScopeRecord, SettlePolicy, Sink, ScopeStore, Trace } from './types.js';
 import { PermanentError } from './errors.js';
 import { createAttend, type Attend, type AttendConfig } from './attend.js';
 import { memoryStore } from './memory.js';
@@ -124,114 +123,6 @@ export function recordingSink(): RecordingSink {
 export interface ConformanceCase {
   name: string;
   run(): Promise<void>;
-}
-
-const record = (scope: string, version: number, dueAt: number | null): ScopeRecord => ({ ...initialRecord(scope), version, dueAt });
-
-/**
- * Every guarantee in `StateStore`'s doc comments, as cases. `make` returns a fresh, empty
- * store per case. Run them with your runner:
- *   for (const c of storeConformance(() => memoryStore())) test(c.name, c.run)
- */
-export function storeConformance(make: () => Promise<StateStore> | StateStore): ConformanceCase[] {
-  const cases: [string, (store: StateStore) => Promise<void>][] = [
-    [
-      'get of a missing scope is null',
-      async (store) => {
-        assertEqual(await store.get('missing'), null, 'get');
-      },
-    ],
-    [
-      'put at version 0 creates and get returns a deep-equal record',
-      async (store) => {
-        const r: ScopeRecord = {
-          ...record('s', 1, 42),
-          cursors: { 'log:s': 'c1', 'mcp:alpha:{}': null },
-          seen: ['a', 'b'],
-          buffer: { entries: [{ id: 'a', at: 1, name: 'n', data: { nested: { list: [1, 'two', null, true] }, text: 'héllo 🌍' }, kind: 'closing', seenAt: 5 }], dropped: 1, gap: true, forcedAt: null },
-          recent: [{ id: 'x', route: 'note', at: 3 }],
-        };
-        assertEqual(await store.put(r, 0), 'ok', 'put');
-        assertEqual(await store.get('s'), r, 'round trip');
-      },
-    ],
-    [
-      'put at a stale version conflicts and leaves the record unchanged',
-      async (store) => {
-        await store.put(record('s', 1, 10), 0);
-        await store.put(record('s', 2, 20), 1);
-        assertEqual(await store.put(record('s', 2, 99), 1), 'conflict', 'stale put');
-        assertEqual(await store.get('s'), record('s', 2, 20), 'unchanged');
-      },
-    ],
-    [
-      'put at version 0 on an existing scope conflicts',
-      async (store) => {
-        await store.put(record('s', 1, null), 0);
-        assertEqual(await store.put(record('s', 1, null), 0), 'conflict', 'create twice');
-      },
-    ],
-    [
-      'N concurrent puts at one version give exactly one ok',
-      async (store) => {
-        await store.put(record('s', 1, null), 0);
-        const results = await Promise.all(Array.from({ length: 20 }, (_, i) => store.put(record('s', 2, i), 1)));
-        assertEqual(results.filter((r) => r === 'ok').length, 1, 'exactly one winner');
-        const stored = await store.get('s');
-        assertEqual(stored?.version, 2, 'winner persisted');
-      },
-    ],
-    [
-      'due returns only dueAt <= now, ascending, honouring limit',
-      async (store) => {
-        await store.put(record('late', 1, 300), 0);
-        await store.put(record('early', 1, 100), 0);
-        await store.put(record('mid', 1, 200), 0);
-        await store.put(record('future', 1, 1000), 0);
-        assertEqual(await store.due(300, 10), ['early', 'mid', 'late'], 'ascending');
-        assertEqual(await store.due(300, 2), ['early', 'mid'], 'limit');
-        assertEqual(await store.due(99, 10), [], 'none due');
-      },
-    ],
-    [
-      'due excludes null dueAt and a put that clears dueAt removes the scope',
-      async (store) => {
-        await store.put(record('idle', 1, null), 0);
-        await store.put(record('busy', 1, 5), 0);
-        assertEqual(await store.due(10, 10), ['busy'], 'null excluded');
-        await store.put(record('busy', 2, null), 1);
-        assertEqual(await store.due(10, 10), [], 'cleared');
-      },
-    ],
-    [
-      'remove then get is null and put at version 0 succeeds again',
-      async (store) => {
-        await store.put(record('s', 1, 1), 0);
-        await store.remove('s');
-        assertEqual(await store.get('s'), null, 'removed');
-        assertEqual(await store.due(10, 10), [], 'not due');
-        assertEqual(await store.put(record('s', 1, null), 0), 'ok', 'recreated');
-      },
-    ],
-    [
-      'scopes that are prefixes of each other or hold punctuation stay separate',
-      async (store) => {
-        const scopes = ['a', 'a/b', 'a:b', 'a%b', 'ünï', 'a/b/c'];
-        for (const [i, scope] of scopes.entries()) await store.put(record(scope, 1, i), 0);
-        for (const [i, scope] of scopes.entries()) assertEqual((await store.get(scope))?.dueAt, i, scope);
-      },
-    ],
-    [
-      'a record at maxEvents round-trips',
-      async (store) => {
-        const entries = Array.from({ length: 250 }, (_, i) => ({ id: `e${i}`, at: i, name: 'n', data: { i }, kind: 'passive' as const, seenAt: i }));
-        const r: ScopeRecord = { ...record('s', 1, 1), buffer: { entries, dropped: 0, gap: false, forcedAt: null } };
-        await store.put(r, 0);
-        assertEqual(await store.get('s'), r, 'large round trip');
-      },
-    ],
-  ];
-  return cases.map(([name, run]) => ({ name, run: async () => run(await make()) }));
 }
 
 const event = (id: string): Event => ({ id, at: 0, name: 'n', data: { id } });
