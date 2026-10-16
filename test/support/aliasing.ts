@@ -1,14 +1,14 @@
 import { expect } from 'vitest';
 import { PermanentError } from '../../src/errors.js';
 import { harness, recordingSink, scriptedJudge, type ConformanceCase, type HarnessConfig } from '../../src/testing.js';
-import type { Event, JsonObject, StateStore } from '../../src/types.js';
+import type { Event, JsonObject, ScopeStore } from '../../src/types.js';
 
 const ID_A = '3ecbd4f2ef91c78f';
 
 const close = (id: string, data: JsonObject): Event => ({ id, at: 0, name: 'close', data });
 
 /** A runner over `store` whose waits see the store's real I/O, started at 1000 on scope `s`. */
-function start(store: StateStore, config: Partial<HarnessConfig>) {
+function start(store: ScopeStore, config: Partial<HarnessConfig>) {
   const sink = recordingSink();
   const h = harness({ judge: scriptedJudge([{ route: 'note' }]), sink, kind: () => 'closing', ...config }, { store, scope: 's', start: 1000 });
   return { h, sink, inspect: () => h.attend.inspect('s') };
@@ -19,8 +19,8 @@ function start(store: StateStore, config: Partial<HarnessConfig>) {
  * `inspect` returns a copy, and the judge, the sink and the dead-letter handler each get their
  * own copy. Every store passes the same cases, so user code behaves the same whichever it runs on.
  */
-export function aliasingCases(make: () => Promise<StateStore> | StateStore): ConformanceCase[] {
-  const cases: [string, (store: StateStore) => Promise<void>][] = [
+export function aliasingCases(make: () => Promise<ScopeStore> | ScopeStore): ConformanceCase[] {
+  const cases: [string, (store: ScopeStore) => Promise<void>][] = [
     [
       'a producer that reuses one data object across pushes stores each push as it was',
       async (store) => {

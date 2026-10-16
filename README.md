@@ -391,10 +391,12 @@ Run the conformance suite and the crash suite against your adapter with any test
 ```ts
 import { test } from 'node:test';
 import { memoryStore } from 'attend';
-import { crashSuite, storeConformance } from 'attend/testing';
+import { crashSuite, multiScopeCrashSuite, scopeStoreConformance, decisionLogConformance } from 'attend/testing';
 
-for (const c of storeConformance(() => memoryStore())) test(c.name, c.run);
+for (const c of scopeStoreConformance(() => memoryStore())) test(c.name, c.run);
 for (const c of crashSuite(() => memoryStore())) test(c.name, c.run);
+for (const c of decisionLogConformance(() => memoryStore())) test(c.name, c.run);
+for (const c of multiScopeCrashSuite(() => memoryStore())) test(c.name, c.run);
 ```
 
 The factory must return a fresh, empty store for each case. For a database, give each case its own table or key prefix. An `EventLog` adapter runs `logConformance(make, { canBlock })`, where `canBlock` says whether `read` waits for `blockMs`.

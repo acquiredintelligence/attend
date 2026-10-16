@@ -1,8 +1,21 @@
-import { describe, expect, test } from 'vitest';
+import { randomBytes } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import pg from 'pg';
+import { createClient } from 'redis';
+import { sqliteStore } from '../src/store/sqlite.js';
+import { migrate, postgresStore } from '../src/store/postgres.js';
+import { redisStore, type RedisSend } from '../src/store/redis.js';
+import type { ScopeStore } from '../src/store/types.js';
+import { aliasingCases } from './support/aliasing.js';
+import { windowId } from './oracle/step.js';
+import { afterAll, describe, expect, test } from 'vitest';
 import { memoryStore } from '../src/memory.js';
-import { CrashError, crashSuite, harness, recordingSink, scriptedJudge, type ScriptedAnswer } from '../src/testing.js';
+import { CrashError, crashSuite, multiScopeCrashSuite, harness, recordingSink, scriptedJudge, type ScriptedAnswer } from '../src/testing.js';
 import type { Event, Kind } from '../src/types.js';
-import { freezingStore } from './support/deep-freeze.js';
+import { freezingStore } from '../src/store/memory.js';
 
 const kind = (e: Event): Kind => (e.name === 'close' ? 'closing' : 'consequence');
 const ev = (id: string): Event => ({ id, at: 0, name: 'close', data: {} });
@@ -16,8 +29,97 @@ function setup(script: ScriptedAnswer[]) {
   return { h, judge, sink };
 }
 
-describe('crashSuite against memoryStore, every stored record frozen through', () => {
-  for (const c of crashSuite(() => freezingStore(memoryStore()))) test(c.name, c.run, 60_000);
+const directory = mkdtempSync(join(tmpdir(), 'attend-p6a-'));
+const schema = `attend_p6a_${randomBytes(6).toString('hex')}`;
+const redisPrefix = `attend-p6a:{${randomBytes(6).toString('hex')}}:`;
+const closers: (() => Promise<void> | void)[] = [];
+let files = 0;
+let prefixes = 0;
+let postgres: Promise<pg.Pool> | undefined;
+let redis: Promise<RedisSend> | undefined;
+const pool = () => postgres ??= (async () => {
+  const url = process.env.ATTEND_POSTGRES_URL ?? 'postgres://postgres:attend@127.0.0.1:15432/attend';
+  const admin = new pg.Client({ connectionString: url, connectionTimeoutMillis: 5000 });
+  try { await admin.connect(); await admin.query(`CREATE SCHEMA ${schema}`); }
+  finally { await admin.end(); }
+  return new pg.Pool({ connectionString: url, options: `-c search_path=${schema}`, connectionTimeoutMillis: 5000, max: 4 });
+})();
+const redisSend = () => redis ??= (async () => {
+  const client = createClient({ url: process.env.ATTEND_REDIS_URL ?? 'redis://127.0.0.1:16379', socket: { reconnectStrategy: false, connectTimeout: 5000 } });
+  client.on('error', () => undefined);
+  await client.connect();
+  closers.push(() => client.close());
+  return (args: string[]) => client.sendCommand(args);
+})();
+
+afterAll(async () => {
+  const opened = await postgres?.catch(() => undefined);
+  if (opened) { await opened.query(`DROP SCHEMA ${schema} CASCADE`); await opened.end(); }
+  const send = await redis?.catch(() => undefined);
+  const keys = await send?.(['KEYS', `${redisPrefix}*`]);
+  if (send && Array.isArray(keys) && keys.length) await send(['UNLINK', ...keys.map(String)]);
+  for (const close of closers) await close();
+  rmSync(directory, { force: true, recursive: true });
+}, 120000);
+
+const stores: [string, () => ScopeStore | Promise<ScopeStore>][] = [
+  ['memory', () => memoryStore()],
+  ['frozen memory', () => freezingStore(memoryStore())],
+  ['SQLite in-thread WAL', () => {
+    const db = new DatabaseSync(join(directory, `${files++}.sqlite`));
+    db.exec('PRAGMA journal_mode=WAL');
+    const store = sqliteStore(db);
+    const close = async () => { await store.close?.(); if (db.isOpen) db.close(); };
+    closers.push(close);
+    return { ...store, close };
+  }],
+  ['SQLite worker WAL', () => {
+    const store = sqliteStore({ file: join(directory, `${files++}.sqlite`), worker: true });
+    let closed = false;
+    const close = async () => { if (!closed) { closed = true; await store.close?.(); } };
+    closers.push(close);
+    return { ...store, close };
+  }],
+  ['Postgres', async () => {
+    const client = await pool();
+    const prefix = `t${prefixes++}_`;
+    await migrate(client, { prefix });
+    return postgresStore(client, { prefix });
+  }],
+  ['Redis', async () => redisStore(await redisSend(), { prefix: `${redisPrefix}${prefixes++}:` })],
+];
+
+for (const [name, make] of stores) describe(`crash and aliasing through ${name}`, () => {
+  let elapsed = 0;
+  afterAll(() => { console.log(`${name} crash and aliasing cases: ${elapsed} ms`); });
+  for (const c of [...crashSuite(make), ...multiScopeCrashSuite(make), ...aliasingCases(make)]) test(c.name, async () => {
+    const start = Date.now();
+    try { await c.run(); }
+    finally { elapsed += Date.now() - start; }
+  }, 300000);
+});
+
+test('crash-suite pinned ids equal the frozen reducer ids', () => {
+  expect(windowId('scope', ['a'])).toBe(ID_A);
+  expect(windowId('scope', ['a', 'b'])).toBe(ID_AB);
+  const expected: [string, string[], string][] = [
+    ['m/x', ['m/x/a'], '57926a9b506cd3a1'],
+    ['m/x', ['m/x/c', 'm/x/h'], '4b0d164deed6032f'],
+    ['m/x', ['m/x/e'], '57926e9b506cda6d'],
+    ['m/x', ['m/x/b', 'm/x/d'], 'ba2ddaa47740a48a'],
+    ['m/x', ['m/x/f'], '57926b9b506cd554'],
+    ['m/y', ['m/y/a'], 'd29b96ea48510c9f'],
+    ['m/y', ['m/y/h'], 'd29b9dea48511884'],
+    ['m/y', ['m/y/e'], 'd29b92ea485105d3'],
+    ['m/y', ['m/y/b', 'm/y/d'], '51a3be624f9cf887'],
+    ['m/y', ['m/y/f'], 'd29b93ea48510786'],
+    ['m/z', ['m/z/a'], '6be88f91d9776351'],
+    ['m/z', ['m/z/h'], '6be88691d9775406'],
+    ['m/z', ['m/z/e'], '6be89391d9776a1d'],
+    ['m/z', ['m/z/b', 'm/z/d'], 'c43155c9c7ae9dd8'],
+    ['m/z', ['m/z/f'], '6be89091d9776504'],
+  ];
+  for (const [scope, ids, id] of expected) expect(windowId(scope, ids)).toBe(id);
 });
 
 describe('restart regressions', () => {

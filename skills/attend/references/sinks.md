@@ -19,7 +19,7 @@ A sink is `{ deliver(decision, signal) }`. attend calls it at least once per dec
 Map each route to an operation in the host. The decision id makes each operation idempotent.
 
 ```ts
-import { createAttend, defaultNotice, routes, type DeadLetter, type Decision, type Event, type Judge, type Kind, type StateStore } from 'attend';
+import { createAttend, defaultNotice, routes, type DeadLetter, type Decision, type Event, type Judge, type Kind, type ScopeStore } from 'attend';
 
 export interface Host {
   /** Deliver now, even mid-turn: steer or cancel the current turn. */
@@ -33,7 +33,7 @@ export interface Host {
   saveDeadLetter(key: string, letter: DeadLetter): Promise<void>;
 }
 
-export function wire(host: Host, store: StateStore, judge: Judge, kind: (event: Event) => Kind) {
+export function wire(host: Host, store: ScopeStore, judge: Judge, kind: (event: Event) => Kind) {
   return createAttend({
     store,
     judge,

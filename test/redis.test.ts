@@ -3,9 +3,8 @@ import { createClient, RESP_TYPES } from 'redis';
 import { afterAll, describe, expect, test } from 'vitest';
 import { redisLog, redisStore, type RedisSend } from '../src/redis.js';
 import { initialRecord } from '../src/step.js';
-import { crashSuite, logConformance, storeConformance } from '../src/testing.js';
+import { logConformance, storeConformance } from '../src/testing.js';
 import type { Event, ScopeRecord } from '../src/types.js';
-import { aliasingCases } from './support/aliasing.js';
 
 const url = process.env.ATTEND_REDIS_URL ?? 'redis://127.0.0.1:16379';
 const run = `attend-test:${randomUUID().slice(0, 8)}:`;
@@ -44,8 +43,6 @@ const fresh = () => `${run}${prefixes++}:`;
 describe('redisStore conformance', () => {
   const make = async () => redisStore(await shared(), { prefix: fresh() });
   for (const c of storeConformance(make)) test(c.name, c.run);
-  for (const c of crashSuite(make)) test(c.name, c.run, 120_000);
-  for (const c of aliasingCases(make)) test(c.name, c.run);
 });
 
 describe('redisStore conformance over RESP2 with Buffer replies', () => {

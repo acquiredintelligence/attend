@@ -9,3 +9,4 @@ b2fb42e07ac3b73ea9b007feb154fef72acb5dd2 step.ts
 c4df1729d35fd98f92aab7c0c763e9dae051fada internal/shared.ts
 437678a6a8c0f5d71b733b99b8cebaae849a3f94 internal/json.ts
 0ae10cf2df369ceed4d788d177c2a967282db34d internal/assert.ts
+d6b4463a7f6d48ed08076d4bd1ea160d74641fa4 attend.spec.ts (test/attend.test.ts at 72cb462; import paths rewritten)
