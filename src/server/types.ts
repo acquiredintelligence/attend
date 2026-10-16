@@ -1,4 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { ToolResult } from './tools.js';
+import type { Fanout } from './fanout.js';
 import type { Attend } from '../shell/types.js';
 import type { DecisionLog, Position } from '../store/types.js';
 import type { DeliveredRoute, Entry, JsonObject, Route, SettleReason } from '../core/types.js';
@@ -159,6 +161,8 @@ export interface SubscriptionFilter {
   minProbability: number;
   stage?: 'judge' | 'sink';
   include: 'notice' | 'events';
+  /** Granted prefixes a row's scope must start with one of: set when the principal holds several grants and the arguments name neither scope nor scopePrefix. */
+  grants?: readonly string[];
 }
 
 /** `scopes` are granted prefixes; `['']` grants every scope. */
@@ -187,16 +191,45 @@ export interface EventsServerOptions {
   payload?: { maxEventsBytes?: number };
 }
 
-/** The slice of the MCP SDK's request `extra` the handlers use. */
-export interface McpRequestExtraLike {
-  requestId: string | number;
-  signal: AbortSignal;
-  sendNotification(notification: { method: string; params?: object }): Promise<void>;
+/** A JSON-RPC request as the MCP SDK hands it to `fallbackRequestHandler`. */
+export interface McpRequestLike {
+  jsonrpc: '2.0';
+  id: string | number;
+  method: string;
+  params?: { [key: string]: unknown };
 }
 
-/** The slice of an SDK `Server` that `install` uses: zod-free registration through the fallback handler. */
+/** The slice of the MCP SDK 2.x request context the handlers use. */
+export interface McpRequestContextLike {
+  mcpReq: {
+    id: string | number;
+    signal: AbortSignal;
+    notify(notification: { method: string; params?: { [key: string]: unknown } }): Promise<void>;
+  };
+}
+
+/** The slice of an MCP SDK 2.x `Server` that `install` uses: capability registration before connect, and one zod-free fallback handler. */
 export interface McpServerLike {
-  fallbackRequestHandler?: (request: { method: string; params?: unknown }, extra: McpRequestExtraLike) => Promise<unknown>;
+  /** Registers a typed handler; `install` composes the app's `tools/list` and `tools/call` handlers with attend's tools through it. */
+  setRequestHandler(method: string, ...args: unknown[]): void;
+  registerCapabilities(capabilities: { extensions?: Record<string, JsonObject>; tools?: JsonObject }): void;
+  fallbackRequestHandler?(request: McpRequestLike, ctx: McpRequestContextLike): Promise<{ [key: string]: unknown }>;
+}
+
+/** A tool `inputSchema` as an MCP SDK 2.x `McpServer` takes it: a Standard Schema that also carries its JSON Schema. */
+export interface McpToolSchemaLike {
+  readonly '~standard': {
+    readonly version: 1;
+    readonly vendor: string;
+    validate(value: unknown): { value: unknown };
+    readonly jsonSchema: { input(options: unknown): JsonObject; output(options: unknown): JsonObject };
+  };
+}
+
+/** The slice of an MCP SDK 2.x `McpServer` that `install` uses: its tool registry, and its low-level `server` for events/*. */
+export interface McpToolServerLike {
+  readonly server: McpServerLike;
+  registerTool(name: string, config: { description: string; inputSchema: McpToolSchemaLike }, callback: (args: unknown, ctx: McpRequestContextLike) => Promise<ToolResult>): unknown;
 }
 
 export type HttpRoute = (req: IncomingMessage, res: ServerResponse) => void | Promise<void>;
@@ -208,16 +241,16 @@ export interface HttpHandlerOptions {
   routes?: Record<string, HttpRoute>;
   /** Defaults: 10,000 sessions, 1,800,000 ms idle. */
   sessions?: { max?: number; idleMs?: number };
-  /** Builds the SDK Server for a new session, for an app that wants its own tools on the same endpoint. `install` is applied to it. */
-  newServer?: () => McpServerLike & { connect(transport: unknown): Promise<void> };
+  /** Builds the SDK Server or McpServer for a new session, for an app that wants its own tools on the same endpoint. `install` is applied to it. */
+  newServer?: () => (McpServerLike | McpToolServerLike) & { connect(transport: unknown): Promise<void> };
 }
 
 export interface EventsServer {
   readonly descriptors: readonly EventDescriptor[];
   /** For `server/discover` and `initialize`. */
   capabilities(): { extensions: Record<string, JsonObject> };
-  /** Registers events/list, events/poll, events/stream (every send awaited) and the tools on an SDK Server, for stdio and InMemory. */
-  install(server: McpServerLike, options?: { principal?: Principal }): void;
+  /** Pass an McpServer to register attend's tools beside the app's; on a low-level Server, attend serves tools from its fallback and composes with tools/list and tools/call handlers set before or after install. Call before connect, after the app sets its own fallbackRequestHandler. */
+  install(server: McpServerLike | McpToolServerLike, options?: { principal?: Principal }): void;
   /**
    * The Streamable HTTP endpoint. `events/stream` is served by attend's own SSE writer: drain on
    * write() === false, abort on 'close', a setImmediate yield every 64 frames, catch-up instead of
@@ -231,8 +264,14 @@ export interface EventsServer {
 /** Server-internal: what every events/* handler reads, built once by `eventsServer`. */
 export interface ServerContext {
   readonly log: DecisionLog;
+  /** The log's epoch, read on first use and kept: it never changes for a store. */
+  epoch(): Promise<string>;
   readonly options: EventsServerOptions;
   readonly descriptors: readonly EventDescriptor[];
+  /** Aborts when `EventsServer.close()` runs: long polls answer at once, and P9's streams end with their final frame. */
+  readonly signal: AbortSignal;
+  /** The process's shared tail cache and fan-out index (design §6.9), built by `createFanout(log)` on first read of this property and closed by `EventsServer.close()`. Phase P9 implements it; poll and the tools never read it. */
+  readonly fanout: Fanout;
 }
 
 /** NDJSON lines. */
