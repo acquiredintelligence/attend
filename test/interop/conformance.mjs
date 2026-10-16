@@ -68,7 +68,7 @@ function runScenario(scenario, url, out) {
 const dir = mkdtempSync(join(tmpdir(), 'attend-conformance-'));
 const out = join(dir, 'results');
 const busy = await launchServe(dir, 'busy', 100);
-const quiet = await launchServe(dir, 'quiet', 20000);
+const quiet = await launchServe(dir, 'quiet', 25_000);
 const servers = { busy, slow: quiet };
 const runs = [];
 try {
