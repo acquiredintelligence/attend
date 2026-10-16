@@ -21,8 +21,8 @@ function decision(id: string, scope = 's', route: DeliveredRoute = 'interrupt', 
   } };
 }
 
-function letter(id: string, stage: 'judge' | 'sink' = 'judge'): DecisionAppend {
-  const row = decision(id);
+function letter(id: string, stage: 'judge' | 'sink' = 'judge', at = Date.now()): DecisionAppend {
+  const row = decision(id, 's', 'interrupt', at);
   if (row.kind !== 'decision') throw new Error('Expected decision');
   return { kind: 'deadLetter', id, scope: row.scope, route: stage === 'sink' ? row.route : null, at: row.at, body: { id, scope: row.scope, at: row.at, window: row.body.window, stage, message: 'could not deliver', permanent: true, attempts: 3, decision: stage === 'sink' ? row.body : null } };
 }
@@ -77,6 +77,7 @@ export function eventsWireConformance(start: (principal: Principal) => Promise<W
       }
       assertEqual(record(descriptors[0]!.payloadSchema).required, ['decisionId', 'scope', 'route', 'probabilities', 'predicates', 'confidence', 'reason', 'settledAt', 'decidedAt', 'eventCount', 'eventIds', 'dropped', 'gap', 'waits', 'notice'], 'required fields');
       assertOk(!('nextCursor' in result), 'one page');
+      await error(() => t.request('events/list', { cursor: 'page-2' }), -32602, 'field', 'cursor');
     }],
     ['a null cursor starts from now', async (t) => {
       await t.commit([decision('old')]);
@@ -97,7 +98,7 @@ export function eventsWireConformance(start: (principal: Principal) => Promise<W
     }],
     ['occurrences carry the payload fields and no per-event cursor', async (t) => {
       const cursor = await head(t);
-      const rows = [decision('a'), decision('b', 's', 'queue'), letter('c', 'sink')];
+      const rows = [decision('a'), decision('b', 's', 'queue'), letter('c', 'sink', 1000), letter('d', 'judge', 1000)];
       await t.commit(rows);
       const decisions = events(await poll(t, { cursor }));
       const letters = events(await poll(t, { cursor, name: 'attention.deadLetter' }));
@@ -124,7 +125,9 @@ export function eventsWireConformance(start: (principal: Principal) => Promise<W
           assertEqual([data.dropped, data.gap, data.waits], [3, true, 2], 'window fields');
           assertOk(typeof data.notice === 'string' && data.notice.length > 0, 'notice');
         } else {
-          assertEqual(data, { letterId: row.id, scope: 's', stage: 'sink', message: 'could not deliver', permanent: true, attempts: 3, decisionId: row.id, route: 'interrupt', reason: 'closing', eventCount: 1, eventIds: [`event:${row.id}`], at: new Date(row.at).toISOString() }, 'letter payload');
+          assertEqual(data, row.id === 'c'
+            ? { letterId: 'c', scope: 's', stage: 'sink', message: 'could not deliver', permanent: true, attempts: 3, decisionId: 'c', route: 'interrupt', reason: 'closing', eventCount: 1, eventIds: ['event:c'], at: '1970-01-01T00:00:01.000Z' }
+            : { letterId: 'd', scope: 's', stage: 'judge', message: 'could not deliver', permanent: true, attempts: 3, decisionId: null, route: null, reason: 'closing', eventCount: 1, eventIds: ['event:d'], at: '1970-01-01T00:00:01.000Z' }, 'letter payload');
         }
       }
     }],
@@ -154,7 +157,7 @@ export function eventsWireConformance(start: (principal: Principal) => Promise<W
     ['arguments filter by scope, scopePrefix, routes and minProbability', async (t) => {
       const cursor = await head(t);
       await t.commit([decision('a', 'a/1'), decision('b', 'a/2', 'queue'), decision('c', 'b/1', 'note')]);
-      for (const [args, expected] of [[{ scope: 'a/1' }, ['a']], [{ scopePrefix: 'a/' }, ['a', 'b']], [{ routes: ['queue'] }, ['b']], [{ minProbability: 0.5 }, ['a']], [{ routes: [] }, []]] satisfies [JsonObject, string[]][]) assertEqual(ids(await poll(t, { cursor, arguments: args })), expected, 'filter');
+      for (const [args, expected] of [[{ scope: 'a/1' }, ['a']], [{ scopePrefix: 'a/' }, ['a', 'b']], [{ routes: ['queue'] }, ['b']], [{ minProbability: 0.5 }, ['a']], [{ minProbability: 0.8 }, ['a']], [{ minProbability: 0.81 }, []], [{ routes: [] }, []]] satisfies [JsonObject, string[]][]) assertEqual(ids(await poll(t, { cursor, arguments: args })), expected, 'filter');
     }],
     ['include events carries the window entries', async (t) => {
       const cursor = await head(t);
@@ -187,12 +190,21 @@ export function eventsWireConformance(start: (principal: Principal) => Promise<W
     }],
     ['maxAgeMs skips older rows and says truncated', async (t) => {
       const cursor = await head(t);
-      await t.commit([decision('old', 's', 'interrupt', Date.now() - 3_600_000), decision('new')]);
-      const first = await poll(t, { cursor, maxEvents: 1 });
+      const now = Date.now();
+      await t.commit([decision('old', 's', 'interrupt', now - 3_600_000), decision('mid', 's', 'interrupt', now), decision('older', 's', 'interrupt', now - 3_600_000), decision('new', 's', 'interrupt', now)]);
+      const mid = await poll(t, { cursor, maxEvents: 2 });
+      const older = await poll(t, { cursor, maxEvents: 3 });
+      assertEqual(ids(mid), ['old', 'mid'], 'cursor after mid');
+      assertEqual(ids(older), ['old', 'mid', 'older'], 'cursor after older');
       const result = await poll(t, { cursor, maxAgeMs: 60_000 });
-      assertEqual(ids(result), ['new'], 'age filter');
+      assertEqual(ids(result), ['mid', 'new'], 'age filter');
       assertEqual(result.truncated, true, 'age gap');
-      assertEqual((await poll(t, { cursor: first.cursor as string, maxAgeMs: 60_000 })).truncated, false, 'fresh next');
+      const afterMid = await poll(t, { cursor: mid.cursor as string, maxAgeMs: 60_000 });
+      assertEqual(ids(afterMid), ['new'], 'after mid');
+      assertEqual(afterMid.truncated, true, 'old next row');
+      const afterOlder = await poll(t, { cursor: older.cursor as string, maxAgeMs: 60_000 });
+      assertEqual(ids(afterOlder), ['new'], 'after older');
+      assertEqual(afterOlder.truncated, false, 'fresh next row');
     }],
     ['errors carry the SEP codes and typed data', async (t, fresh) => {
       await error(() => poll(t, { name: 'unknown' }), -32023, 'kind', 'event');
@@ -200,6 +212,9 @@ export function eventsWireConformance(start: (principal: Principal) => Promise<W
       for (const args of [{ bogus: 1 }, { scope: 'a', scopePrefix: 'a' }, { routes: ['skip'] }, { minProbability: 2 }]) {
         const field = await error(() => poll(t, { arguments: args }), -32602, 'field');
         assertOk(typeof field === 'string' && field.startsWith('arguments'), 'argument field');
+      }
+      for (const [args, field] of [[{ routes: ['interrupt'] }, 'arguments.routes'], [{ minProbability: 0.5 }, 'arguments.minProbability'], [{ include: 'events' }, 'arguments.include']] satisfies [JsonObject, string][]) {
+        await error(() => poll(t, { name: 'attention.deadLetter', arguments: args }), -32602, 'field', field);
       }
       await error(() => poll(t, { maxEvents: 0 }), -32602, 'field', 'maxEvents');
       const restricted = await fresh({ id: 'tenant-a', scopes: ['tenant-a/'] });
@@ -213,6 +228,14 @@ export function eventsWireConformance(start: (principal: Principal) => Promise<W
       const epoch = cursor.split('.')[1];
       await error(() => poll(t, { cursor: `v1.${epoch}.not a position` }), -32602, 'field', 'cursor');
     }],
+    ['a principal with no grants is Forbidden', async (t) => {
+      for (const params of [{}, { arguments: { scope: 'a' } }, { name: 'attention.deadLetter' }] satisfies JsonObject[]) {
+        await error(() => poll(t, params), -32024, 'reason');
+      }
+      const result = await t.request('tools/call', { name: 'attend_wait', arguments: { cursor: null, waitMs: 0 } });
+      assertEqual(result.isError, true, 'tool error');
+      assertEqual(record(record(result.structuredContent).error).code, -32024, 'Forbidden');
+    }, { id: 'none', scopes: [] }],
     ['a principal reads only inside its grants', async (t, fresh) => {
       const cursor = await head(t);
       await t.commit([decision('a', 'a/x'), decision('b', 'b/x'), decision('c', 'c/x')]);

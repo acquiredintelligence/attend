@@ -11,11 +11,11 @@ export interface ToolDefinition {
 }
 
 /** Text and structured representations of a tool result. */
-export interface ToolResult {
+export type ToolResult = {
   content: { type: 'text'; text: string }[];
   structuredContent?: JsonObject;
   isError?: boolean;
-}
+};
 
 /** attend_wait and attend_window. */
 export function listTools(): ToolDefinition[] {

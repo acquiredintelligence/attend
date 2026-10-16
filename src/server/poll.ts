@@ -1,4 +1,4 @@
-import { encodeCursor, resolveStart } from './cursor.js';
+import { encodeCursor, lostBefore, resolveStart } from './cursor.js';
 import { eventsError, matches, occurrenceFor, parseSubscription, queryFor } from './events.js';
 import type { DecisionPage } from '../store/types.js';
 import type { JsonObject } from '../core/types.js';
@@ -17,7 +17,10 @@ export async function pollEvents(context: ServerContext, params: unknown, princi
   const maxEvents = Math.min(integer('maxEvents', context.options.poll?.defaultMaxEvents ?? 100, 1), context.options.poll?.maxEvents ?? 1000);
   const waitMs = Math.min(integer('waitMs', 0, 0), 30_000);
   const now = Date.now();
-  const start = await resolveStart(context.log, cursor, maxAgeMs, now);
+  const epoch = await context.epoch();
+  const start = await resolveStart(context.log, epoch, cursor);
+  const sinceAt = maxAgeMs !== undefined && !start.fromNow ? now - maxAgeMs : undefined;
+  let truncated = start.truncated;
   const until = now + waitMs;
   const combined = AbortSignal.any([signal, context.signal]);
   let checked = start.after;
@@ -25,8 +28,10 @@ export async function pollEvents(context: ServerContext, params: unknown, princi
   let rows = page.rows;
   if (!start.fromNow || waitMs > 0) {
     do {
-      page = await context.log.read({ after: checked, ...queryFor(filter), ...(maxAgeMs !== undefined && !start.fromNow ? { sinceAt: now - maxAgeMs } : {}), limit: maxEvents, scanLimit: 4 * maxEvents });
-      checked = page.checked ?? checked;
+      const after = checked;
+      page = await context.log.read({ after, ...queryFor(filter), ...(sinceAt === undefined ? {} : { sinceAt }), limit: maxEvents, scanLimit: 4 * maxEvents });
+      if (!truncated && await lostBefore(context.log, after, page, sinceAt)) truncated = true;
+      checked = page.checked ?? after;
       rows = page.rows.filter((row) => matches(filter, row));
       if (rows.length > 0 || page.more || combined.aborted || Date.now() >= until) break;
       await context.log.wait(checked, until - Date.now(), combined);
@@ -35,5 +40,5 @@ export async function pollEvents(context: ServerContext, params: unknown, princi
   return { resultType: 'complete', events: rows.map((row) => {
     const occurrence = occurrenceFor(row, filter.include, context.options.payload?.maxEventsBytes);
     return { ...occurrence, data: occurrence.data as unknown as JsonObject };
-  }), cursor: encodeCursor({ epoch: start.epoch, position: checked ?? '' }), truncated: start.truncated, hasMore: page.more, nextPollMs: context.options.poll?.nextPollMs ?? 1000 };
+  }), cursor: encodeCursor({ epoch, position: checked ?? '' }), truncated, hasMore: page.more, nextPollMs: context.options.poll?.nextPollMs ?? 1000 };
 }

@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { afterAll, describe, expect, test } from 'vitest';
 import { createClient } from 'redis';
+import pg from 'pg';
+import { migrate, postgresStore, type PostgresListener } from '../../src/store/postgres.js';
 import { Server, InMemoryTransport, createMcpHandler } from '@modelcontextprotocol/server';
 import { Client, StreamableHTTPClientTransport, type Transport } from '@modelcontextprotocol/client';
 import { Client as LegacyClient } from '@modelcontextprotocol/sdk/client/index.js';
@@ -37,6 +39,77 @@ afterAll(async () => {
   const keys = await send?.(['KEYS', `${run}*`]);
   if (send && Array.isArray(keys) && keys.length > 0) await send(['UNLINK', ...keys.map(String)]);
   await Promise.all(redisClosers.map((close) => close()));
+});
+
+const postgresUrl = process.env.ATTEND_POSTGRES_URL ?? 'postgres://postgres:attend@127.0.0.1:15432/attend';
+const postgresSchema = `attend_p8_${randomUUID().replaceAll('-', '').slice(0, 12)}`;
+const postgresConfig = { connectionString: postgresUrl, options: `-c search_path=${postgresSchema}`, connectionTimeoutMillis: 5000 };
+let postgresReady: Promise<pg.Pool> | undefined;
+let listenerReady: Promise<{ client: pg.Client; listener: PostgresListener }> | undefined;
+let postgresSequence = 0;
+
+function postgresPool() {
+  return postgresReady ??= (async () => {
+    const admin = new pg.Client({ connectionString: postgresUrl, connectionTimeoutMillis: 5000 });
+    try {
+      await admin.connect();
+      await admin.query(`CREATE SCHEMA ${postgresSchema}`);
+    } finally { await admin.end(); }
+    return new pg.Pool({ ...postgresConfig, max: 4 });
+  })();
+}
+
+function postgresListener() {
+  return listenerReady ??= (async () => {
+    await postgresPool();
+    const client = new pg.Client(postgresConfig);
+    await client.connect();
+    const channels = new Map<string, { callbacks: Set<() => void>; ready: Promise<unknown> }>();
+    client.on('notification', ({ channel }) => {
+      for (const callback of channels.get(channel)?.callbacks ?? []) callback();
+    });
+    const listener: PostgresListener = {
+      async listen(channel, callback) {
+        let entry = channels.get(channel);
+        if (!entry) {
+          entry = { callbacks: new Set(), ready: client.query(`LISTEN "${channel}"`) };
+          channels.set(channel, entry);
+        }
+        entry.callbacks.add(callback);
+        await entry.ready;
+        return async () => {
+          entry.callbacks.delete(callback);
+          if (entry.callbacks.size === 0 && channels.get(channel) === entry) {
+            channels.delete(channel);
+            await client.query(`UNLISTEN "${channel}"`);
+          }
+        };
+      },
+    };
+    return { client, listener };
+  })();
+}
+
+async function postgres(): Promise<ScopeStore> {
+  const pool = await postgresPool();
+  const prefix = `t${postgresSequence++}_`;
+  await migrate(pool, { prefix });
+  const store = postgresStore(pool, { prefix, listener: (await postgresListener()).listener });
+  return { ...store, async commit(writes) {
+    const outcomes = await store.commit(writes);
+    const last = writes.flatMap((write) => write.appends).at(-1);
+    // Other suites hold the cluster-wide visibility horizon behind this fixture's commit.
+    if (last && outcomes.every((outcome) => outcome === 'ok')) await expect.poll(async () => (await store.log.find(last.kind, last.id))?.id, { timeout: 10_000 }).toBe(last.id);
+    return outcomes;
+  } };
+}
+
+afterAll(async () => {
+  const listening = await listenerReady?.catch(() => undefined);
+  await listening?.client.end();
+  const pool = await postgresReady?.catch(() => undefined);
+  try { await pool?.query(`DROP SCHEMA ${postgresSchema} CASCADE`); }
+  finally { await pool?.end(); }
 });
 
 function append(id: string, scope = 's'): DecisionAppend {
@@ -126,6 +199,8 @@ for (const config of [
   }, era: 'legacy' },
   { name: 'Redis / SDK 2.x legacy', make: redis, era: 'legacy' },
   { name: 'Redis / SDK 2.x modern', make: redis, era: 'modern' },
+  { name: 'Postgres / SDK 2.x legacy', make: postgres, era: 'legacy' },
+  { name: 'Postgres / SDK 2.x modern', make: postgres, era: 'modern' },
 ] as const) {
   describe(config.name, () => {
     for (const c of eventsWireConformance(async (principal) => target(await config.make(), config.era, principal))) {
@@ -321,4 +396,109 @@ test('request cancellation aborts the store wait', async () => {
     await ended;
     expect(waitingSignal?.aborted).toBe(true);
   } finally { abort.abort(); await t.stop(); }
+});
+
+test('an empty poll at the head makes one store read', async () => {
+  const store = memoryStore();
+  const log = store.log;
+  const calls = { epoch: 0, bounds: 0, read: 0, wait: 0 };
+  let epochs = 0;
+  const t = await target({ ...store, log: { ...log,
+    async epoch() { calls.epoch++; epochs++; return log.epoch(); },
+    async bounds() { calls.bounds++; return log.bounds(); },
+    async read(query) { calls.read++; return log.read(query); },
+    async wait(after, blockMs, signal) { calls.wait++; return log.wait(after, blockMs, signal); },
+  } });
+  const reset = () => { calls.epoch = 0; calls.bounds = 0; calls.read = 0; calls.wait = 0; };
+  try {
+    await t.commit([append('a')]);
+    const head = await poll(t, { cursor: null, maxAgeMs: 60_000 });
+    expect(calls).toEqual({ epoch: 1, bounds: 1, read: 0, wait: 0 });
+    const cursor = head.cursor as string;
+    reset();
+    expect(rows(await poll(t, { cursor }))).toEqual([]);
+    expect(rows(await poll(t, { cursor }))).toEqual([]);
+    expect(calls).toEqual({ epoch: 0, bounds: 0, read: 2, wait: 0 });
+    reset();
+    expect(rows(await poll(t, { cursor, maxAgeMs: 60_000 }))).toEqual([]);
+    expect(calls).toEqual({ epoch: 0, bounds: 0, read: 1, wait: 0 });
+    await t.commit([append('b')]);
+    reset();
+    expect(rows(await poll(t, { cursor })).map((row) => row.eventId)).toEqual(['b']);
+    expect(calls).toEqual({ epoch: 0, bounds: 1, read: 1, wait: 0 });
+    await t.commit([append('c')]);
+    reset();
+    expect(rows(await poll(t, { cursor, maxAgeMs: 60_000 })).map((row) => row.eventId)).toEqual(['b', 'c']);
+    expect(calls).toEqual({ epoch: 0, bounds: 1, read: 2, wait: 0 });
+    reset();
+    expect(rows(await poll(t, { cursor, arguments: { scope: 'other' } }))).toEqual([]);
+    expect(calls).toEqual({ epoch: 0, bounds: 1, read: 1, wait: 0 });
+    reset();
+    const epoch = cursor.split('.')[1];
+    expect(rows(await poll(t, { cursor: `v1.${epoch}.`, maxAgeMs: 60_000 })).map((row) => row.eventId)).toEqual(['a', 'b', 'c']);
+    expect(calls).toEqual({ epoch: 0, bounds: 0, read: 2, wait: 0 });
+    expect(epochs).toBe(1);
+  } finally { await t.stop(); }
+});
+
+test('a trim during a long poll says truncated', async () => {
+  const store = memoryStore();
+  const t = await target(store);
+  const wait = store.log.wait.bind(store.log);
+  let first = true;
+  store.log.wait = async (after, blockMs, signal) => {
+    if (!first) return wait(after, blockMs, signal);
+    first = false;
+    await t.commit([append('b'), append('c')]);
+    await store.log.trim({ maxRows: 1 });
+  };
+  try {
+    await t.commit([append('a')]);
+    const cursor = (await poll(t)).cursor as string;
+    const result = await poll(t, { cursor, waitMs: 5000 });
+    expect(rows(result).map((row) => row.eventId)).toEqual(['c']);
+    expect(result.truncated).toBe(true);
+  } finally { await t.stop(); }
+});
+
+test('include events caps UTF-8 bytes at the exact boundary', async () => {
+  const entries = [{ id: 'e:a', at: 1, name: 'changed', data: { text: 'é'.repeat(40) }, kind: 'closing' as const, seenAt: 2 }];
+  // The serialized entries are 165 UTF-8 bytes and 125 UTF-16 units.
+  for (const cap of [164, 165]) {
+    const t = await target(memoryStore(), 'legacy', all, { payload: { maxEventsBytes: cap } });
+    try {
+      const cursor = (await poll(t)).cursor as string;
+      const row = append('a');
+      row.at = 3;
+      row.body.at = 3;
+      row.body.window.settledAt = 2;
+      row.body.window.events = entries;
+      await t.commit([row]);
+      const result = rows(await poll(t, { cursor, arguments: { include: 'events' } }))[0]!;
+      if (cap === 164) {
+        expect(result.data).not.toHaveProperty('events');
+        expect(result._meta).toEqual({ 'attend/eventsOmitted': true });
+      } else {
+        expect(result.data.events).toEqual(entries);
+        expect(result).not.toHaveProperty('_meta');
+      }
+    } finally { await t.stop(); }
+  }
+});
+
+test('a rejected epoch read is retried on the next poll', async () => {
+  const store = memoryStore();
+  let reads = 0;
+  const t = await target({ ...store, log: { ...store.log, async epoch() {
+    reads++;
+    if (reads === 1) throw new Error('epoch unavailable');
+    return store.log.epoch();
+  } } });
+  try {
+    await expect(poll(t)).rejects.toBeDefined();
+    expect(reads).toBe(1);
+    expect(rows(await poll(t))).toEqual([]);
+    expect(rows(await poll(t))).toEqual([]);
+    expect(reads).toBe(2);
+  } finally { await t.stop(); }
 });
