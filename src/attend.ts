@@ -229,6 +229,20 @@ export function createAttend(config: AttendConfig): Attend {
     await apply(scope, result);
   }
 
+  /** After a start, arm timers for scopes not yet due, so recovery is on time rather than at the next sweep. */
+  async function warm(limit: number): Promise<void> {
+    try {
+      const dueNow = new Set(await config.store.due(clock.now(), limit));
+      for (const scope of await config.store.due(Number.MAX_SAFE_INTEGER, limit)) {
+        if (dueNow.has(scope)) continue;
+        const record = await config.store.get(scope);
+        if (record) arm(scope, record.dueAt);
+      }
+    } catch (error) {
+      observe({ kind: 'failed', scope: '*', input: 'tick', message: messageOf(error) });
+    }
+  }
+
   function sleep(ms: number, signal: AbortSignal): Promise<void> {
     return new Promise((resolve) => {
       if (signal.aborted) {
@@ -281,6 +295,7 @@ export function createAttend(config: AttendConfig): Attend {
       if (running) throw new Error('attend: already running');
       running = { signal };
       try {
+        await warm(sweepLimit);
         while (!signal.aborted) {
           try {
             for (const scope of await config.store.due(clock.now(), sweepLimit)) tick(scope);
