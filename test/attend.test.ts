@@ -762,6 +762,22 @@ describe('createAttend', () => {
     await done;
   });
 
+  test('a due tick fires under a steady stream of writes faster than its timer', async () => {
+    const judge = scriptedJudge([{ route: 'skip' }]);
+    const attend = createAttend({ store: memoryStore(), judge, sink: recordingSink(), kind: () => 'continuous', deadLetter: () => undefined, settle: { maxEvents: 10 } });
+    const controller = new AbortController();
+    const running = attend.run({ signal: controller.signal, sweepMs: 60_000 });
+    let settledMidStream = false;
+    for (let i = 0; i < 400; i += 1) {
+      await attend.push('s', [ev(`e${i}`, 'drag')]);
+      await new Promise((resolve) => setImmediate(resolve));
+      if (judge.calls.length > 0) settledMidStream = true;
+    }
+    controller.abort();
+    await running;
+    expect(settledMidStream).toBe(true);
+  });
+
   test('run resolves on abort and refuses to run twice', async () => {
     const h = setup([]);
     await expect(h.attend.run({ signal: new AbortController().signal })).rejects.toThrow('already running');

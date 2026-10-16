@@ -122,7 +122,7 @@ export function createAttend(config: AttendConfig): Attend {
   const stepConfig: StepConfig = { kind: config.kind, policy };
   const clock = config.clock ?? systemClock();
   const lanes = new Map<string, Promise<void>>();
-  const timers = new Map<string, () => void>();
+  const timers = new Map<string, { at: number; cancel: () => void }>();
   const sources = new Set<AbortController>();
   const attached = new Set<string>();
   /** Judge, sink and dead-letter calls in flight, each with the lease the reducer gave it. */
@@ -174,16 +174,17 @@ export function createAttend(config: AttendConfig): Attend {
   }
 
   function arm(scope: string, dueAt: number | null): void {
-    timers.get(scope)?.();
+    const armed = timers.get(scope);
+    // A due tick keeps its timer: replacing it on every write would start a fresh zero-delay timer each time and starve it under a steady stream.
+    if (armed && running && dueAt !== null && dueAt <= clock.now() && armed.at <= clock.now()) return;
+    armed?.cancel();
     timers.delete(scope);
     if (!running || dueAt === null) return;
-    timers.set(
-      scope,
-      clock.at(dueAt, () => {
-        timers.delete(scope);
-        tick(scope);
-      }),
-    );
+    const cancel = clock.at(dueAt, () => {
+      timers.delete(scope);
+      tick(scope);
+    });
+    timers.set(scope, { at: dueAt, cancel });
   }
 
   function tick(scope: string): void {
@@ -361,7 +362,7 @@ export function createAttend(config: AttendConfig): Attend {
         }
       } finally {
         running = null;
-        for (const cancel of timers.values()) cancel();
+        for (const timer of timers.values()) timer.cancel();
         timers.clear();
         for (const controller of sources) controller.abort();
         // Only the writes in flight now, not a producer's later pushes: those persist on their own and do not hold the runner.
