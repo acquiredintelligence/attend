@@ -67,8 +67,9 @@ export interface RunOptions {
   /**
    * Aborting stops the sweep, the timers and the attached sources and starts no further judge,
    * sink or dead-letter call. `run` then resolves once the calls already in flight have settled
-   * and persisted their results, or their leases have expired. Whatever this runner left
-   * undone, the next runner takes up when its lease expires.
+   * and persisted their results, or their leases have expired, and once every write this
+   * instance had in flight has landed, so the store may be closed as soon as it resolves.
+   * Whatever this runner left undone, the next runner takes up when its lease expires.
    */
   signal: AbortSignal;
   /** How often to ask the store for due scopes. The only path for scopes written by other processes. Default 1000. */
@@ -348,6 +349,7 @@ export function createAttend(config: AttendConfig): Attend {
         timers.clear();
         for (const controller of sources) controller.abort();
         await Promise.all([...calls].map(([done, leaseUntil]) => settledOrExpired(done, leaseUntil)));
+        while (lanes.size > 0) await Promise.all(lanes.values());
       }
     },
   };
