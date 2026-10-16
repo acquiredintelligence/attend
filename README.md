@@ -25,23 +25,17 @@ Picture an agent that watches your app. The app never stops talking: log lines, 
 attend holds each scope's events until they add up to something, asks a judge what the agent should do, and hands your app one decision. Your app keeps the final say in how that decision runs. In the sample below, a failed build waits, and the user's question wakes the agent with both.
 
 ```ts
-import { createAttend, defaultNotice, memoryStore, routes, type Decision } from '@acquiredintelligence/attend';
-
-const tell = (decision: Decision) => console.log(`[${decision.route}]\n${defaultNotice(decision)}`);
+import { createAttend, defaultNotice } from '@acquiredintelligence/attend';
 
 const attend = createAttend({
-  store: memoryStore(),
-  kind: (event) => (event.name === 'user.message' ? 'flush' : 'consequence'),
+  kind: { 'user.message': 'flush', 'build.failed': 'closing' },
   judge: async ({ window }) => ({ route: window.reason === 'flush' ? 'interrupt' : 'note' }),
-  sink: routes({ interrupt: tell, queue: tell, note: tell, ask: tell }),
-  deadLetter: (letter) => console.error('dead letter', letter.id, letter.message),
+  sink: (decision) => console.log(`[${decision.route}]\n${defaultNotice(decision)}`),
 });
 
-void attend.run({ signal: AbortSignal.timeout(1000) });
-await attend.push('session-1', [
-  { id: 'e1', at: Date.now(), name: 'build.failed', data: {}, text: 'Build 4521 failed: 1 test' },
-  { id: 'e2', at: Date.now(), name: 'user.message', data: {}, text: 'can you look?' },
-]);
+void attend.run();
+await attend.push('session-1', { name: 'build.failed', text: 'Build 4521 failed: 1 test' });
+await attend.push('session-1', { name: 'user.message', text: 'can you look?' });
 ```
 
 The build failure alone never wakes the agent. The user's message settles the window at once, and the agent hears both lines in one notice:
@@ -59,7 +53,7 @@ Attend to this now, even mid-task.
 npm install @acquiredintelligence/attend
 ```
 
-attend needs Node 22.13 or later and ships ESM only. The engine has no runtime dependencies. Before production, replace the function judge with [a real judge](docs/judges.md) and `memoryStore` with [a database store](docs/storage.md).
+attend needs Node 22.13 or later and ships ESM only. The engine has no runtime dependencies. Before production, replace the function judge with [a real judge](docs/judges.md) and pass `store` [a database store](docs/storage.md); without one, state lives in memory.
 
 ## See it decide
 
@@ -154,6 +148,7 @@ To run the sidecar, see [Run attend as a sidecar with attend serve](docs/serve.m
 | [Choose a judge](docs/judges.md) | pick and configure Jev, the Decisions API, `llmJudge` or your own, and set the window budget and the act threshold |
 | [Deliver decisions to your agent](docs/sinks.md) | write an idempotent sink and a dead-letter handler |
 | [Choose a store](docs/storage.md) | run on memory, SQLite, Postgres or Redis, and share a store between processes |
+| [Give a Mastra agent attention](docs/mastra.md) | wire attend in front of a Mastra agent with one sink |
 | [Feed attend from an MCP Events server](docs/mcp-events.md) | subscribe a scope to an MCP Events stream with `mcpEventsSource` |
 | [Run attend as a sidecar](docs/serve.md) | send events over HTTP and subscribe agents over MCP |
 | [attend serve reference](docs/serve-reference.md) | look up every flag and the ingest wire format |

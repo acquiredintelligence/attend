@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-const UNINSTALLED = [/from 'openai'/, /from 'ai'/, /from '@ai-sdk\//, /from '@google\/genai'/, /from 'ioredis'/];
+const UNINSTALLED = [/from 'openai'/, /from 'ai'/, /from '@ai-sdk\//, /from '@google\/genai'/, /from 'ioredis'/, /from '@mastra\//];
 const ANTHROPIC_STUB = `declare module '@anthropic-ai/sdk' {
   export default class Anthropic {
     messages: {

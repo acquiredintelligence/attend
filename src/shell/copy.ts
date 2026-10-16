@@ -3,8 +3,12 @@ import { copyEvent } from '../internal/shared.js';
 import { estimateRenderedBytes } from '../core/window.js';
 
 /** Copies and validates an event at the JSON boundary, and measures its rendered bytes. */
-export function copyEventSized(event: Event): { event: Event; bytes: number } {
-  const copied = copyEvent(event);
+export function copyEventSized(event: Event, fill?: { id(): string; at(): number }): { event: Event; bytes: number } {
+  const copied = copyEvent(event, fill !== undefined);
+  if (fill) {
+    if (copied.id === undefined) copied.id = fill.id();
+    if (copied.at === undefined) copied.at = fill.at();
+  }
   if (typeof copied.id !== 'string' || typeof copied.name !== 'string' || (copied.text !== undefined && typeof copied.text !== 'string')) {
     throw new TypeError('attend: event id, name and text must be strings');
   }

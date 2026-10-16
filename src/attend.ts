@@ -3,7 +3,8 @@ import { sleep, systemClock } from './internal/clock.js';
 import { arrayLength, assertNever, messageOf } from './internal/shared.js';
 import { DEFAULT_POLICY, KINDS, ROUTES } from './types.js';
 import type { Clock, Source, SourceBatch, DeadLetter, Decision, DeliveredRoute, DeliverEffect, Effect, Event, EventLog, EventsInput, Input, JudgeEffect, JudgeImage, JudgeInput, Judgment, Kind, ReleasedInput, SettlePolicy, Sink, Trace } from './types.js';
-import type { Attend, AttendConfig } from './shell/types.js';
+import type { Attend, AttendConfig, EventInput } from './shell/types.js';
+import { memoryStore } from './store/memory.js';
 import { createScopes } from './shell/scope.js';
 import { createScheduler } from './shell/scheduler.js';
 import { copyDecision, copyEventSized, copyLetter, copyWindowSliced } from './shell/copy.js';
@@ -15,7 +16,7 @@ import { thresholdRoute } from './core/threshold.js';
 /** Errors raised by intake and effect handlers. */
 export { BackpressureError, ConflictError, OutboxFullError, PermanentError } from './errors.js';
 /** Public configuration and runner contracts. */
-export type { AdmissionOptions, Attend, AttendConfig, DeadLetterHandler, DecisionCursorPage, DecisionFilter, DecisionReadOptions, JudgeContext, RunOptions } from './shell/types.js';
+export type { AdmissionOptions, Attend, AttendConfig, DeadLetterHandler, DecisionCursorPage, DecisionFilter, DecisionReadOptions, EventInput, JudgeContext, RunOptions } from './shell/types.js';
 
 /** Creates a scope-owning shell over a log and snapshot store. */
 export function createAttend(config: AttendConfig): Attend {
@@ -39,13 +40,20 @@ export function createAttendInternal(config: AttendConfig, snapshot: 'ratio' | '
     if (config.settle?.maxWindowBytes === undefined) policy.maxWindowBytes = bytes;
   }
   const clock = config.clock ?? systemClock();
-  const modes = { decisions: config.sink === 'log' ? 'log' : 'lane', deadLetters: config.deadLetter === 'log' ? 'log' : 'lane' } as const;
+  const store = config.store ?? memoryStore();
+  const kindOf = kindFunction(config.kind);
+  const sink: Sink | 'log' = typeof config.sink === 'function' ? functionSink(config.sink) : config.sink;
+  const deadLetter = config.deadLetter ?? 'log';
+  const fill = { id: () => globalThis.crypto.randomUUID(), at: () => clock.now() };
+  const modes = { decisions: sink === 'log' ? 'log' : 'lane', deadLetters: deadLetter === 'log' ? 'log' : 'lane' } as const;
   const sources = new Set<AbortController>();
   const attached = new Set<string>();
   const sizedEvents = new WeakMap<Event, number>();
   const calls = new Map<Promise<void>, number>();
   const releases = new Set<Promise<void>>();
   let running: { signal: AbortSignal } | null = null;
+  let stopper: AbortController | null = null;
+  let finished: Promise<void> | null = null;
   let judges = 0;
   const scheduler = createScheduler({ clock, onDue(scope) {
     const due = scopes.due(scope);
@@ -53,7 +61,7 @@ export function createAttendInternal(config: AttendConfig, snapshot: 'ratio' | '
     if (due > clock.now()) scheduler.arm(scope, due);
     else tick(scope);
   } });
-  const scopes = createScopes({ store: config.store, clock, config: { policy, ...modes, traces: config.observe !== undefined },
+  const scopes = createScopes({ store, clock, config: { policy, ...modes, traces: config.observe !== undefined },
     admission: config.admission, idleMs: config.cache?.idleMs ?? 300000, snapshot, scheduler,
     eventBytes: (event) => sizedEvents.get(event), running: () => running !== null, execute, observe });
   const submit = scopes.submit;
@@ -63,13 +71,14 @@ export function createAttendInternal(config: AttendConfig, snapshot: 'ratio' | '
     catch {}
   }
 
-  function classify(events: Event[]): EventsInput['events'] {
-    if (!Array.isArray(events)) throw new TypeError('attend: events must be an array');
+  function classify(input: EventInput | readonly EventInput[]): EventsInput['events'] {
+    if (typeof input !== 'object' || input === null) throw new TypeError('attend: events must be an event or an array of events');
+    const events: readonly EventInput[] = Array.isArray(input) ? input : [input as EventInput];
     const length = arrayLength(events.length);
     const classified: EventsInput['events'] = new Array(length);
     for (let i = 0; i < length; i += 1) {
-      const { event, bytes } = copyEventSized(events[i]!);
-      const kind = config.kind(event);
+      const { event, bytes } = copyEventSized(events[i]! as Event, fill);
+      const kind = kindOf(event);
       if (!KINDS.includes(kind)) throw new TypeError('attend: invalid event kind');
       const entry = { ...event, kind };
       sizedEvents.set(entry, bytes);
@@ -198,12 +207,12 @@ export function createAttendInternal(config: AttendConfig, snapshot: 'ratio' | '
     const cancel = clock.at(phase.leaseUntil, () => controller.abort(new Error('attend: delivery timed out')));
     let result: Input;
     try {
-      if (item.kind === 'decision' && config.sink !== 'log') {
+      if (item.kind === 'decision' && sink !== 'log') {
         const decision = copyDecision(item.decision);
-        await config.sink.deliver(decision instanceof Promise ? await decision : decision, controller.signal);
-      } else if (item.kind === 'deadLetter' && config.deadLetter !== 'log') {
+        await sink.deliver(decision instanceof Promise ? await decision : decision, controller.signal);
+      } else if (item.kind === 'deadLetter' && deadLetter !== 'log') {
         const letter = copyLetter(item.letter);
-        await config.deadLetter(letter instanceof Promise ? await letter : letter, controller.signal);
+        await deadLetter(letter instanceof Promise ? await letter : letter, controller.signal);
       }
       result = { kind: 'delivered', deliveryId: item.id, attempt: phase.attempt };
     } catch (error) {
@@ -218,7 +227,7 @@ export function createAttendInternal(config: AttendConfig, snapshot: 'ratio' | '
     try {
       let after: import('./store/types.js').DueKey | undefined;
       while (running) {
-        const page = await config.store.due(now, limit, after);
+        const page = await store.due(now, limit, after);
         for (const key of page) {
           if (!running) break;
           const due = await scopes.touch(key.scope);
@@ -237,8 +246,8 @@ export function createAttendInternal(config: AttendConfig, snapshot: 'ratio' | '
     },
     flush: (scope) => submit(scope, { kind: 'flush' }, true),
     end: (scope) => submit(scope, { kind: 'end' }, true),
-    inspect: (scope) => readRecord(config.store, scope, modes),
-    decisions: (filter, options) => readDecisions(config.store.log, clock, filter, options),
+    inspect: (scope) => readRecord(store, scope, modes),
+    decisions: (filter, options) => readDecisions(store.log, clock, filter, options),
 
     async attach(scope, source, options) {
       const slot = `${scope}\n${source.key}`;
@@ -272,7 +281,7 @@ export function createAttendInternal(config: AttendConfig, snapshot: 'ratio' | '
             return pending;
           };
           try {
-            const cursor = (await readRecord(config.store, scope, modes))?.cursors[source.key] ?? null;
+            const cursor = (await readRecord(store, scope, modes))?.cursors[source.key] ?? null;
             controller.signal.throwIfAborted();
             await source.subscribe(cursor, emit, signal);
             await pending;
@@ -298,30 +307,58 @@ export function createAttendInternal(config: AttendConfig, snapshot: 'ratio' | '
       }
     },
 
-    async run({ signal, sweepMs = 1000, sweepLimit = 100 }) {
-      if (running) throw new Error('attend: already running');
-      running = { signal };
-      const onAbort = () => { running = null; scheduler.stop(); for (const source of sources) source.abort(); };
-      signal.addEventListener('abort', onAbort, { once: true });
-      try {
-        if (signal.aborted) return;
-        scopes.armAll();
-        await sweep(Number.MAX_SAFE_INTEGER, sweepLimit, true);
-        while (!signal.aborted) {
-          await sweep(clock.now(), sweepLimit, false);
-          scopes.evict();
-          await sleep(clock, sweepMs, signal);
-        }
-      } finally {
-        onAbort();
-        signal.removeEventListener('abort', onAbort);
-        const writes = scopes.pending();
-        await Promise.all([...calls].map(([done, leaseUntil]) => settledOrExpired(done, leaseUntil)));
-        await writes;
-        while (releases.size > 0) await Promise.all(releases);
-      }
+    run(options = {}) {
+      if (running) return Promise.reject(new Error('attend: already running'));
+      const own = new AbortController();
+      stopper = own;
+      const done = runLoop(options.signal ? AbortSignal.any([options.signal, own.signal]) : own.signal, options.sweepMs ?? 1000, options.sweepLimit ?? 100);
+      finished = done.then(() => undefined, () => undefined);
+      return done;
+    },
+
+    async stop() {
+      stopper?.abort();
+      await finished;
     },
   };
+
+  async function runLoop(signal: AbortSignal, sweepMs: number, sweepLimit: number): Promise<void> {
+    running = { signal };
+    const onAbort = () => { running = null; scheduler.stop(); for (const source of sources) source.abort(); };
+    signal.addEventListener('abort', onAbort, { once: true });
+    try {
+      if (signal.aborted) return;
+      scopes.armAll();
+      await sweep(Number.MAX_SAFE_INTEGER, sweepLimit, true);
+      while (!signal.aborted) {
+        await sweep(clock.now(), sweepLimit, false);
+        scopes.evict();
+        await sleep(clock, sweepMs, signal);
+      }
+    } finally {
+      onAbort();
+      signal.removeEventListener('abort', onAbort);
+      const writes = scopes.pending();
+      await Promise.all([...calls].map(([done, leaseUntil]) => settledOrExpired(done, leaseUntil)));
+      await writes;
+      while (releases.size > 0) await Promise.all(releases);
+    }
+  }
+}
+
+function kindFunction(kind: AttendConfig['kind']): (event: Event) => Kind {
+  if (typeof kind === 'function') return kind;
+  if (typeof kind !== 'object' || kind === null || Array.isArray(kind)) throw new TypeError('attend: kind must be a function or a map of event name to kind');
+  const map = new Map<string, Kind>();
+  for (const [name, value] of Object.entries(kind)) {
+    if (!KINDS.includes(value)) throw new RangeError(`attend: the kind for "${name}" must be one of ${KINDS.join(', ')}`);
+    map.set(name, value);
+  }
+  return (event) => map.get(event.name) ?? 'consequence';
+}
+
+function functionSink(deliver: (decision: Decision, signal: AbortSignal) => void | Promise<void>): Sink {
+  return { async deliver(decision, signal) { await deliver(decision, signal); } };
 }
 
 function isJudgment(value: unknown): value is Judgment {

@@ -1,4 +1,4 @@
-import type { Clock, DeadLetter, DeliveredRoute, Effect, Event, Input, JsonObject, Judge, JudgeImage, Kind, Route, ScopeRecord, ScopeState, SettlePolicy, DecisionAppend, LoggedInput, Sink, Source, Trace } from '../core/types.js';
+import type { Clock, DeadLetter, Decision, DeliveredRoute, Effect, Event, Input, JsonObject, Judge, JudgeImage, Kind, Route, ScopeRecord, ScopeState, SettlePolicy, DecisionAppend, LoggedInput, Sink, Source, Trace } from '../core/types.js';
 import type { DecisionKind, DecisionRow, ScopeStore, ScopeWrite, SerializedWrite } from '../store/types.js';
 
 /** A handler for a window that exhausted judge or sink delivery. */
@@ -19,16 +19,26 @@ export interface AdmissionOptions {
   maxLagMs?: number;
 }
 
+/** An event as `push` takes it: `id` defaults to a random UUID, `at` to the clock and `data` to `{}`. Pass your own `id` to drop redeliveries. */
+export interface EventInput {
+  name: string;
+  id?: string;
+  at?: number;
+  data?: JsonObject;
+  text?: string;
+}
+
 /** Store, effects, policy and resource limits for an instance. */
 export interface AttendConfig {
-  store: ScopeStore;
+  /** Default `memoryStore()`. */
+  store?: ScopeStore;
   judge: Judge;
-  /** Pure. Called once per event at push; the event carries the result into the logged input. */
-  kind: (event: Event) => Kind;
-  /** A Sink delivers in-process through the decisions lane. `'log'`: the decision row is the delivery. Required: no silent default. */
-  sink: Sink | 'log';
-  /** A handler gets today's lane, which never gives up. `'log'`: the dead-letter row is final. Required. */
-  deadLetter: DeadLetterHandler | 'log';
+  /** Pure. Called once per event at push; the event carries the result into the logged input. A map gives each listed name its kind and every other name `consequence`. */
+  kind: ((event: Event) => Kind) | Readonly<Record<string, Kind>>;
+  /** A Sink, or one function for every delivered route, delivers in-process through the decisions lane. `'log'`: the decision row is the delivery. Required: no silent default. */
+  sink: Sink | ((decision: Decision, signal: AbortSignal) => void | Promise<void>) | 'log';
+  /** A handler gets today's lane, which never gives up. `'log'` (the default): the dead-letter row in the decision log is final. */
+  deadLetter?: DeadLetterHandler | 'log';
   settle?: Partial<SettlePolicy>;
   /** Share of the judge's budget a window may fill before it settles with reason `size`. Default 0.5. */
   windowShare?: number;
@@ -54,7 +64,8 @@ export interface AttendConfig {
 
 /** Today's RunOptions and abort semantics. The sweep pages the whole due index. */
 export interface RunOptions {
-  signal: AbortSignal;
+  /** Without one, the run lasts until `stop()`. */
+  signal?: AbortSignal;
   sweepMs?: number;
   sweepLimit?: number;
 }
@@ -87,8 +98,8 @@ export interface DecisionCursorPage {
 
 /** Intake, inspection, subscriptions and runner lifecycle. */
 export interface Attend {
-  /** As today. May also reject with BackpressureError. */
-  push(scope: string, events: Event[]): Promise<void>;
+  /** One event or several. May also reject with BackpressureError. */
+  push(scope: string, events: EventInput | readonly EventInput[]): Promise<void>;
   /** Settles the open window at the next tick, reason `closing`, with `wait` still offered. */
   end(scope: string): Promise<void>;
   flush(scope: string): Promise<void>;
@@ -97,7 +108,9 @@ export interface Attend {
   inspect(scope: string): Promise<ScopeRecord | null>;
   /** Reads the store's decision log in-process, with the same cursors MCP subscribers use. */
   decisions(filter: DecisionFilter, options: DecisionReadOptions): AsyncIterable<DecisionCursorPage>;
-  run(options: RunOptions): Promise<void>;
+  run(options?: RunOptions): Promise<void>;
+  /** Stops the run, whether or not it was given a signal, and resolves when it has finished. Resolves at once when nothing is running. */
+  stop(): Promise<void>;
 }
 
 /** An input and its callers, retained until commit or abandonment. */

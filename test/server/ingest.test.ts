@@ -3,7 +3,7 @@ import { once } from 'node:events';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { ndjsonIngest } from '../../src/server/ingest.js';
 import type { HttpRoute, NdjsonIngestOptions } from '../../src/server/types.js';
-import type { Attend } from '../../src/shell/types.js';
+import type { Attend, EventInput } from '../../src/shell/types.js';
 import { BackpressureError, ConflictError, OutboxFullError } from '../../src/errors.js';
 import { createAttend } from '../../src/attend.js';
 import { memoryStore } from '../../src/memory.js';
@@ -16,9 +16,10 @@ const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 const event = (id: string, scope = 'allowed/a') => ({ scope, id, at: 0, name: 'event', data: { value: id } });
 const lines = (values: unknown[]) => values.map((value) => JSON.stringify(value)).join('\n') + '\n';
 const unused = () => { throw new Error('unused Attend member'); };
+const first = (events: EventInput | readonly EventInput[]) => ('length' in events ? events[0] : events);
 const fake = (overrides: Partial<Pick<Attend, 'push' | 'flush' | 'end'>> = {}): Attend => ({
   push: vi.fn(async () => undefined), flush: vi.fn(async () => undefined), end: vi.fn(async () => undefined),
-  attach: unused, inspect: unused, decisions: unused, run: unused, ...overrides,
+  attach: unused, inspect: unused, decisions: unused, run: unused, stop: unused, ...overrides,
 });
 function deferred() {
   let resolve: () => void = () => undefined;
@@ -129,7 +130,7 @@ describe('ndjsonIngest stream', () => {
 
   test('acknowledges the contiguous prefix when a later write finishes first', async () => {
     const gates = [deferred(), deferred(), deferred()];
-    const attend = fake({ push: vi.fn((_scope, events) => gates[Number(events[0]?.id)]!.promise) });
+    const attend = fake({ push: vi.fn((_scope, events) => gates[Number(first(events)?.id)]!.promise) });
     const client = connect(await listen(ndjsonIngest(attend, { stream: true })));
     client.req.end(lines([event('0'), event('1'), event('2')]));
     await expect.poll(() => vi.mocked(attend.push).mock.calls.length).toBe(3);
@@ -187,7 +188,7 @@ describe('ndjsonIngest stream', () => {
     const gate = deferred();
     const attend = fake({ push: vi.fn(async (_scope, events) => {
       await gate.promise;
-      throw new BackpressureError(events[0]?.id === 'a' ? 50 : 200, 20000);
+      throw new BackpressureError(first(events)?.id === 'a' ? 50 : 200, 20000);
     }) });
     const client = connect(await listen(ndjsonIngest(attend, { stream: true })));
     client.req.end(lines([event('a'), event('b')]));
@@ -406,7 +407,7 @@ describe.each([false, true])('ndjsonIngest line fault containment (stream=%s)', 
   test.each(['throw', 'reject'])('contains a push %s and grants its credit', async (failure) => {
     const gate = deferred();
     const attend = fake({ push: vi.fn((_scope, events) => {
-      if (events[0]?.id === 'poison') {
+      if (first(events)?.id === 'poison') {
         if (failure === 'throw') throw new Error('secret detail');
         return Promise.reject(new Error('secret detail'));
       }
@@ -425,7 +426,7 @@ describe.each([false, true])('ndjsonIngest line fault containment (stream=%s)', 
       { line: 1, error: 'internal', scope: 'allowed/a' },
     ] });
     expect(result.body).not.toContain('secret detail');
-    expect(vi.mocked(attend.push).mock.calls.map(([, events]) => events[0]?.id)).toEqual(['before', 'poison', 'after']);
+    expect(vi.mocked(attend.push).mock.calls.map(([, events]) => first(events)?.id)).toEqual(['before', 'poison', 'after']);
   });
 
   test.each(['flush', 'end'] as const)('contains an unexpected %s failure', async (kind) => {
@@ -533,7 +534,7 @@ describe.each([false, true])('ndjsonIngest line fault containment (stream=%s)', 
 describe('ndjsonIngest scope ordering after backpressure', () => {
   test('rejects every remaining request line across interleaved scopes', async () => {
     const attend = fake({ push: vi.fn(async (_scope, events) => {
-      if (events[0]?.id === '2') throw new BackpressureError(200, 20000);
+      if (first(events)?.id === '2') throw new BackpressureError(200, 20000);
     }) });
     const result = await post(attend, lines([
       event('0', 'S'), event('0', 'T'), event('1', 'S'), event('2', 'S'),
@@ -546,7 +547,7 @@ describe('ndjsonIngest scope ordering after backpressure', () => {
       { line: 5, error: 'backpressure', scope: 'S' }, { line: 6, error: 'backpressure', scope: 'T' },
       { line: 7, error: 'backpressure', scope: 'S' },
     ] });
-    expect(vi.mocked(attend.push).mock.calls.map(([scope, events]) => [scope, events[0]?.id])).toEqual([
+    expect(vi.mocked(attend.push).mock.calls.map(([scope, events]) => [scope, first(events)?.id])).toEqual([
       ['S', '0'], ['T', '0'], ['S', '1'], ['S', '2'],
     ]);
   });
@@ -557,7 +558,7 @@ describe('ndjsonIngest scope ordering after backpressure', () => {
     const calls: [string, string | undefined][] = [];
     const times: number[] = [];
     const attend = fake({ push: vi.fn(async (scope, events) => {
-      const id = events[0]?.id;
+      const id = first(events)?.id;
       calls.push([scope, id]);
       times.push(Date.now());
       if (scope === 'S' && id === '2' && !failed) {
@@ -603,7 +604,7 @@ describe('ndjsonIngest scope ordering after backpressure', () => {
     });
     const calls: [string, string | undefined][] = [];
     const attend = fake({ push: (scope, events) => {
-      const id = events[0]?.id;
+      const id = first(events)?.id;
       calls.push([scope, id]);
       if (scope === 'S' && id === '0') return pending;
       if (scope === 'S' && id === '1') queueMicrotask(rejectAdmission);
@@ -623,7 +624,7 @@ describe('ndjsonIngest scope ordering after backpressure', () => {
     let failed = false;
     const calls: string[] = [];
     const attend = fake({
-      push: async (_scope, events) => { calls.push(events[0]?.id ?? ''); },
+      push: async (_scope, events) => { calls.push(first(events)?.id ?? ''); },
       [kind]: async () => {
         calls.push(kind);
         if (!failed) { failed = true; throw new BackpressureError(200, 20000); }
