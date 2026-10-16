@@ -5,7 +5,7 @@
 import { initialRecord, step, type StepConfig } from './step.js';
 import { ConflictError, isPermanent, OutboxFullError } from './errors.js';
 import { sleep, systemClock } from './internal/clock.js';
-import { assertNever, copyEvent, messageOf } from './internal/shared.js';
+import { arrayLength, assertNever, copyEvent, messageOf } from './internal/shared.js';
 import type {
   Clock,
   DeadLetter,
@@ -34,7 +34,7 @@ import type {
   StateStore,
   Trace,
 } from './types.js';
-import { DEFAULT_POLICY, ROUTES } from './types.js';
+import { DEFAULT_POLICY, KINDS, ROUTES } from './types.js';
 
 export { ConflictError, OutboxFullError, PermanentError } from './errors.js';
 
@@ -104,11 +104,11 @@ export interface Attend {
    */
   push(scope: string, events: Event[]): Promise<void>;
   /**
-   * Run a source into a scope from that source's committed cursor until `signal` or the run
-   * aborts. Any error from the source, `OutboxFullError` included, backs off through
-   * `retryBackoffMs` (the last rung repeated) and resubscribes from the committed cursor; a
-   * `PermanentError` rejects. A normal return from `subscribe` resolves. Throws if the same
-   * `Source.key` is already attached to the scope in this process.
+   * Run a source from its committed cursor until the attachment or run aborts cleanly; a
+   * rejected emit aborts its subscription's child signal, rejects queued and later emits,
+   * and backs off through `retryBackoffMs` (last rung repeated) before resubscribing.
+   * A `PermanentError` or duplicate `Source.key` on the scope rejects; a normal return from
+   * an unbroken subscription resolves.
    */
   attach(scope: string, source: Source, options?: { signal?: AbortSignal }): Promise<void>;
   /**
@@ -133,7 +133,7 @@ function conflictBackoffMs(attempt: number): number {
 
 export function createAttend(config: AttendConfig): Attend {
   const policy: SettlePolicy = { ...DEFAULT_POLICY, ...config.settle };
-  const stepConfig: StepConfig = { kind: config.kind, policy };
+  const stepConfig: StepConfig = { policy };
   const clock = config.clock ?? systemClock();
   const lanes = new Map<string, Promise<void>>();
   const timers = new Map<string, { at: number; cancel: () => void }>();
@@ -154,18 +154,30 @@ export function createAttend(config: AttendConfig): Attend {
   }
 
   /** The `events` input at the tail of each lane that has not started: later events from the same source join it. */
-  const ingests = new Map<string, { input: EventsInput; done: Promise<void> }>();
+  const ingests = new Map<string, { input: EventsInput; done: Promise<void>; signal: AbortSignal | undefined }>();
+
+  function classify(events: Event[]): EventsInput['events'] {
+    if (!Array.isArray(events)) throw new TypeError('attend: events must be an array');
+    const length = arrayLength(events.length);
+    const classified: EventsInput['events'] = new Array(length);
+    for (let i = 0; i < length; i += 1) {
+      const event: Event & { kind?: Kind } = copyEvent(events[i] as Event);
+      const kind = config.kind(event);
+      if (!KINDS.includes(kind)) throw new TypeError('attend: invalid event kind');
+      event.kind = kind;
+      classified[i] = event as Event & { kind: Kind };
+    }
+    return classified;
+  }
 
   /**
-   * Per-scope inputs are serialized in this process, so one process never races itself.
-   * Events that queue behind a write in flight merge into one step and one write, and every
-   * caller's promise is that write's. Any other input closes the merge, so the lane stays in
-   * arrival order. An `events` input is owned here: `push` and a source's `emit` copy what the
-   * caller passed, so a merge may grow its list and the record may keep its events.
+   * Per-scope inputs run in arrival order; queued pushes or emits from one subscription
+   * share one write and its promise, including its rejection. A queued input from
+   * an aborted subscription rejects before running and never merges with a later subscription.
    */
-  function apply(scope: string, input: Input): Promise<void> {
+  function apply(scope: string, input: Input, signal?: AbortSignal): Promise<void> {
     const open = ingests.get(scope);
-    if (open && input.kind === 'events' && input.source === open.input.source) {
+    if (open && input.kind === 'events' && input.source === open.input.source && signal === open.signal) {
       merge(open.input, input);
       return open.done;
     }
@@ -173,9 +185,10 @@ export function createAttend(config: AttendConfig): Attend {
     const previous = lanes.get(scope) ?? Promise.resolve();
     const next = previous.then(() => {
       if (ingests.get(scope)?.input === input) ingests.delete(scope);
+      signal?.throwIfAborted();
       return applyNow(scope, input);
     });
-    if (input.kind === 'events') ingests.set(scope, { input, done: next });
+    if (input.kind === 'events') ingests.set(scope, { input, done: next, signal });
     const settled = next.catch(() => undefined).finally(() => {
       if (lanes.get(scope) === settled) lanes.delete(scope);
     });
@@ -370,7 +383,13 @@ export function createAttend(config: AttendConfig): Attend {
   }
 
   return {
-    push: (scope, events) => apply(scope, { kind: 'events', events: events.map(copyEvent) }),
+    push(scope, events) {
+      try {
+        return apply(scope, { kind: 'events', events: classify(events) });
+      } catch (error) {
+        return Promise.reject(error);
+      }
+    },
     flush: (scope) => apply(scope, { kind: 'flush' }),
     async inspect(scope) {
       const record = await config.store.get(scope);
@@ -387,23 +406,45 @@ export function createAttend(config: AttendConfig): Attend {
       if (options?.signal?.aborted) abort();
       sources.add(controller);
       let failures = 0;
-      const emit = async (batch: SourceBatch) => {
-        await apply(scope, { kind: 'events', source: source.key, ...batch, events: batch.events.map(copyEvent) });
-        failures = 0;
-      };
       try {
         while (!controller.signal.aborted) {
+          const subscription = new AbortController();
+          const signal = AbortSignal.any([controller.signal, subscription.signal]);
+          let pending: Promise<void> | undefined;
+          const write = async (batch: SourceBatch) => {
+            try {
+              signal.throwIfAborted();
+              await apply(scope, { kind: 'events', ...batch, source: source.key, events: classify(batch.events) }, signal);
+              if (!signal.aborted) failures = 0;
+            } catch (error) {
+              subscription.abort(error);
+              throw error;
+            }
+          };
+          const emit = (batch: SourceBatch) => {
+            pending = write(batch);
+            // The subscription recovers from a failed write itself, so a source that drops this promise must not crash the process.
+            pending.catch(() => undefined);
+            return pending;
+          };
           try {
             const cursor = (await config.store.get(scope))?.cursors[source.key] ?? null;
-            await source.subscribe(cursor, emit, controller.signal);
+            controller.signal.throwIfAborted();
+            await source.subscribe(cursor, emit, signal);
+            await pending;
+            signal.throwIfAborted();
             return;
           } catch (error) {
             if (controller.signal.aborted) return;
-            if (isPermanent(error)) throw error;
+            const failure = subscription.signal.aborted ? subscription.signal.reason : error;
+            subscription.abort(failure);
+            if (isPermanent(failure)) throw failure;
             failures += 1;
             const delay = policy.retryBackoffMs[Math.min(failures, policy.retryBackoffMs.length) - 1] ?? policy.deliveryTimeoutMs;
-            observe({ kind: 'retrying', scope, stage: 'source', id: source.key, attempt: failures, at: clock.now() + delay, message: messageOf(error) });
+            observe({ kind: 'retrying', scope, stage: 'source', id: source.key, attempt: failures, at: clock.now() + delay, message: messageOf(failure) });
             await sleep(clock, delay, controller.signal);
+          } finally {
+            subscription.abort();
           }
         }
       } finally {
