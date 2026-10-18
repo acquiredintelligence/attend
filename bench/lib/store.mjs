@@ -109,17 +109,30 @@ export async function openStore(build, spec = { store: 'memory' }) {
       if (!url) throw new Error('ATTEND_POSTGRES_URL is required');
       if (spec.synchronousCommit && !['on', 'off', 'local', 'remote_write', 'remote_apply'].includes(spec.synchronousCommit)) throw new Error('invalid synchronous_commit');
       const pool = new pg.Pool({ connectionString: url, max: 4, options: spec.synchronousCommit ? `-c synchronous_commit=${spec.synchronousCommit}` : undefined });
+      // The decision log hears NOTIFY on a client of its own, as attend serve does.
+      const listening = new pg.Client({ connectionString: url });
+      listening.on('error', () => {});
       cleanup = async () => {
+        await listening.end();
         try {
           const { rows } = await pool.query('SELECT tablename FROM pg_tables WHERE schemaname = current_schema()');
           for (const { tablename } of rows) if (tablename.startsWith(prefix)) await pool.query(`DROP TABLE "${tablename}" CASCADE`);
         } finally { await pool.end(); }
       };
+      await listening.connect();
+      const listener = {
+        async listen(channel, onNotify) {
+          const notified = (message) => { if (message.channel === channel) onNotify(); };
+          listening.on('notification', notified);
+          await listening.query(`LISTEN "${channel}"`);
+          return async () => { listening.off('notification', notified); await listening.query(`UNLISTEN "${channel}"`); };
+        },
+      };
       const module = await build.module('postgres');
       await module.migrate(pool, { prefix });
       const { rows } = await pool.query('SHOW synchronous_commit');
       durability = { store: 'postgres', synchronousCommit: rows[0].synchronous_commit };
-      adapter = module.postgresStore(build.port === 'state' ? countingPostgres(pool, counter) : pool, { prefix });
+      adapter = module.postgresStore(build.port === 'state' ? countingPostgres(pool, counter) : pool, { prefix, listener });
     } else if (spec.store === 'redis') {
       const { createClient } = await import('redis');
       const url = spec.url ?? process.env.ATTEND_REDIS_URL;

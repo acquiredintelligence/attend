@@ -32,14 +32,25 @@ export const store = sqliteStore(new DatabaseSync('attend.db'));
 
 ```ts
 import pg from 'pg';
-import { migrate, postgresStore } from '@acquiredintelligence/attend/postgres';
+import { migrate, postgresStore, type PostgresListener } from '@acquiredintelligence/attend/postgres';
 
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 await migrate(pool);
-export const store = postgresStore(pool);
+const listening = new pg.Client({ connectionString: process.env.DATABASE_URL });
+await listening.connect();
+const listener: PostgresListener = {
+  async listen(channel, onNotify) {
+    const notified = (message: pg.Notification) => { if (message.channel === channel) onNotify(); };
+    listening.on('notification', notified);
+    await listening.query(`LISTEN "${channel}"`);
+    return async () => { listening.off('notification', notified); await listening.query(`UNLISTEN "${channel}"`); };
+  },
+};
+export const store = postgresStore(pool, { listener });
 ```
 
 - Takes any client with `query(text, values)`, such as a `pg` `Pool` or `Client`.
+- `listener` runs `LISTEN` on a client of its own, since a pool hands its connection back between queries, and wakes the decision log on each `NOTIFY`. Pass it in a process that serves decisions or reads `attend.decisions`. Without it, subscribers hear each decision on the next 100 ms poll. `attend serve --store postgres:<url>` opens that client itself. `store.close()` stops listening; end the client after it.
 - Run `migrate()` once at deploy or startup, with a role that can create tables. It is idempotent and safe to run from several processes at once. The store itself runs no DDL and needs only `SELECT`, `INSERT`, `UPDATE` and `DELETE`.
 - `prefix` (default `attend_`) must be lowercase letters, digits and underscores. To use another schema, set the connection's `search_path`.
 - Safe for many replicas. Each runner sweeps for due scopes, and the version check lets one replica win each write. One statement commits a group of scopes together.

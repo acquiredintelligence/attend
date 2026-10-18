@@ -3,12 +3,15 @@ import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import pg from 'pg';
 import { createClient } from 'redis';
 import { afterAll, afterEach, beforeAll, expect, test } from 'vitest';
 import { createAttend } from '../src/attend.js';
 import { memoryStore } from '../src/memory.js';
+import { postgresStore, type PostgresListener } from '../src/postgres.js';
 import { redisStore } from '../src/redis.js';
 import { cli, serve } from '../src/server/serve.js';
+import type { DecisionLog } from '../src/store/types.js';
 
 const root = join(import.meta.dirname, '..');
 const dist = join(root, 'node_modules/.cache/attend-smoke');
@@ -139,13 +142,43 @@ async function redisDatabase(db: number) {
   return { url: url.href, clear, log };
 }
 
+/**
+ * The CLI writes under the default `attend_` prefix, so its Postgres test gets a schema of its own, named in the URL's `options`.
+ * `log` reads the same decision log through a store that listens on a client of its own, so its `wait` resolves when a decision lands.
+ */
+async function postgresSchema() {
+  const url = new URL(process.env.ATTEND_POSTGRES_URL ?? 'postgres://postgres:attend@127.0.0.1:15432/attend');
+  const schema = `attend_serve_${randomUUID().replaceAll('-', '').slice(0, 12)}`;
+  url.searchParams.set('options', `-c search_path=${schema}`);
+  const pool = new pg.Pool({ connectionString: url.href, max: 2, connectionTimeoutMillis: 5000 });
+  await pool.query(`CREATE SCHEMA ${schema}`);
+  const listening = new pg.Client({ connectionString: url.href, connectionTimeoutMillis: 5000 });
+  await listening.connect();
+  let dropped: Promise<void> | undefined;
+  const drop = () => dropped ??= (async () => {
+    await listening.end();
+    try { await pool.query(`DROP SCHEMA ${schema} CASCADE`); } finally { await pool.end(); }
+  })();
+  stoppers.push(drop);
+  const listener: PostgresListener = {
+    async listen(channel, onNotify) {
+      const notified = (message: pg.Notification) => { if (message.channel === channel) onNotify(); };
+      listening.on('notification', notified);
+      await listening.query(`LISTEN "${channel}"`);
+      return async () => { listening.off('notification', notified); await listening.query(`UNLISTEN "${channel}"`); };
+    },
+  };
+  return { url: url.href, drop, log: postgresStore(pool, { listener }).log };
+}
+
 const percentile = (values: number[], p: number) => [...values].sort((a, b) => a - b)[Math.ceil(values.length * p / 100) - 1]!;
 const summary = (values: number[]) => `p50 ${percentile(values, 50).toFixed(1)} p90 ${percentile(values, 90).toFixed(1)} max ${Math.max(...values).toFixed(1)} ms`;
 
-test('on redis, a decision wakes a waiting events/stream subscriber and events/poll caller at once, not on the next poll', async () => {
-  const redis = await redisDatabase(15);
-  const { child, url, exited } = start(['--store', `redis:${redis.url}`, '--kinds', '{"user.said":"flush"}']);
-  const base = await url;
+/**
+ * Parks an events/stream subscriber and an events/poll caller on the CLI at `base`, then ingests a flush at a random phase 40 times.
+ * `log` is a reference reader of the same decision log whose wait wakes when the decision commits. Prints and returns p90 from commit to each arrival.
+ */
+async function wakeLatency(store: string, base: string, log: DecisionLog) {
   const feed = await listen(base);
   const scope = `wake/${randomUUID()}`;
   const streamed: number[] = [];
@@ -153,8 +186,8 @@ test('on redis, a decision wakes a waiting events/stream subscriber and events/p
   const ingestToStream: number[] = [];
   for (let i = 0; i < 40; i += 1) {
     const seen = feed.decisions().length;
-    const { last } = await redis.log.bounds();
-    const landed = redis.log.wait(last, 10_000, AbortSignal.timeout(10_000)).then(() => performance.now());
+    const { last } = await log.bounds();
+    const landed = log.wait(last, 10_000, AbortSignal.timeout(10_000)).then(() => performance.now());
     const waiting = poll(base, feed.frames.findLast((frame) => frame.params?.cursor)!.params!.cursor!, 10_000);
     // Both subscribers are parked before the event goes in, at a random phase of any poll loop on the server.
     await pause(30 + Math.random() * 250);
@@ -168,15 +201,35 @@ test('on redis, a decision wakes a waiting events/stream subscriber and events/p
     polled.push(answer.at - committed);
     ingestToStream.push(feed.arrivals[seen]! - replied);
   }
-  console.log(`redis, ${streamed.length} samples. decision committed to events/stream: ${summary(streamed)}; to events/poll: ${summary(polled)}. ingest reply to events/stream: ${summary(ingestToStream)}`);
+  console.log(`${store}, ${streamed.length} samples. decision committed to events/stream: ${summary(streamed)}; to events/poll: ${summary(polled)}. ingest reply to events/stream: ${summary(ingestToStream)}`);
+  return { streamed: percentile(streamed, 90), polled: percentile(polled, 90) };
+}
+
+test('on redis, a decision wakes a waiting events/stream subscriber and events/poll caller at once, not on the next poll', async () => {
+  const redis = await redisDatabase(15);
+  const { child, url, exited } = start(['--store', `redis:${redis.url}`, '--kinds', '{"user.said":"flush"}']);
+  const p90 = await wakeLatency('redis', await url, redis.log);
   // Measured on an idle host: p90 2 to 5 ms with a blocking connection, 210 to 226 ms on the 250 ms poll.
   // The poll puts 80% of samples above 50 ms, so 36 of 40 below it does not happen by luck.
-  expect(percentile(streamed, 90)).toBeLessThan(50);
-  expect(percentile(polled, 90)).toBeLessThan(50);
+  expect(p90.streamed).toBeLessThan(50);
+  expect(p90.polled).toBeLessThan(50);
   child.kill('SIGTERM');
   expect(await exited).toBe(0);
   await redis.clear();
 }, 60_000);
+
+test('on postgres, a decision wakes a waiting events/stream subscriber and events/poll caller at once, not on the next poll', async () => {
+  const postgres = await postgresSchema();
+  const { child, url, exited } = start(['--store', `postgres:${postgres.url}`, '--kinds', '{"user.said":"flush"}']);
+  const p90 = await wakeLatency('postgres', await url, postgres.log);
+  // Measured on a shared host: p90 6 to 26 ms with a LISTEN client, 96 to 158 ms on the 100 ms poll.
+  // The poll puts half the samples above 50 ms, so 36 of 40 below it does not happen by luck.
+  expect(p90.streamed).toBeLessThan(50);
+  expect(p90.polled).toBeLessThan(50);
+  child.kill('SIGTERM');
+  expect(await exited).toBe(0);
+  await postgres.drop();
+}, 120_000);
 
 test('serve() answers once ready, is guarded by its principal, and closes with a stream open', async () => {
   const store = memoryStore();

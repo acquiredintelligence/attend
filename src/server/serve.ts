@@ -152,11 +152,23 @@ async function storeFor(spec: string, env: NodeJS.ProcessEnv, cleanup: (() => Pr
     const url = spec === 'postgres' ? env.DATABASE_URL : spec.startsWith('postgres://') || spec.startsWith('postgresql://') ? spec : spec.slice('postgres:'.length);
     if (!url) throw new UsageError('--store postgres needs a URL: postgres:<url> or DATABASE_URL');
     const pg = await import('pg').catch(() => { throw missing('pg'); });
-    const pool = new (pg.default ?? pg).Pool({ connectionString: url });
+    const { Client, Pool } = pg.default ?? pg;
+    const pool = new Pool({ connectionString: url });
     cleanup.push(() => pool.end());
     const { migrate, postgresStore } = await import('../postgres.js');
     await migrate(pool);
-    return postgresStore(pool);
+    // LISTEN belongs to its session, so the decision log hears NOTIFY on a client of its own. Without it, subscribers hear a decision on the next 100 ms poll.
+    const listening = new Client({ connectionString: url });
+    await listening.connect();
+    cleanup.push(() => listening.end());
+    return postgresStore(pool, { listener: {
+      async listen(channel, onNotify) {
+        const notified = (message: { channel: string }) => { if (message.channel === channel) onNotify(); };
+        listening.on('notification', notified);
+        await listening.query(`LISTEN "${channel}"`);
+        return async () => { listening.off('notification', notified); await listening.query(`UNLISTEN "${channel}"`); };
+      },
+    } });
   }
   if (spec === 'redis' || spec.startsWith('redis:') || spec.startsWith('rediss:')) {
     const url = spec === 'redis' ? env.REDIS_URL : spec.startsWith('redis://') || spec.startsWith('rediss://') ? spec : spec.slice('redis:'.length);

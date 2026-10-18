@@ -7,7 +7,10 @@ export interface PostgresClient {
   query(text: string, values?: unknown[]): Promise<{ rows: unknown[]; rowCount: number | null }>;
 }
 
-/** A dedicated connection for LISTEN, so subscribers in other processes wake on new decisions. */
+/**
+ * Runs LISTEN on a dedicated connection, not a pooled one, and calls `onNotify` for each notification on `channel`.
+ * Resolves once listening, with a function that stops.
+ */
 export interface PostgresListener {
   listen(channel: string, onNotify: () => void): Promise<() => Promise<void>>;
 }
@@ -15,6 +18,7 @@ export interface PostgresListener {
 export interface PostgresStoreOptions {
   prefix?: string;
   retain?: Retention;
+  /** Wakes `log.wait` on each new decision, in this process and others. Without it, `log.wait` polls every 100 ms, so a subscriber hears each new decision up to 100 ms late. */
   listener?: PostgresListener;
   /** Opt-in `SET LOCAL synchronous_commit = off` per group: can lose the last commits, never corrupts. */
   asyncCommit?: boolean;
