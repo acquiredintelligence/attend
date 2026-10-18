@@ -165,7 +165,11 @@ async function storeFor(spec: string, env: NodeJS.ProcessEnv, cleanup: (() => Pr
     const client = redis.createClient({ url });
     await client.connect();
     cleanup.push(async () => { client.destroy(); });
-    return (await import('../redis.js')).redisStore((args) => client.sendCommand(args));
+    // XREAD BLOCK holds its connection, so the decision log waits on one of its own. Without it, subscribers hear a decision on the next 250 ms poll.
+    const blocking = client.duplicate();
+    await blocking.connect();
+    cleanup.push(async () => { blocking.destroy(); });
+    return (await import('../redis.js')).redisStore((args) => client.sendCommand(args), { blockingSend: (args) => blocking.sendCommand(args) });
   }
   throw new UsageError(`--store must be memory, sqlite:<file>, postgres:<url> or redis:<url>, not "${spec}"`);
 }

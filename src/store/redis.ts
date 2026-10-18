@@ -10,7 +10,7 @@ export interface RedisStoreOptions {
   /** Must contain a hash tag on Redis Cluster, so every key one script touches is in one slot. Default 'attend:'. */
   prefix?: string;
   retain?: Retention;
-  /** A dedicated connection for XREAD BLOCK on the decision stream. */
+  /** A dedicated connection for XREAD BLOCK on the decision stream. Without it, `log.wait` polls every 250 ms, so a subscriber hears each new decision up to 250 ms late. */
   blockingSend?: RedisSend;
 }
 

@@ -58,3 +58,5 @@ const feed = decisionFeed(client, { cursor: null, signal: stop.signal })[Symbol.
 ```
 
 `serve(attend, store, options)` is the same thing as a library call: it runs `attend.run`, the events server over `store.log` and the ingest routes on one HTTP listener. Give it `principal` to authorize by scope prefix, and close it with `await server.close()`.
+
+Subscribers wait on the store's decision log. `attend serve --store redis:<url>` opens a second connection for that wait. When you build a Redis store for `serve()` yourself, give it one too, with `redisStore(send, { blockingSend })` as in [Choose a store](storage.md). Without it, subscribers hear each decision on the next 250 ms poll.
