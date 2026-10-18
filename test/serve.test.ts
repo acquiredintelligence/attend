@@ -1,10 +1,13 @@
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createClient } from 'redis';
 import { afterAll, afterEach, beforeAll, expect, test } from 'vitest';
 import { createAttend } from '../src/attend.js';
 import { memoryStore } from '../src/memory.js';
+import { redisStore } from '../src/redis.js';
 import { cli, serve } from '../src/server/serve.js';
 
 const root = join(import.meta.dirname, '..');
@@ -21,9 +24,10 @@ beforeAll(() => {
 
 interface Frame { method?: string; params?: { eventId?: string; type?: string; data?: { route: string; scope: string; eventIds: string[]; notice: string }; cursor?: string } }
 
-/** Opens events/stream and collects its SSE frames; `ended` settles when the server closes it. */
+/** Opens events/stream and collects its SSE frames, and when each decision frame arrived; `ended` settles when the server closes it. */
 async function listen(base: string, headers: Record<string, string> = {}, cursor?: string) {
   const frames: Frame[] = [];
+  const arrivals: number[] = [];
   const controller = new AbortController();
   stoppers.push(async () => controller.abort());
   const response = await fetch(`${base}/mcp`, { method: 'POST', headers: { ...stream, ...headers }, signal: controller.signal, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'events/stream', params: { name: 'attention.decision', ...(cursor === undefined ? {} : { cursor }) } }) });
@@ -38,13 +42,23 @@ async function listen(base: string, headers: Record<string, string> = {}, cursor
       for (let split = buffer.indexOf('\n\n'); split >= 0; split = buffer.indexOf('\n\n')) {
         const frame = buffer.slice(0, split);
         buffer = buffer.slice(split + 2);
-        if (frame.startsWith('data: ')) frames.push(JSON.parse(frame.slice(6)));
+        if (!frame.startsWith('data: ')) continue;
+        const parsed: Frame = JSON.parse(frame.slice(6));
+        frames.push(parsed);
+        if (parsed.params?.data?.route !== undefined) arrivals.push(performance.now());
       }
     }
   })();
   const until = async (check: () => boolean) => { for (let i = 0; i < 400 && !check(); i += 1) await pause(25); expect(check()).toBe(true); };
   await until(() => frames.some((frame) => frame.method === 'notifications/events/active'));
-  return { frames, ended, until, decisions: () => frames.filter((frame) => frame.params?.data?.route !== undefined) };
+  return { frames, arrivals, ended, until, decisions: () => frames.filter((frame) => frame.params?.data?.route !== undefined) };
+}
+
+/** One events/poll that waits up to `waitMs` past `cursor`; `at` is when its reply arrived. */
+async function poll(base: string, cursor: string, waitMs: number) {
+  const response = await fetch(`${base}/mcp`, { method: 'POST', headers: { ...stream, 'mcp-method': 'events/poll' }, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'events/poll', params: { name: 'attention.decision', cursor, waitMs, _meta: { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': { extensions: { 'io.modelcontextprotocol/events': {} } } } } }) });
+  const body = await response.json() as { result?: { events: unknown[] } };
+  return { at: performance.now(), events: body.result?.events };
 }
 
 async function ingest(base: string, rows: object[], headers: Record<string, string> = {}) {
@@ -105,6 +119,63 @@ test('sqlite keeps the decision log across restarts', async () => {
   const replay = await listen(two, {}, `v1.${epoch}.`);
   await replay.until(() => replay.decisions().length === 1);
   expect(replay.decisions()[0]!.params!.data).toMatchObject({ route: 'interrupt', scope: 'app/1', eventIds: ['e1', 'e2'] });
+}, 60_000);
+
+/**
+ * The CLI writes under the default `attend:` prefix, so its Redis test gets a database of its own, cleared of that prefix.
+ * `log` reads the same decision log through a store that blocks on a connection of its own, so its `wait` resolves when a decision lands.
+ */
+async function redisDatabase(db: number) {
+  const url = new URL(process.env.ATTEND_REDIS_URL ?? 'redis://127.0.0.1:16379');
+  url.pathname = `/${db}`;
+  const client = createClient({ url: url.href, socket: { reconnectStrategy: false, connectTimeout: 5000 } });
+  await client.connect();
+  const blocking = client.duplicate();
+  await blocking.connect();
+  stoppers.push(async () => { blocking.destroy(); client.destroy(); });
+  const clear = async () => { for await (const keys of client.scanIterator({ MATCH: 'attend:*', COUNT: 1000 })) if (keys.length > 0) await client.unlink(keys); };
+  await clear();
+  const { log } = redisStore((args) => client.sendCommand(args), { blockingSend: (args) => blocking.sendCommand(args) });
+  return { url: url.href, clear, log };
+}
+
+const percentile = (values: number[], p: number) => [...values].sort((a, b) => a - b)[Math.ceil(values.length * p / 100) - 1]!;
+const summary = (values: number[]) => `p50 ${percentile(values, 50).toFixed(1)} p90 ${percentile(values, 90).toFixed(1)} max ${Math.max(...values).toFixed(1)} ms`;
+
+test('on redis, a decision wakes a waiting events/stream subscriber and events/poll caller at once, not on the next poll', async () => {
+  const redis = await redisDatabase(15);
+  const { child, url, exited } = start(['--store', `redis:${redis.url}`, '--kinds', '{"user.said":"flush"}']);
+  const base = await url;
+  const feed = await listen(base);
+  const scope = `wake/${randomUUID()}`;
+  const streamed: number[] = [];
+  const polled: number[] = [];
+  const ingestToStream: number[] = [];
+  for (let i = 0; i < 40; i += 1) {
+    const seen = feed.decisions().length;
+    const { last } = await redis.log.bounds();
+    const landed = redis.log.wait(last, 10_000, AbortSignal.timeout(10_000)).then(() => performance.now());
+    const waiting = poll(base, feed.frames.findLast((frame) => frame.params?.cursor)!.params!.cursor!, 10_000);
+    // Both subscribers are parked before the event goes in, at a random phase of any poll loop on the server.
+    await pause(30 + Math.random() * 250);
+    expect((await ingest(base, [{ scope, id: `e${i}`, at: Date.now(), name: 'user.said', data: {}, text: 'now' }])).status).toBe(200);
+    const replied = performance.now();
+    const answer = await waiting;
+    expect(answer.events).toHaveLength(1);
+    await feed.until(() => feed.decisions().length > seen);
+    const committed = await landed;
+    streamed.push(feed.arrivals[seen]! - committed);
+    polled.push(answer.at - committed);
+    ingestToStream.push(feed.arrivals[seen]! - replied);
+  }
+  console.log(`redis, ${streamed.length} samples. decision committed to events/stream: ${summary(streamed)}; to events/poll: ${summary(polled)}. ingest reply to events/stream: ${summary(ingestToStream)}`);
+  // Measured on an idle host: p90 2 to 5 ms with a blocking connection, 210 to 226 ms on the 250 ms poll.
+  // The poll puts 80% of samples above 50 ms, so 36 of 40 below it does not happen by luck.
+  expect(percentile(streamed, 90)).toBeLessThan(50);
+  expect(percentile(polled, 90)).toBeLessThan(50);
+  child.kill('SIGTERM');
+  expect(await exited).toBe(0);
+  await redis.clear();
 }, 60_000);
 
 test('serve() answers once ready, is guarded by its principal, and closes with a stream open', async () => {

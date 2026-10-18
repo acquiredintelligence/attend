@@ -52,10 +52,13 @@ import { redisStore } from '@acquiredintelligence/attend/redis';
 
 const client = createClient({ url: process.env.REDIS_URL ?? 'redis://localhost:6379' });
 await client.connect();
-export const store = redisStore((args) => client.sendCommand(args));
+const blocking = client.duplicate();
+await blocking.connect();
+export const store = redisStore((args) => client.sendCommand(args), { blockingSend: (args) => blocking.sendCommand(args) });
 ```
 
 - Takes a function that sends one command. With ioredis, pass `([command, ...args]) => client.call(command, ...args)`.
+- `blockingSend` sends on a second connection, where the decision log waits with `XREAD BLOCK`. Pass it in a process that serves decisions or reads `attend.decisions`. Without it, subscribers hear each decision on the next 250 ms poll. `attend serve --store redis:<url>` opens that connection itself.
 - Needs Redis 6.2 or later. One script validates every version in a group, then changes the scopes, the due index and the decision stream together.
 - Durable only as far as the server's persistence settings (AOF or RDB).
 - On Redis Cluster, every key a group touches and the shared due key must hash to one slot. Use a prefix with a hash tag: `redisStore(send, { prefix: 'attend:{app}:' })`. That puts every scope on one shard.
