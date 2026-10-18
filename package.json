@@ -86,6 +86,7 @@
     "bench:selfcheck": "pnpm build && vitest run -c bench/vitest.config.mjs",
     "bench:openloop": "node bench/openloop.mjs",
     "bench:latency": "node bench/latency.mjs",
+    "bench:serve": "node bench/serve.mjs",
     "bench:stores": "node bench/stores.mjs",
     "bench:alloc": "node bench/alloc.mjs",
     "bench:suite": "node bench/suite.mjs",

@@ -128,8 +128,12 @@ export async function openStore(build, spec = { store: 'memory' }) {
       client.on('error', () => {});
       await client.connect();
       const send = (args) => client.sendCommand(args);
+      // The decision log waits with XREAD BLOCK on a connection of its own, as attend serve does.
+      const blocking = client.duplicate();
+      blocking.on('error', () => {});
       const keyPrefix = prefix.replaceAll('_', ':');
       cleanup = async () => {
+        if (blocking.isOpen) blocking.destroy();
         try {
           let cursor = '0';
           do {
@@ -139,12 +143,13 @@ export async function openStore(build, spec = { store: 'memory' }) {
           } while (cursor !== '0');
         } finally { await client.quit(); }
       };
+      await blocking.connect();
       const config = async (key) => {
         const reply = await send(['CONFIG', 'GET', key]);
         return String(reply instanceof Map ? reply.get(key) : Array.isArray(reply) ? reply[1] : reply[key]);
       };
       durability = { store: 'redis', appendonly: await config('appendonly') === 'yes', appendfsync: await config('appendfsync') };
-      adapter = (await build.module('redis')).redisStore(build.port === 'state' ? countingRedis(send, counter) : send, { prefix: keyPrefix });
+      adapter = (await build.module('redis')).redisStore(build.port === 'state' ? countingRedis(send, counter) : send, { prefix: keyPrefix, blockingSend: (args) => blocking.sendCommand(args) });
     } else throw new Error(`unknown store: ${spec.store}`);
     const store = spec.store === 'memory' ? adapter : build.port === 'scope' ? countingScopePort(adapter, counter) : countingStatePort(adapter, counter);
     let closed = false;

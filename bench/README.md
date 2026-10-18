@@ -7,6 +7,7 @@ Every number must be read with its `runner` block and `adapterVersion`. Shared-m
 | `pnpm bench:selfcheck` | Protocol, accounting, schema and gate correctness |
 | `pnpm bench:openloop --dist dist` | Intended-time ingest latency, throughput, CPU, scheduler lag and a separate no-op floor |
 | `pnpm bench:latency --dist dist --samples 200` | Flush-to-judge and judge-to-sink segments, idle or with `--load 50000` |
+| `pnpm bench:serve --dist dist --store redis --samples 200` | `attend serve` over HTTP: `POST /v1/ingest` to its reply, a decision's commit to a waiting `events/stream` subscriber, and ingest to subscriber end to end |
 | `pnpm bench:stores --dist dist --store sqlite` | Group commits, commit latency, bytes and CPU per event |
 | `pnpm bench:alloc --dist dist --crosscheck` | Isolated reducer and end-to-end allocation cells, checked against heap sampling |
 | `pnpm bench:suite --dist dist --out-dir bench/reports` | All measurements; `--quick` shortens runs |
@@ -14,7 +15,7 @@ Every number must be read with its `runner` block and `adapterVersion`. Shared-m
 | `pnpm bench:gates bench/reports/*.jsonl` | The five SLO gates |
 | `pnpm test:oracle` | Frozen reducer and engine behavior |
 
-Reports are JSONL, validated against [lib/schema.mjs](lib/schema.mjs). Use `--out file.jsonl` to append them. No-op runs use the same intended schedule as the engine. Histograms count latency from intended send time, including missed credit and generator stalls. Stream ack frames carry rejected line indexes. A rejected line stays out of both the intended-time and engine latency histograms and counts in `rejected`. A line still unacknowledged when the drain timer fires is charged from its intended time to that moment and counts in `failed`. `--mix tape --tapes file.json` accepts `{ "tapes": [{ "name": "sample", "events": [{ "t": 0, "kind": "continuous" }] }] }`; supply tapes locally.
+Reports are JSONL, validated against [lib/schema.mjs](lib/schema.mjs). Use `--out file.jsonl` to append them. `serve.mjs` runs the build's `serve()`, the function `attend serve` runs, with its client in the same process, and times a decision's commit when the store's `commit` resolves. Its end-to-end figure also covers the judge and the decision's own commit. No-op runs use the same intended schedule as the engine. Histograms count latency from intended send time, including missed credit and generator stalls. Stream ack frames carry rejected line indexes. A rejected line stays out of both the intended-time and engine latency histograms and counts in `rejected`. A line still unacknowledged when the drain timer fires is charged from its intended time to that moment and counts in `failed`. `--mix tape --tapes file.json` accepts `{ "tapes": [{ "name": "sample", "events": [{ "t": 0, "kind": "continuous" }] }] }`; supply tapes locally.
 
 Measurement starts when the target parses the first line after warm-up, so the generator never pauses at the boundary. Durable bytes are the lengths of the strings each write binds: every string parameter of a write statement or command on the state port (the record JSON and its keys, never a Redis script body), and the serialized inputs, snapshot and decision rows on the scope port. Bench events are ASCII, so the lengths are bytes. Durable CPU is the attend process's own; database server CPU is not included.
 

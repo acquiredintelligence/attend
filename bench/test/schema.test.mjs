@@ -5,10 +5,15 @@ import { join } from 'node:path';
 import { validateReport } from '../lib/schema.mjs';
 import { openLoopReport } from '../lib/openloop.mjs';
 import { createHistogram } from '../lib/histogram.mjs';
-import { openReport, allocReport, durableReport, latencyReport, cli } from './helpers.mjs';
+import { openReport, allocReport, durableReport, latencyReport, serveReport, cli } from './helpers.mjs';
 
 test('Schemas accept one complete fixture per report', () => {
-  for (const fixture of [openReport(), allocReport(), durableReport(), latencyReport()]) expect(validateReport(fixture)).toEqual({ ok: true, report: fixture });
+  for (const fixture of [openReport(), allocReport(), durableReport(), latencyReport(), serveReport()]) expect(validateReport(fixture)).toEqual({ ok: true, report: fixture });
+});
+test('Serve reports order p90 between p50 and p99', () => {
+  const result = validateReport(serveReport({ commitToSubscriberUs: { p50: 10, p90: 30, p99: 20, max: 40 } }));
+  expect(result.ok).toBe(false);
+  expect(result.errors.join('\n')).toContain('commitToSubscriberUs.p99');
 });
 test('Open-loop reports separate unacknowledged lines, rejections and floor evidence', () => {
   const histogram = createHistogram();
