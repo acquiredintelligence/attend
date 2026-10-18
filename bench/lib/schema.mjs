@@ -1,9 +1,9 @@
 import { z } from 'zod';
 
 const number = z.number().finite().nonnegative();
-export const Percentiles = z.strictObject({ p50: number, p99: number, p999: number.optional(), max: number.optional() }).superRefine((value, ctx) => {
+export const Percentiles = z.strictObject({ p50: number, p90: number.optional(), p99: number, p999: number.optional(), max: number.optional() }).superRefine((value, ctx) => {
   let previous = value.p50;
-  for (const key of ['p99', 'p999', 'max']) {
+  for (const key of ['p90', 'p99', 'p999', 'max']) {
     if (value[key] === undefined) continue;
     if (value[key] < previous) ctx.addIssue({ code: 'custom', path: [key], message: 'must be at least the preceding percentile' });
     previous = value[key];
@@ -40,7 +40,11 @@ export const LatencyReport = z.strictObject({
   samples: number, errors: number, flushToJudgeUs: Percentiles, judgeToSinkUs: Percentiles, nonJudgeUs: Percentiles,
   flushToSinkUs: Percentiles, commitToSubscriberUs: Percentiles.nullable(), commitLatencyMs: Percentiles.nullable(), ...common,
 });
-const reports = { durable: DurableReport, openloop: OpenLoopReport, alloc: AllocationReport, latency: LatencyReport };
+export const ServeReport = z.strictObject({
+  report: z.literal('serve'), durability: DurabilityMode, samples: number, errors: number,
+  ingestUs: Percentiles, commitToSubscriberUs: Percentiles, endToEndUs: Percentiles, ...common,
+});
+const reports = { durable: DurableReport, openloop: OpenLoopReport, alloc: AllocationReport, latency: LatencyReport, serve: ServeReport };
 export function validateReport(value) {
   const schema = reports[value?.report];
   if (!schema) return { ok: false, errors: ['report: unknown report type'] };

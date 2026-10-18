@@ -33,6 +33,11 @@ export const durableReport = (changes = {}) => ({
   scopes: 200, eventsPerScope: 700, maxWindow: 50, eventsPerSecond: 2000, eventsPerCommit: 2, commitsPerSecond: 1000,
   commitLatencyMs: percentiles(), bytesWrittenPerEvent: 300, eventBytes: 100, cpuMicrosPerEvent: 1, ...common(), ...changes,
 });
+export const serveReport = (changes = {}) => ({
+  report: 'serve', durability: { store: 'memory' }, samples: 200, errors: 0,
+  ingestUs: { p50: 10, p90: 15, p99: 20, max: 40 }, commitToSubscriberUs: { p50: 10, p90: 15, p99: 20, max: 40 }, endToEndUs: { p50: 10, p90: 15, p99: 20, max: 40 },
+  ...common(), ...changes,
+});
 export const latencyReport = (changes = {}) => ({
   report: 'latency', durability: { store: 'memory' }, load: null, samples: 200, errors: 0,
   flushToJudgeUs: percentiles(), judgeToSinkUs: percentiles(), nonJudgeUs: percentiles(), flushToSinkUs: percentiles(),

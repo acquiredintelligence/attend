@@ -115,6 +115,14 @@ test('Latency CLI records exactly twenty memory probes', async (context) => {
   expect(report).toMatchObject({ report: 'latency', samples: 20, errors: 0, commitToSubscriberUs: null, commitLatencyMs: null });
   expect(report.flushToSinkUs.p50).toBeGreaterThanOrEqual(report.nonJudgeUs.p50);
 });
+test('Serve CLI times twenty memory samples on the attend serve routes', async () => {
+  const result = await cli('serve', ['--dist', dist, '--store', 'memory', '--samples', '20', '--gap-ms', '5']);
+  expect(result.code, result.stderr).toBe(0);
+  const report = JSON.parse(result.stdout);
+  expect(validateReport(report)).toEqual({ ok: true, report });
+  expect(report).toMatchObject({ report: 'serve', durability: { store: 'memory' }, samples: 20, errors: 0 });
+  expect(report.endToEndUs.p50).toBeGreaterThan(report.commitToSubscriberUs.p50);
+});
 test('Openloop CLI records a memory run beside its own noop floor', async (context) => {
   needSocket(context);
   const result = await cli('openloop', ['--dist', dist, '--mix', 'continuous', '--rates', '2000', '--scopes', '50', '--seconds', '2', '--warmup', '0.5']);
