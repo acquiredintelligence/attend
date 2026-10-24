@@ -97,7 +97,7 @@ function drivePlan(name: string, plan: { scope: string; policy: SettlePolicy; ki
           const id = pool.length > 0 ? pool[event.id % pool.length]! : (ID_POOL[event.id] ?? '');
           batch.push(id);
           const eventName = EVENT_NAMES[event.name] ?? 'context';
-          return { id, at: now, name: eventName, kind: plan.kinds[eventName] ?? 'context', data: { n: event.id, nested: [true, null] }, ...(event.text ? { text: `event ${id} ${'é🌍'.repeat(event.id % 3)}` } : {}) };
+          return { id, at: now, name: eventName, kind: plan.kinds[eventName] ?? 'context', data: { n: event.id, nested: [true, null], '10': 'ten', '9': { b: 1, a: [{ '2': 2, '1': 1 }] } }, ...(event.text ? { text: `event ${id} ${'é🌍'.repeat(event.id % 3)}` } : {}) };
         });
         input = { kind: 'events', events, ...(choice.source === null ? {} : { source: choice.source }), ...(choice.cursor === undefined ? {} : { cursor: choice.cursor }), ...(choice.truncated ? { truncated: true } : {}) };
         break;

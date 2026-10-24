@@ -123,7 +123,8 @@ def _write(value: Any, out: list[str], stable: bool) -> bool:
         out.append("null" if isinstance(value, float) and not math.isfinite(value) else number(value))
     elif isinstance(value, Mapping):
         mapping: Mapping[str, Any] = value  # pyright: ignore[reportUnknownVariableType]
-        keys = sorted(mapping, key=_utf16_key) if stable else _key_order(mapping)
+        # stableJson sorts the entries and rebuilds the object, which hoists array indices again.
+        keys = _key_order(dict.fromkeys(sorted(mapping, key=_utf16_key))) if stable else _key_order(mapping)
         out.append("{")
         first = True
         for key in keys:

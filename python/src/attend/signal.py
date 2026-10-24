@@ -86,21 +86,28 @@ class AbortSignal:
             await asyncio.wait({task, aborted}, return_when=asyncio.FIRST_COMPLETED)
         finally:
             aborted.cancel()
-        if task.done():
+            # Also when the awaiting task is cancelled, so the work never outlives its caller.
+            if not task.done():
+                task.cancel()
+        if task.done() and not task.cancelled():
             return task.result()
-        task.cancel()
         raise self._reason if self._reason is not None else AbortError()
 
     @staticmethod
     def any(signals: list[AbortSignal]) -> AbortSignal:
-        """A signal that aborts when the first of ``signals`` does, with its reason."""
+        """A signal that aborts when the first of ``signals`` does, with its reason, then stops listening to the rest."""
         controller = AbortController()
         for signal in signals:
             if signal.aborted:
                 controller.abort(signal.reason)
                 return controller.signal
-        for signal in signals:
-            signal.add_listener(lambda signal=signal: controller.abort(signal.reason))
+        removers = [signal.add_listener(lambda signal=signal: controller.abort(signal.reason)) for signal in signals]
+
+        def detach() -> None:
+            for remove in removers:
+                remove()
+
+        controller.signal.add_listener(detach)
         return controller.signal
 
     @staticmethod

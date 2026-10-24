@@ -13,7 +13,7 @@ import random
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
-from .._json import stable_json, stringify, utf8_length
+from .._json import stable_json, stringify, utf8_length, utf16_length
 from ..clock import Clock
 from ..core.reducer import REDUCER_VERSION, apply, next_due
 from ..core.state import initial_state, quiescent, to_record
@@ -89,6 +89,30 @@ class ScopeSlot:
 
 def _input_kind(input: Input) -> str:
     return input["kind"]
+
+
+def _ceil_second(at: float) -> float:
+    """``Math.ceil(at / 1000) * 1000``, which keeps Infinity and NaN as they are."""
+    return math.ceil(at / 1000) * 1000 if math.isfinite(at) else at
+
+
+def _follow(done: asyncio.Future[None]) -> asyncio.Future[None]:
+    """A future of the caller's own that settles with ``done``, so cancelling it never cancels the shared input."""
+    mine: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+    mine.add_done_callback(_consume)
+
+    def settle(source: asyncio.Future[None]) -> None:
+        if mine.done():
+            return
+        if source.cancelled():
+            mine.cancel()
+        elif (error := source.exception()) is not None:
+            mine.set_exception(error)
+        else:
+            mine.set_result(None)
+
+    done.add_done_callback(settle)
+    return mine
 
 
 class Scopes:
@@ -186,8 +210,9 @@ class Scopes:
                 self._queued -= raw.count
                 self._reject(raw, error)
         finally:
+            # Also on cancellation, so inputs queued behind the load are applied or loaded again.
             slot.loading = None
-        self._pump(slot)
+            self._pump(slot)
 
     def _bytes(self, value: object) -> int:
         return utf8_length(stringify(value)) if self._store.durable else record_bytes(value)
@@ -198,7 +223,7 @@ class Scopes:
         input = logged["input"]
         if input["kind"] != "events":
             return 64
-        return 64 + sum(estimate_rendered_bytes(event) + len(event["id"]) for event in input["events"])
+        return 64 + sum(estimate_rendered_bytes(event) + utf16_length(event["id"]) for event in input["events"])
 
     def _request_flush(self) -> None:
         if self._committing or self._scheduled or not self._staged:
@@ -323,9 +348,9 @@ class Scopes:
                 merged["truncated"] = True
             last.count += 1
             self._queued += 1
-            return last.done
+            return _follow(last.done)
         if last is not None and input["kind"] == "tick" and last.input["kind"] == "tick":
-            return last.done
+            return _follow(last.done)
         done: asyncio.Future[None] = loop.create_future()
         done.add_done_callback(_consume)
         raw = RawInput(input, signal, reject_hook, done)
@@ -334,7 +359,7 @@ class Scopes:
         slot.queued.append(raw)
         self._queued += 1
         self._pump(slot)
-        return done
+        return _follow(done)
 
     def _prepare(self, slot: ScopeSlot) -> StagedWrite:
         current = slot.staged
@@ -349,7 +374,7 @@ class Scopes:
                 current.snapshot_bytes = utf8_length(current.serialized["snapshot"])
             else:
                 current.snapshot_bytes = record_bytes(record)
-        due = None if state.due_at is None else math.ceil(state.due_at / 1000) * 1000
+        due = None if state.due_at is None else _ceil_second(state.due_at)
         if not slot.has_stored_due or due != slot.stored_due:
             write["due"] = due
         else:
@@ -385,9 +410,13 @@ class Scopes:
             slot.loading = backoff
 
             async def resume() -> None:
-                await backoff
-                slot.loading = None
-                self._pump(slot)
+                try:
+                    await asyncio.shield(backoff)
+                finally:
+                    # Also on cancellation, so the scope never stays behind a backoff nobody will finish.
+                    if slot.loading is backoff:
+                        slot.loading = None
+                    self._pump(slot)
 
             return resume()
         else:
@@ -433,7 +462,16 @@ class Scopes:
         group: list[tuple[ScopeSlot, StagedWrite]] = []
         size = 0
         for slot in list(self._staged):
-            current = self._prepare(slot)
+            try:
+                current = self._prepare(slot)
+            except Exception as error:
+                # A write that cannot be prepared fails alone, as a failed commit would, and never holds the queue.
+                failed = slot.staged
+                assert failed is not None
+                slot.staged = None
+                del self._staged[slot]
+                self._outcome(slot, failed, error, True)
+                continue
             estimate = current.bytes + current.snapshot_bytes
             if group and (len(group) >= 512 or size + estimate > 4 * 1024 * 1024):
                 break
@@ -443,6 +481,10 @@ class Scopes:
             size += estimate
             group.append((slot, current))
         group.sort(key=lambda pair: pair[0].scope.encode("utf-16-be", "surrogatepass"))
+        if not group:
+            self._committing = False
+            self._request_flush()
+            return
 
         async def commit() -> None:
             try:
@@ -456,7 +498,8 @@ class Scopes:
     async def touch(self, scope: str) -> float | None:
         slot = self._slot_for(scope)
         if slot.state is None:
-            await self._load(slot)
+            # Shielded: the load is the slot's own, and cancelling the sweep that waits on it must not cancel it.
+            await asyncio.shield(self._load(slot))
         self._arm(slot)
         return slot.state.due_at if slot.state is not None else None
 

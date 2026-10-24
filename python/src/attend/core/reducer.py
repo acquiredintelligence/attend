@@ -545,7 +545,9 @@ def _dead_letter_delay(policy: SettlePolicy, failures: int) -> float:
     cap = policy["deadLetterBackoffMaxMs"]
     index = min(failures, len(rungs)) - 1
     base = rungs[index] if 0 <= index < len(rungs) else cap
-    return _min(cap, base * 2 ** max(0, failures - len(rungs)))
+    # JavaScript's 2 ** n is Infinity from n = 1024; a Python int that large will not convert to a float.
+    exponent = max(0, failures - len(rungs))
+    return _min(cap, base * (2**exponent if exponent < 1024 else math.inf))
 
 
 def _fail_delivery(ctx: _Ctx, state: ScopeState, lane: OutboxLane, message: str, permanent: bool) -> None:

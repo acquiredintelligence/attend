@@ -50,6 +50,11 @@ def _sequence(position: str) -> int:
     return int(position)
 
 
+def _bucket(due: float) -> float:
+    """``Math.floor(due / 1000)``: the second a due value falls in, with Infinity kept as it is."""
+    return math.floor(due / 1000) if math.isfinite(due) else due
+
+
 def _now_ms() -> float:
     return time.time_ns() // 1_000_000
 
@@ -61,8 +66,8 @@ class MemoryStore(ScopeStore):
 
     def __init__(self, *, max_rows: int | None = None, max_age_ms: float | None = None) -> None:
         self._scopes: dict[str, _Stored] = {}
-        self._buckets: dict[int, set[str]] = {}
-        self._keys: list[int] = []
+        self._buckets: dict[float, set[str]] = {}
+        self._keys: list[float] = []
         self._max_rows = max_rows
         self._max_age_ms = max_age_ms
         self._log = _MemoryLog(self)
@@ -71,7 +76,7 @@ class MemoryStore(ScopeStore):
     def _remove_due(self, scope: str, due: float | None) -> None:
         if due is None:
             return
-        key = math.floor(due / 1000)
+        key = _bucket(due)
         bucket = self._buckets[key]
         bucket.discard(scope)
         if not bucket:
@@ -112,7 +117,7 @@ class MemoryStore(ScopeStore):
                 self._remove_due(scope, stored.due)
                 stored.due = due
                 if due is not None:
-                    key = math.floor(due / 1000)
+                    key = _bucket(due)
                     bucket = self._buckets.get(key)
                     if bucket is None:
                         bucket = set[str]()
@@ -131,8 +136,8 @@ class MemoryStore(ScopeStore):
         result: list[DueKey] = []
         if limit <= 0:
             return result
-        end = math.floor(now / 1000)
-        start = bisect.bisect_left(self._keys, math.floor(after["due"] / 1000)) if after is not None else 0
+        end = _bucket(now)
+        start = bisect.bisect_left(self._keys, _bucket(after["due"])) if after is not None else 0
         for i in range(start, len(self._keys)):
             key = self._keys[i]
             if key > end:

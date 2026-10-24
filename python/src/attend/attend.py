@@ -7,7 +7,7 @@ import contextlib
 import inspect
 import math
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Mapping, Sequence
 from typing import Any, Literal, Protocol, TypedDict, cast, runtime_checkable
 
 from ._json import clone
@@ -547,21 +547,26 @@ class Attend:
 
     # ─── runner ──────────────────────────────────────────────────────────────
 
-    async def run(self, *, signal: AbortSignal | None = None, sweep_ms: float = 1000, sweep_limit: int = 100) -> None:
+    def run(self, *, signal: AbortSignal | None = None, sweep_ms: float = 1000, sweep_limit: int = 100) -> Coroutine[Any, Any, None]:
         """Settles, judges and delivers until ``signal`` aborts or ``stop()`` is called, then waits for work in flight.
 
-        Cancelling the task that runs it stops it the same way.
+        The run starts when called, as in TypeScript: ``stop()`` straight after
+        ``asyncio.create_task(attend.run())`` stops it. Await the returned coroutine, or run it as a
+        task; cancelling that task stops the run the same way.
         """
-        if self._running is not None:
+        if self._running is not None or (self._finished is not None and not self._finished.done()):
             raise RuntimeError("attend: already running")
         own = AbortController()
         self._stopper = own
         combined = AbortSignal.any([signal, own.signal]) if signal is not None else own.signal
-        loop = asyncio.get_running_loop()
-        finished: asyncio.Future[None] = loop.create_future()
+        finished: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         self._finished = finished
+        self._running = combined
+        return self._run(combined, own, finished, sweep_ms, sweep_limit)
+
+    async def _run(self, signal: AbortSignal, own: AbortController, finished: asyncio.Future[None], sweep_ms: float, sweep_limit: int) -> None:
         try:
-            await self._run_loop(combined, sweep_ms, sweep_limit)
+            await self._run_loop(signal, sweep_ms, sweep_limit)
         except asyncio.CancelledError:
             own.abort()
             await self._shutdown()
