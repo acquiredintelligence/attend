@@ -83,6 +83,7 @@
     "demo": "pnpm build && node --experimental-strip-types examples/demo.ts",
     "check:docs": "node scripts/check-snippets.mjs",
     "test:oracle": "vitest run -c vitest.oracle.config.ts",
+    "conformance:update": "ATTEND_CONFORMANCE_UPDATE=1 vitest run test/conformance-fixtures.test.ts",
     "bench:selfcheck": "pnpm build && vitest run -c bench/vitest.config.mjs",
     "bench:openloop": "node bench/openloop.mjs",
     "bench:latency": "node bench/latency.mjs",
