@@ -87,4 +87,3 @@ async def test_a_dead_instance_never_writes_again() -> None:
         await old.push("scope", [_event("a")])
     assert await h.inspect() is None
     await h.stop()
-
