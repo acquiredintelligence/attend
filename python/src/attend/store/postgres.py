@@ -40,7 +40,7 @@ from .types import (
 )
 
 _PREFIX = re.compile(r"[a-z_][a-z0-9_]*")
-_POSITION = re.compile(r"(\d{1,20})\.(\d{1,10})")
+_POSITION = re.compile(r"([0-9]{1,20})\.([0-9]{1,10})")
 
 
 class PostgresClient(Protocol):
@@ -368,12 +368,16 @@ class _PostgresLog(DecisionLog):
                 rows = await s.client.fetch(f"SELECT value FROM {s.prefix}meta WHERE key = 'epoch'")
                 return str(rows[0]["value"])
 
-            s.epoch_future = asyncio.ensure_future(read())
-        try:
-            return await s.epoch_future
-        except Exception:
-            s.epoch_future = None
-            raise
+            pending = asyncio.ensure_future(read())
+
+            def forget(task: asyncio.Future[str]) -> None:
+                if (task.cancelled() or task.exception() is not None) and s.epoch_future is task:
+                    s.epoch_future = None
+
+            pending.add_done_callback(forget)
+            s.epoch_future = pending
+        # Shielded: the read is shared, so one caller's cancellation must not cancel it for the others.
+        return await asyncio.shield(s.epoch_future)
 
     async def bounds(self) -> LogBounds:
         s = self._s

@@ -12,8 +12,22 @@ from typing import Any, cast
 
 from ._json import clone, stringify
 from .core.types import Decision, DecisionAppend, DeliveredRoute, Entry, LoggedInput, ScopeRecord, SettlePolicy, Window
-from .signal import AbortController
-from .store.types import DecisionLog, DecisionPage, DecisionQuery, DecisionRow, ScopeStore, ScopeWrite, Snapshot
+from .signal import AbortController, AbortSignal
+from .store.types import (
+    CommitOutcome,
+    DecisionKind,
+    DecisionLog,
+    DecisionPage,
+    DecisionQuery,
+    DecisionRow,
+    DueKey,
+    LogBounds,
+    Retention,
+    ScopeStore,
+    ScopeWrite,
+    Snapshot,
+    StoredScope,
+)
 from .testing import Case, assert_equal, assert_ok
 
 POLICY: SettlePolicy = {
@@ -135,6 +149,63 @@ class _Watched:
             assert_equal(value, copy, f"returned value {i} unchanged by later calls")
 
 
+class _WatchedLog(DecisionLog):
+    def __init__(self, inner: DecisionLog, watched: _Watched) -> None:
+        self._inner = inner
+        self._watched = watched
+
+    async def epoch(self) -> str:
+        return await self._inner.epoch()
+
+    async def bounds(self) -> LogBounds:
+        return self._watched.keep(await self._inner.bounds())
+
+    async def read(self, query: DecisionQuery) -> DecisionPage:
+        return self._watched.keep(await self._inner.read(query))
+
+    async def find(self, kind: DecisionKind, id: str) -> DecisionRow | None:
+        return self._watched.keep(await self._inner.find(kind, id))
+
+    async def wait(self, after: str | None, block_ms: float, signal: AbortSignal) -> None:
+        await self._inner.wait(after, block_ms, signal)
+
+    async def trim(self, retention: Retention) -> None:
+        await self._inner.trim(retention)
+
+    def compare(self, a: str, b: str) -> int:
+        return self._inner.compare(a, b)
+
+
+class _WatchedStore(ScopeStore):
+    """The store under test, keeping every value its reads return and every write it is given, as ``watched`` does in TypeScript.
+
+    After a case closes the store, none of them may have changed, so every read shape a case uses
+    also checks aliasing.
+    """
+
+    def __init__(self, inner: ScopeStore, watched: _Watched) -> None:
+        self.durable = inner.durable
+        self._inner = inner
+        self._watched = watched
+        self.log = _WatchedLog(inner.log, watched)
+
+    async def load(self, scope: str) -> StoredScope | None:
+        return self._watched.keep(await self._inner.load(scope))
+
+    async def commit(self, writes: Sequence[ScopeWrite]) -> list[CommitOutcome]:
+        self._watched.keep(writes)
+        return self._watched.keep(await self._inner.commit(writes))
+
+    async def due(self, now: float, limit: int, after: DueKey | None = None) -> list[DueKey]:
+        return self._watched.keep(await self._inner.due(now, limit, after))
+
+    async def remove(self, scope: str) -> None:
+        await self._inner.remove(scope)
+
+    async def close(self) -> None:
+        await self._inner.close()
+
+
 async def _fresh(make: Make) -> ScopeStore:
     made = make()
     return await made if isinstance(made, Awaitable) else made
@@ -143,8 +214,8 @@ async def _fresh(make: Make) -> ScopeStore:
 def _cases(make: Make, cases: Sequence[tuple[str, Callable[[ScopeStore, _Watched], Awaitable[None]]]]) -> list[Case]:
     def case(name: str, run: Callable[[ScopeStore, _Watched], Awaitable[None]]) -> Case:
         async def go() -> None:
-            store = await _fresh(make)
             watched = _Watched()
+            store = _WatchedStore(await _fresh(make), watched)
             try:
                 await run(store, watched)
             finally:
@@ -567,16 +638,22 @@ def decision_log_conformance(make: Make, *, concurrent: Callable[[], Awaitable[t
         together = concurrent
 
         async def shared_epoch() -> None:
-            a, b = await together()
+            watched = _Watched()
+            first, second = await together()
+            a, b = _WatchedStore(first, watched), _WatchedStore(second, watched)
             try:
                 assert_ok(a.durable and b.durable, "both durable")
                 value = await a.log.epoch()
                 assert_equal(await b.log.epoch(), value, "shared epoch")
             finally:
                 await asyncio.gather(a.close(), b.close())
+            await asyncio.sleep(0)
+            watched.check()
 
         async def never_skips() -> None:
-            a, b = await together()
+            watched = _Watched()
+            first, second = await together()
+            a, b = _WatchedStore(first, watched), _WatchedStore(second, watched)
             try:
                 commits = asyncio.gather(
                     *(
@@ -611,6 +688,8 @@ def decision_log_conformance(make: Make, *, concurrent: Callable[[], Awaitable[t
                     assert_equal(outcome, ["ok"], "concurrent write committed")
             finally:
                 await asyncio.gather(a.close(), b.close())
+            await asyncio.sleep(0)
+            watched.check()
 
         result.append(Case("two stores on one database share a durable epoch", shared_epoch))
         result.append(Case("a reader never skips a row while two writers commit concurrently", never_skips))

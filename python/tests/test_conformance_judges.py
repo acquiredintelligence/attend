@@ -136,3 +136,33 @@ async def test_judge_exchange(case: dict[str, Any]) -> None:
             json.loads(got["body"])
         else:
             assert got == want
+
+
+@pytest.mark.parametrize("which", ["jev", "decisions"])
+async def test_an_abort_cancels_the_request_and_raises_the_signal_reason(which: str) -> None:
+    import asyncio
+
+    started = asyncio.Event()
+    cancelled: list[bool] = []
+
+    async def hang(request: httpx.Request) -> httpx.Response:
+        started.set()
+        try:
+            await asyncio.get_running_loop().create_future()
+        except asyncio.CancelledError:
+            cancelled.append(True)
+            raise
+        raise AssertionError("unreachable")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(hang))
+    judge: Any = jev_judge(api_key="k", client=client) if which == "jev" else decisions_judge(api_key="k", model="m", client=client)
+    controller = AbortController()
+    call = asyncio.ensure_future(judge(CASES[0]["input"], controller.signal))
+    await started.wait()
+    reason = Exception("attend: judge timed out")
+    controller.abort(reason)
+    with pytest.raises(Exception, match="attend: judge timed out") as raised:
+        await call
+    assert raised.value is reason
+    assert cancelled == [True]
+    await client.aclose()

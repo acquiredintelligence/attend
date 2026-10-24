@@ -37,6 +37,8 @@ if (mode === 'write') {
   await attend.push(scope, [{ id: 'c', name: 'look', text: 'look c' }]);
   await clock.advance(4000);
   await attend.push(scope, [{ id: 'd', name: 'out', text: 'out d' }]);
+} else if (mode === 'pending') {
+  await attend.push(scope, [{ id: 'p', name: 'close', text: 'close p' }]);
 }
 controller.abort();
 await running;

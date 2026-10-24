@@ -3,6 +3,7 @@ the provider's error body parsed defensively, and the request id and ``Retry-Aft
 
 from __future__ import annotations
 
+import datetime
 import email.utils
 import json
 import re
@@ -94,7 +95,7 @@ def _header(headers: httpx.Headers | dict[str, str], name: str) -> str | None:
 
 def is_image_rejection(error: BaseException) -> bool:
     status = getattr(error, "status", None)
-    return isinstance(status, int) and status in IMAGE_REJECTIONS
+    return isinstance(status, int) and not isinstance(status, bool) and status in IMAGE_REJECTIONS
 
 
 def is_context_length_rejection(error: BaseException) -> bool:
@@ -139,7 +140,7 @@ def parse_error_body(text: str) -> tuple[str, str | None]:
                 continue
             entry = cast(dict[str, Any], item)
             loc = entry.get("loc")
-            where = ".".join(_js_string(part) for part in cast(list[Any], loc)) + ": " if isinstance(loc, list) else ""
+            where = ".".join("" if part is None else _js_string(part) for part in cast(list[Any], loc)) + ": " if isinstance(loc, list) else ""
             msg = entry.get("msg")
             from .._json import stringify
 
@@ -176,19 +177,34 @@ def _slice(text: str) -> str:
 def retry_after_ms(headers: httpx.Headers | dict[str, str], now: float | None = None) -> float | None:
     """``retry-after-ms`` first, then ``Retry-After`` as seconds or an HTTP date; None when absent or unreadable."""
     ms = _header(headers, "retry-after-ms")
-    if ms is not None and re.fullmatch(r"\d+", ms.strip()):
+    if ms is not None and re.fullmatch(r"[0-9]+", ms.strip()):
         return int(ms.strip())
     after = _header(headers, "retry-after")
     if after is None:
         return None
-    if re.fullmatch(r"\d+", after.strip()):
+    if re.fullmatch(r"[0-9]+", after.strip()):
         return int(after.strip()) * 1000
-    try:
-        at = email.utils.parsedate_to_datetime(after).timestamp() * 1000
-    except Exception:
+    at = _http_date(after.strip())
+    if at is None:
         return None
     current = time.time() * 1000 if now is None else now
     return max(0, int(at - current))
+
+
+def _http_date(text: str) -> float | None:
+    """ms since the epoch for an HTTP date or, as ``Date.parse`` also takes, an ISO 8601 one; None when unreadable."""
+    try:
+        return email.utils.parsedate_to_datetime(text).timestamp() * 1000
+    except (TypeError, ValueError, IndexError):
+        pass
+    try:
+        parsed = datetime.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    # Date.parse reads a date alone as UTC and a date and time without an offset as local time, as datetime does.
+    if parsed.tzinfo is None and len(text) == 10:
+        parsed = parsed.replace(tzinfo=datetime.UTC)
+    return parsed.timestamp() * 1000
 
 
 def too_long(error: BaseException, why: str) -> ProviderError:

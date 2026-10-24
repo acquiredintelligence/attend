@@ -115,7 +115,7 @@ async def make_postgres(**options: Any) -> _Owned:
 async def postgres_pair() -> tuple[ScopeStore, ScopeStore]:
     """Two Postgres stores over one set of tables, each with its own pool and listener. The first drops the tables."""
     first = await make_postgres()
-    prefix: str = first.inner._p  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
+    prefix: str = first.inner.prefix  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
     second = await make_postgres(prefix=prefix)
     return second, first
 

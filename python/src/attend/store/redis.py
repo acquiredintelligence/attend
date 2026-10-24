@@ -36,7 +36,7 @@ from .types import (
     StoredScope,
 )
 
-_POSITION = re.compile(r"\d{20}-\d{20}")
+_POSITION = re.compile(r"[0-9]{20}-[0-9]{20}")
 
 
 class RedisClient(Protocol):
@@ -51,6 +51,11 @@ def _text(reply: object) -> str:
     if isinstance(reply, (bytes, bytearray)):
         return reply.decode("utf-8")
     raise TypeError(f"attend/redis: expected text, got {type(reply).__name__}")
+
+
+def _no_script(error: BaseException) -> bool:
+    """A NOSCRIPT reply. redis-py strips the code from the message and raises ``NoScriptError``; other clients keep it in the text."""
+    return type(error).__name__ == "NoScriptError" or "NOSCRIPT" in str(error)
 
 
 def _nullable_text(reply: object) -> str | None:
@@ -234,13 +239,15 @@ class RedisStore(ScopeStore):
         return pending
 
     async def run(self, source: str, keys: Sequence[str], args: Sequence[str] = ()) -> Any:
-        sha = await (self._shas.get(source) or self._load_script(source))
+        # Shielded: the load is shared, so one caller's cancellation must not cancel it for the others.
+        sha = await asyncio.shield(self._shas.get(source) or self._load_script(source))
         try:
             return await self._client.execute_command("EVALSHA", sha, str(len(keys)), *keys, *args)
         except Exception as error:
-            if "NOSCRIPT" not in str(error):
+            if not _no_script(error):
                 raise
-            return await self._client.execute_command("EVALSHA", await self._load_script(source), str(len(keys)), *keys, *args)
+            sha = await asyncio.shield(self._load_script(source))
+            return await self._client.execute_command("EVALSHA", sha, str(len(keys)), *keys, *args)
 
     async def load(self, scope: str) -> StoredScope | None:
         reply = await self.run(scripts.LOAD, [self._scope_key(scope), self._inputs_key(scope)])

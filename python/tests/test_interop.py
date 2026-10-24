@@ -61,6 +61,19 @@ async def python(store: Any, mode: str, scope: str) -> dict[str, Any]:
         await attend.push(scope, [{"id": "c", "name": "look", "text": "look c"}])
         await clock.advance(4000)
         await attend.push(scope, [{"id": "d", "name": "out", "text": "out d"}])
+    elif mode == "pickup":
+        # The warm sweep must find the scope the other runtime left due, load it and arm its deadline.
+        for _ in range(500):
+            if attend._scopes.due(scope) is not None:  # pyright: ignore[reportPrivateUsage]
+                break
+            await asyncio.sleep(0.005)
+        await clock.advance(99)
+        assert delivered == []
+        for _ in range(500):
+            await clock.advance(1 if not delivered else 0)
+            if delivered:
+                break
+            await asyncio.sleep(0.005)
     elif mode == "continue":
         await attend.push(scope, [{"id": "e", "name": "say", "text": "say e"}])
         # The store does real I/O, which advancing the fake clock does not wait for.
@@ -103,5 +116,11 @@ async def test_python_and_typescript_share_one_store(kind: str) -> None:
         assert delivered == [window_id("ts", ["c", "d", "e"])]
         assert [row["id"] for row in rows] == [window_id("ts", ["a", "b"]), window_id("ts", ["c", "d", "e"])]
         assert (await typescript(kind, prefix, "read", "ts"))["record"] == continued["record"]
+
+        left = await typescript(kind, prefix, "pending", "due")
+        assert left["record"]["dueAt"] == 10_100 and left["delivered"] == none
+        picked = await python(owned, "pickup", "due")
+        assert picked["delivered"] == [window_id("due", ["p"])]
+        assert picked["record"]["dueAt"] is None
     finally:
         await owned.close()
