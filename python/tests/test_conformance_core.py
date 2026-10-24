@@ -9,12 +9,12 @@ from typing import Any
 
 import pytest
 
-from attend._json import stable_json, utf8_length
-from attend.core.ids import window_id
-from attend.core.reducer import validate
-from attend.core.step import initial_record, step
-from attend.core.threshold import suggest_threshold, threshold_route
-from attend.notice import default_notice
+from aqi_attend._json import stable_json, utf8_length
+from aqi_attend.core.ids import window_id
+from aqi_attend.core.reducer import validate
+from aqi_attend.core.step import initial_record, step
+from aqi_attend.core.threshold import suggest_threshold, threshold_route
+from aqi_attend.notice import default_notice
 
 FIXTURES = Path(__file__).resolve().parents[2] / "conformance" / "fixtures"
 

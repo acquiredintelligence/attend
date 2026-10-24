@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from attend.store import _redis_scripts as scripts
-from attend.store.redis import due_hex, from_due_hex
+from aqi_attend.store import _redis_scripts as scripts
+from aqi_attend.store.redis import due_hex, from_due_hex
 
 from .stores import REDIS_URL
 

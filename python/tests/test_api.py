@@ -9,10 +9,10 @@ from typing import Any
 
 import pytest
 
-from attend import AbortController, Decision, JudgeInput, Judgment, Kind, PermanentError, create_attend, default_notice, memory_store, routes
-from attend.signal import AbortSignal
-from attend.sources import log_source, memory_log
-from attend.testing import fake_clock, recording_sink, scripted_judge
+from aqi_attend import AbortController, Decision, JudgeInput, Judgment, Kind, PermanentError, create_attend, default_notice, memory_store, routes
+from aqi_attend.signal import AbortSignal
+from aqi_attend.sources import log_source, memory_log
+from aqi_attend.testing import fake_clock, recording_sink, scripted_judge
 
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 ID_AB = "f9df8ba2df127ca6"

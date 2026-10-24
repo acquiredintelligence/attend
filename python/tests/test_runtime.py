@@ -9,12 +9,12 @@ from typing import Any
 
 import pytest
 
-from attend import AbortController, AbortSignal, Decision, JudgeInput, Judgment, create_attend
-from attend._json import stable_json
-from attend.core.reducer import _dead_letter_delay  # pyright: ignore[reportPrivateUsage]
-from attend.store.memory import MemoryStore
-from attend.store.types import CommitOutcome, ScopeWrite, StoredScope
-from attend.testing import fake_clock
+from aqi_attend import AbortController, AbortSignal, Decision, JudgeInput, Judgment, create_attend
+from aqi_attend._json import stable_json
+from aqi_attend.core.reducer import _dead_letter_delay  # pyright: ignore[reportPrivateUsage]
+from aqi_attend.store.memory import MemoryStore
+from aqi_attend.store.types import CommitOutcome, ScopeWrite, StoredScope
+from aqi_attend.testing import fake_clock
 
 
 async def judge(input: JudgeInput, signal: AbortSignal) -> Judgment:

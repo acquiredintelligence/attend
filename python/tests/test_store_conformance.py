@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from attend.conformance import decision_log_conformance, scope_store_conformance
-from attend.testing import Case
+from aqi_attend.conformance import decision_log_conformance, scope_store_conformance
+from aqi_attend.testing import Case
 
 from .stores import PAIRS, STORES
 

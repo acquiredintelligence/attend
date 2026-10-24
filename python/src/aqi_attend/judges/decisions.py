@@ -1,4 +1,4 @@
-"""``attend.judges.decisions``: a judge on the OpenAI Decisions API. A port of ``src/decisions.ts``; needs the ``http`` extra.
+"""``aqi_attend.judges.decisions``: a judge on the OpenAI Decisions API. A port of ``src/decisions.ts``; needs the ``http`` extra.
 
 One ``choice`` question named ``route`` picks among the offered routes, with the criteria as the
 choice descriptions, and one ``predicate`` question answers each predicate, named by position so no

@@ -12,8 +12,8 @@ import secrets
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, cast
 
-from attend import memory_store
-from attend.store.types import CommitOutcome, DecisionLog, DueKey, ScopeStore, ScopeWrite, StoredScope
+from aqi_attend import memory_store
+from aqi_attend.store.types import CommitOutcome, DecisionLog, DueKey, ScopeStore, ScopeWrite, StoredScope
 
 REDIS_URL = os.environ.get("ATTEND_REDIS_URL")
 POSTGRES_URL = os.environ.get("ATTEND_POSTGRES_URL")
@@ -60,7 +60,7 @@ def _next(kind: str) -> str:
 async def make_redis(**options: Any) -> _Owned:
     import redis.asyncio as redis
 
-    from attend.store.redis import redis_store
+    from aqi_attend.store.redis import redis_store
 
     assert REDIS_URL is not None
     client: Any = redis.Redis.from_pool(redis.BlockingConnectionPool.from_url(REDIS_URL, max_connections=32, timeout=None))  # pyright: ignore[reportUnknownMemberType]
@@ -88,7 +88,7 @@ async def redis_pair() -> tuple[ScopeStore, ScopeStore]:
 async def make_postgres(**options: Any) -> _Owned:
     import asyncpg  # pyright: ignore[reportMissingTypeStubs]
 
-    from attend.store.postgres import migrate, postgres_store
+    from aqi_attend.store.postgres import migrate, postgres_store
 
     assert POSTGRES_URL is not None
     pool = cast(Any, await asyncpg.create_pool(POSTGRES_URL, min_size=1, max_size=4))  # pyright: ignore[reportUnknownMemberType]

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from attend import window_id
-from attend.testing import CrashError, crash_suite, harness, multi_scope_crash_suite, recording_sink, scripted_judge
+from aqi_attend import window_id
+from aqi_attend.testing import CrashError, crash_suite, harness, multi_scope_crash_suite, recording_sink, scripted_judge
 
 from .stores import STORES
 

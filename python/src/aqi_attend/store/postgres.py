@@ -1,4 +1,4 @@
-"""``attend.store.postgres``: a ScopeStore over PostgreSQL 13 or later, on asyncpg.
+"""``aqi_attend.store.postgres``: a ScopeStore over PostgreSQL 13 or later, on asyncpg.
 
 A port of ``src/store/postgres.ts`` with the same tables, columns, statements and JSON, so a Python
 process and a TypeScript process can share one database. One statement commits a group of scopes'

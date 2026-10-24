@@ -19,8 +19,8 @@ import sys
 import time
 from typing import Any
 
-from attend import AbortController, AbortSignal, Decision, JudgeInput, Judgment, create_attend, memory_store
-from attend.store.types import ScopeStore
+from aqi_attend import AbortController, AbortSignal, Decision, JudgeInput, Judgment, create_attend, memory_store
+from aqi_attend.store.types import ScopeStore
 
 
 def percentiles(samples: list[float]) -> dict[str, float]:
@@ -37,7 +37,7 @@ async def open_store(name: str, redis_url: str) -> tuple[ScopeStore, Any]:
         return memory_store(), None
     import redis.asyncio as redis
 
-    from attend.store.redis import redis_store
+    from aqi_attend.store.redis import redis_store
 
     client: Any = redis.Redis.from_pool(redis.BlockingConnectionPool.from_url(redis_url, max_connections=16, timeout=None))  # pyright: ignore[reportUnknownMemberType]
     prefix = f"attend-bench:{{{secrets.token_hex(4)}}}:"

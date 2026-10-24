@@ -15,9 +15,9 @@ from typing import Any
 
 import pytest
 
-from attend import AbortController, JudgeInput, Judgment, Kind, create_attend, window_id
-from attend.signal import AbortSignal
-from attend.testing import fake_clock
+from aqi_attend import AbortController, JudgeInput, Judgment, Kind, create_attend, window_id
+from aqi_attend.signal import AbortSignal
+from aqi_attend.testing import fake_clock
 
 from .scenario import plain
 from .stores import POSTGRES_URL, REDIS_URL, make_postgres, make_redis

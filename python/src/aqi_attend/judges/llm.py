@@ -1,12 +1,12 @@
-"""``attend.judges.llm``: a judge over any model that can reply in JSON matching a schema. A port of ``src/llm.ts``.
+"""``aqi_attend.judges.llm``: a judge over any model that can reply in JSON matching a schema. A port of ``src/llm.ts``.
 
 There is no SDK dependency: you pass the one structured-output call as ``complete``. With the
 Anthropic SDK::
 
     import json
     from anthropic import AsyncAnthropic
-    from attend import PermanentError
-    from attend.judges.llm import llm_judge
+    from aqi_attend import PermanentError
+    from aqi_attend.judges.llm import llm_judge
 
     anthropic = AsyncAnthropic()
 
