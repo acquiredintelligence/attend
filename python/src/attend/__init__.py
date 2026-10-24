@@ -31,6 +31,7 @@ from .core.types import (
 from .errors import BackpressureError, ConflictError, OutboxFullError, PermanentError, is_permanent
 from .notice import default_notice
 from .signal import AbortController, AbortSignal
+from .sources import EventLog, log_source, memory_log
 from .store.memory import memory_store
 from .store.types import ScopeStore
 
@@ -50,6 +51,7 @@ __all__ = [
     "DeliveredRoute",
     "Entry",
     "Event",
+    "EventLog",
     "Judge",
     "JudgeBudget",
     "JudgeContext",
@@ -71,6 +73,8 @@ __all__ = [
     "create_attend",
     "default_notice",
     "is_permanent",
+    "log_source",
+    "memory_log",
     "memory_store",
     "routes",
     "settle_policy",
