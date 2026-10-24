@@ -1,4 +1,4 @@
-"""``attend.store.redis``: a ScopeStore over Redis 6.2 or later, on redis-py's asyncio client.
+"""``aqi_attend.store.redis``: a ScopeStore over Redis 6.2 or later, on redis-py's asyncio client.
 
 A port of ``src/store/redis.ts`` with the same Lua scripts, keys, fields and JSON, so a Python
 process and a TypeScript process can share one Redis. One EVALSHA per group commit validates every

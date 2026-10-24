@@ -70,7 +70,7 @@ A Python coroutine runs on without yielding until it reaches real I/O, while eve
 
 ## Cancellation
 
-- `attend.signal` provides `AbortController` and `AbortSignal`, and adds `wait()` and `race()`. A judge, sink or dead-letter handler gets a signal and must honour it, as in TypeScript. attend never cancels such a call while its lease runs.
+- `aqi_attend.signal` provides `AbortController` and `AbortSignal`, and adds `wait()` and `race()`. A judge, sink or dead-letter handler gets a signal and must honour it, as in TypeScript. attend never cancels such a call while its lease runs.
 - A `capture` still running at `capture_timeout_ms` is cancelled. In TypeScript its promise is left pending.
 - When `run()` ends, any judge call or delivery still pending after its lease has expired is cancelled. In TypeScript it runs on, and a late result can be submitted after `run()` resolved. Either way the expired lease has already handed the work back.
 - Cancelling the task that runs `run()` stops it the way `stop()` does.

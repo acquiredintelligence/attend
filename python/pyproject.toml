@@ -1,5 +1,5 @@
 [project]
-name = "acquiredintelligence-attend"
+name = "aqi-attend"
 version = "0.2.0"
 description = "The attention layer for agents: decide when an event should wake your agent."
 readme = "README.md"
@@ -47,7 +47,7 @@ requires = ["hatchling>=1.26"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/attend"]
+packages = ["src/aqi_attend"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -71,6 +71,6 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "ASYNC", "PERF"]
 ignore = ["A001", "A002", "RUF001", "RUF003"]
 
 [tool.ruff.lint.per-file-ignores]
-"src/attend/store/_redis_scripts.py" = ["E501"]
-"src/attend/store/postgres.py" = ["E501"]
-"src/attend/judges/_defaults.py" = ["E501"]
+"src/aqi_attend/store/_redis_scripts.py" = ["E501"]
+"src/aqi_attend/store/postgres.py" = ["E501"]
+"src/aqi_attend/judges/_defaults.py" = ["E501"]

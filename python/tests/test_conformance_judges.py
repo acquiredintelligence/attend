@@ -13,10 +13,10 @@ from typing import Any
 import httpx
 import pytest
 
-from attend import AbortController, is_permanent
-from attend.errors import message_of
-from attend.judges import decisions_judge, jev_judge, llm_judge
-from attend.judges.llm import CompleteRequest
+from aqi_attend import AbortController, is_permanent
+from aqi_attend.errors import message_of
+from aqi_attend.judges import decisions_judge, jev_judge, llm_judge
+from aqi_attend.judges.llm import CompleteRequest
 
 from .scenario import plain
 from .test_conformance_core import load

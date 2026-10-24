@@ -1,4 +1,4 @@
-"""``attend.testing``: a fake clock, a scripted judge, a recording sink, the crash harness and the crash suites.
+"""``aqi_attend.testing``: a fake clock, a scripted judge, a recording sink, the crash harness and the crash suites.
 
 Runner-agnostic: each suite returns named async cases that any test runner can run.
 """

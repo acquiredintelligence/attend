@@ -1,4 +1,4 @@
-"""``attend.judges.jev``: a judge on TypeSafe's Jev, through ``POST /v1/systemone``. Bring your own TypeSafe key.
+"""``aqi_attend.judges.jev``: a judge on TypeSafe's Jev, through ``POST /v1/systemone``. Bring your own TypeSafe key.
 
 One ``choice`` question keyed ``route`` picks among the offered routes, with the criteria as the
 option descriptions, and one ``noul`` question answers each predicate, keyed by position

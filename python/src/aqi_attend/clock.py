@@ -1,4 +1,4 @@
-"""Time, injected. ``fake_clock`` in ``attend.testing`` makes settling deterministic."""
+"""Time, injected. ``fake_clock`` in ``aqi_attend.testing`` makes settling deterministic."""
 
 from __future__ import annotations
 

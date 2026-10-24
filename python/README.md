@@ -7,7 +7,7 @@ This is the Python port of [attend](https://github.com/acquiredintelligence/atte
 ```python
 import asyncio
 
-from attend import create_attend, default_notice
+from aqi_attend import create_attend, default_notice
 
 
 async def judge(input, signal):
@@ -41,13 +41,13 @@ Attend to this now, even mid-task.
 ## Install
 
 ```sh
-pip install acquiredintelligence-attend            # the engine, no dependencies
-pip install "acquiredintelligence-attend[redis]"   # redis-py, for attend.store.redis
-pip install "acquiredintelligence-attend[postgres]" # asyncpg, for attend.store.postgres
-pip install "acquiredintelligence-attend[http]"    # httpx, for jev_judge and decisions_judge
+pip install aqi-attend                # the engine, no dependencies
+pip install "aqi-attend[redis]"       # redis-py, for aqi_attend.store.redis
+pip install "aqi-attend[postgres]"    # asyncpg, for aqi_attend.store.postgres
+pip install "aqi-attend[http]"        # httpx, for jev_judge and decisions_judge
 ```
 
-It needs Python 3.12 or later and imports as `attend`.
+It needs Python 3.12 or later and imports as `aqi_attend`.
 
 ## Run it in a worker over Redis
 
@@ -56,9 +56,9 @@ Embed attend in the long-running asyncio worker that already receives your event
 ```python
 import redis.asyncio as redis
 
-from attend import create_attend
-from attend.judges import jev_judge
-from attend.store.redis import redis_store
+from aqi_attend import create_attend
+from aqi_attend.judges import jev_judge
+from aqi_attend.store.redis import redis_store
 
 client = redis.Redis.from_pool(redis.BlockingConnectionPool.from_url(REDIS_URL, max_connections=50, timeout=None))
 blocking = redis.Redis.from_url(REDIS_URL)
@@ -78,7 +78,7 @@ redis-py runs each concurrent command on a pooled connection of its own, and its
 ## What differs from TypeScript
 
 - Keyword arguments and `settle` keys are snake_case, such as `create_attend(settle={"wait_horizon_ms": 5000})`. Every value that crosses a store or a judge (events, windows, decisions, dead letters, records, traces) is a dict with the TypeScript field names, such as `decision["window"]["settledAt"]`, so both runtimes share one persisted layout.
-- A judge, sink, dead-letter handler, `context` or `capture` is called with `(value, signal)`, where `signal` is an `attend.AbortSignal`. Honour it with `await signal.race(work)` or by checking `signal.aborted`.
+- A judge, sink, dead-letter handler, `context` or `capture` is called with `(value, signal)`, where `signal` is an `aqi_attend.AbortSignal`. Honour it with `await signal.race(work)` or by checking `signal.aborted`.
 - `push`, `flush` and `end` return futures that resolve once the input is persisted. They take the input when called, as the TypeScript promises do.
 - Cancelling the task that runs `run()` stops it the way `stop()` does.
 
@@ -86,13 +86,13 @@ redis-py runs each concurrent command on a pooled connection of its own, and its
 
 ## Judges
 
-`attend.judges` has `jev_judge` (TypeSafe's Jev, with your own key), `decisions_judge` (the OpenAI Decisions API) and `llm_judge`, which wraps any structured-output call you pass as `complete`. They send the same requests as the TypeScript judges, byte for byte. [Choose a judge](../docs/judges.md) explains each one, the window budget and the act threshold.
+`aqi_attend.judges` has `jev_judge` (TypeSafe's Jev, with your own key), `decisions_judge` (the OpenAI Decisions API) and `llm_judge`, which wraps any structured-output call you pass as `complete`. They send the same requests as the TypeScript judges, byte for byte. [Choose a judge](../docs/judges.md) explains each one, the window budget and the act threshold.
 
 ## Test with a fake clock
 
 ```python
-from attend import create_attend
-from attend.testing import fake_clock, recording_sink, scripted_judge
+from aqi_attend import create_attend
+from aqi_attend.testing import fake_clock, recording_sink, scripted_judge
 
 clock = fake_clock()
 judge = scripted_judge([{"route": "queue"}])
@@ -104,7 +104,7 @@ await clock.advance(500)
 assert [d["route"] for d in sink.delivered] == ["queue"]
 ```
 
-`attend.testing` also has the crash harness and `crash_suite` and `multi_scope_crash_suite`, and `attend.conformance` has the store conformance suites, for a store adapter of your own.
+`aqi_attend.testing` also has the crash harness and `crash_suite` and `multi_scope_crash_suite`, and `aqi_attend.conformance` has the store conformance suites, for a store adapter of your own.
 
 ## Develop
 

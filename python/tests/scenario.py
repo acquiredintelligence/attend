@@ -7,14 +7,14 @@ import json
 from collections.abc import Mapping
 from typing import Any, cast
 
-from attend import PermanentError, create_attend, memory_store
-from attend._json import stable_json
-from attend.attend import JudgeContext
-from attend.clock import drain
-from attend.core.types import DeadLetter, Decision, JudgeImage, JudgeInput, Judgment, Trace
-from attend.errors import message_of, name_of
-from attend.signal import AbortController, AbortSignal
-from attend.testing import fake_clock
+from aqi_attend import PermanentError, create_attend, memory_store
+from aqi_attend._json import stable_json
+from aqi_attend.attend import JudgeContext
+from aqi_attend.clock import drain
+from aqi_attend.core.types import DeadLetter, Decision, JudgeImage, JudgeInput, Judgment, Trace
+from aqi_attend.errors import message_of, name_of
+from aqi_attend.signal import AbortController, AbortSignal
+from aqi_attend.testing import fake_clock
 
 UNCOMPARED_TRACES = {"backpressure"}
 
