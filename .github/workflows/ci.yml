@@ -62,3 +62,45 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm bench:selfcheck
+
+  python:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.12', '3.14']
+    services:
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: --health-cmd "redis-cli ping" --health-interval 2s --health-timeout 2s --health-retries 15
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: attend
+          POSTGRES_DB: attend
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 2s --health-retries 15
+    env:
+      ATTEND_REDIS_URL: redis://localhost:6379
+      ATTEND_POSTGRES_URL: postgres://postgres:attend@localhost:5432/attend
+      ATTEND_INTEROP: '1'
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile && pnpm build
+        working-directory: .
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv sync --locked
+      - run: uv run ruff check
+      - run: uv run ruff format --check
+      - run: uv run pyright
+      - run: uv run pytest

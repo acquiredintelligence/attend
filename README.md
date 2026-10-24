@@ -55,6 +55,8 @@ npm install @acquiredintelligence/attend
 
 attend needs Node 22.13 or later and ships ESM only. The engine has no runtime dependencies. Before production, replace the function judge with [a real judge](docs/judges.md) and pass `store` [a database store](docs/storage.md); without one, state lives in memory.
 
+A Python port for asyncio, with the same semantics and the same decision ids, lives in [`python/`](python/README.md).
+
 ## See it decide
 
 In a clone of this repo, `pnpm demo` streams a short CI story from a real MCP Events server into attend and prints what the agent hears. It needs no API key and no database. The source is [`examples/demo.ts`](examples/demo.ts).
