@@ -77,7 +77,8 @@ A Python coroutine runs on without yielding until it reaches real I/O, while eve
 
 ## Intake
 
-- `push`, `flush` and `end` return asyncio futures and take their input when called, as the TypeScript promises do, so concurrent pushes merge and group exactly as there.
+- `push`, `flush` and `end` return asyncio futures and take their input when called, as the TypeScript promises do, so concurrent pushes merge and group exactly as there. Each caller gets a future of its own, so cancelling one never cancels another push merged into the same input. The input is still applied.
+- `run()` starts when called, as in TypeScript, and returns the coroutine to await or run as a task, so `stop()` straight after `create_task(attend.run())` stops it.
 - Event data must hold JSON values: dicts with string keys, lists or tuples, strings, ints, floats, booleans and None. NaN and the infinities become null and -0.0 becomes 0, as JSON writes them. Any other value raises `TypeError`, where TypeScript would call its `toJSON` (a `Date`) or drop it (`undefined`, a function).
 - The memory store's tail accounting recomputes each event's rendered size, where TypeScript caches it in a `WeakMap`. The value is the same.
 
