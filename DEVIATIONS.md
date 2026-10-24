@@ -59,3 +59,49 @@ A load under a changed policy forces a snapshot on the next input, even when tha
 ## Trace scope in docs
 
 `skills/attend/SKILL.md` no longer reads `trace.scope`: backpressure traces are process-wide and carry no scope.
+
+# Python port
+
+`python/` ports the TypeScript package to Python 3.12 or later. The fixtures in `conformance/` pin what the two must agree on. This section lists every place the Python port differs and why.
+
+## Scheduling within one scope
+
+A Python coroutine runs on without yielding until it reaches real I/O, while every JavaScript `await` yields. When a judge call and a delivery for one scope are in flight at once, their results can commit in the other order. With any real store that order is a race in TypeScript too. Each lane keeps its order, and the records, decisions, dead letters and log rows are equal. The Python scenario runner therefore compares traces per lane: the scope's own lane, its decisions lane and its dead-letter lane, each in order. 2 of the 53 scenarios differ only in that cross-lane order.
+
+## Cancellation
+
+- `attend.signal` provides `AbortController` and `AbortSignal`, and adds `wait()` and `race()`. A judge, sink or dead-letter handler gets a signal and must honour it, as in TypeScript. attend never cancels such a call while its lease runs.
+- A `capture` still running at `capture_timeout_ms` is cancelled. In TypeScript its promise is left pending.
+- When `run()` ends, any judge call or delivery still pending after its lease has expired is cancelled. In TypeScript it runs on, and a late result can be submitted after `run()` resolved. Either way the expired lease has already handed the work back.
+- Cancelling the task that runs `run()` stops it the way `stop()` does.
+
+## Intake
+
+- `push`, `flush` and `end` return asyncio futures and take their input when called, as the TypeScript promises do, so concurrent pushes merge and group exactly as there.
+- Event data must hold JSON values: dicts with string keys, lists or tuples, strings, ints, floats, booleans and None. NaN and the infinities become null and -0.0 becomes 0, as JSON writes them. Any other value raises `TypeError`, where TypeScript would call its `toJSON` (a `Date`) or drop it (`undefined`, a function).
+- The memory store's tail accounting recomputes each event's rendered size, where TypeScript caches it in a `WeakMap`. The value is the same.
+
+## The open window
+
+TypeScript keeps a dead-prefix offset (`start`) and compacts it lazily, to avoid V8's `shift`. Python deletes removed entries in place. The entries, summaries, sizes and hashes are the same, and the reducer fixtures pin them.
+
+## Names
+
+- The Python API is snake_case: `create_attend` keyword arguments and `settle` keys such as `closing_grace_ms`. `max_queued_inputs` and `max_lag_ms` replace `admission`, `cache_idle_ms` replaces `cache.idleMs`, and `decisions(signal=..., cursor=..., scope=...)` takes keywords in place of `(filter, options)`. `suggest_threshold(judgments, duration_ms=..., max_acts_per_hour=...)` takes keywords too, and error fields are `retry_after_ms` and `request_id`.
+- Every value that crosses a store or a judge keeps the TypeScript field names: events, windows, decisions, dead letters, records, traces, logged inputs and the policy. That keeps the persisted layout, so one store serves both runtimes (`python/tests/test_interop.py`), and it lets the fixtures compare values directly.
+- Error, trace and dead-letter messages keep the TypeScript text, including the judges' `jevJudge:` and `decisionsJudge:` prefixes, so a dead letter reads the same whichever runtime wrote it.
+
+## Stores
+
+- Redis runs on redis-py's asyncio client with the Lua scripts of `src/store/redis.ts` copied verbatim; `python/tests/test_redis.py` fails if they drift. `blocking` takes a client in place of `blockingSend`. redis-py runs each concurrent command on a pooled connection, and its default pool raises once 100 are in use, where node-redis pipelines everything on one connection. Use a `BlockingConnectionPool`.
+- Postgres runs on asyncpg. `listener` is a dedicated `asyncpg.Connection` in place of a `listen` function. Statements cast every parameter whose type Postgres cannot infer, and they select explicit columns, reading `xid8` only as text, because asyncpg has no `xid8` codec. The tables, columns, migration and JSON are the same.
+- There is no SQLite store, and no `redisLog`, `postgresLog` or `sqliteLog` event log.
+
+## Judges
+
+- The hosted judges use httpx. `client`, an `httpx.AsyncClient`, replaces the `fetch` option. On abort the request is cancelled and the signal's reason is raised.
+- Errors from a response are `ProviderError`, or `PermanentProviderError` for a permanent one. Each carries `status`, `request_id` and `retry_after_ms`.
+
+## Not ported
+
+`attend serve`, the MCP Events server and `mcpEventsSource`, the SQLite store, the event-log adapters for Redis and Postgres, `freezingStore`, `eventsWireConformance`, `logConformance`, the frozen oracle and its differential tests, and every bench but latency.
