@@ -185,7 +185,7 @@ export function thresholdFixtures(seed: number, count: number) {
   return { thresholdRoute: routeCases, validate: validateCases, suggestThreshold: suggestCases };
 }
 
-/** `defaultNotice` over windows with context, gaps, drops, data with integer-like keys and line limits. */
+/** `defaultNotice` over windows with context, gaps, drops, data with integer-like keys, line limits and folded runs. */
 export function noticeFixtures() {
   const decision = (route: DeliveredRoute, events: Decision['window']['events'], extra: Partial<Decision['window']> = {}): Decision => ({
     id: 'w', scope: 's', route, probabilities: { interrupt: 0, queue: 0, note: 0, ask: 0, skip: 0, wait: 0 }, predicates: {}, confidence: null,
@@ -193,14 +193,40 @@ export function noticeFixtures() {
   });
   const entry = (id: string, kind: Kind, extra: Partial<Decision['window']['events'][number]> = {}) => ({ id, at: 0, name: `${kind}.${id}`, data: {}, kind, seenAt: 1, ...extra });
   const many = Array.from({ length: 25 }, (_, i) => entry(`e${i}`, KINDS[i % KINDS.length]!, i % 2 === 0 ? { text: `line ${i}` } : { data: { i, '10': 'ten', '2': 'two', b: [1.5, -0, 1e21, 1e-7, 0.000001] } }));
-  const cases: { decision: Decision; options?: { maxLines: number }; text: string }[] = [];
-  const add = (d: Decision, options?: { maxLines: number }) => cases.push({ decision: d, ...(options ? { options } : {}), text: defaultNotice(d, options) });
+  const cases: { decision: Decision; options?: { maxLines?: number; fold?: boolean }; text: string }[] = [];
+  const add = (d: Decision, options?: { maxLines?: number; fold?: boolean }) => cases.push({ decision: d, ...(options ? { options } : {}), text: defaultNotice(d, options) });
   add(decision('queue', [entry('a', 'closing', { text: 'close a' }), entry('b', 'context', { data: { words: 2 } }), entry('c', 'consequence', { data: { ok: true } })], { dropped: 2, gap: true }));
   add(decision('interrupt', [entry('a', 'closing', { text: 'close a' }), entry('b', 'context'), entry('c', 'consequence', { data: { ok: true } })], { dropped: 2, gap: true }), { maxLines: 1 });
   for (const route of ['interrupt', 'queue', 'note', 'ask'] as const) add(decision(route, many));
   add(decision('note', many, { dropped: 3 }), { maxLines: 5 });
   add(decision('ask', [entry('u', 'flush', { data: { s: 'ünï 🌍 "q" \\ \n\t\u0001', nested: { z: null, a: [{}] } } })]));
   add(decision('queue', []));
+  const same = (n: number, from = 0) => Array.from({ length: n }, (_, i) => entry(`r${from + i}`, 'closing', { name: 'job.failed', data: { job: 'sync' } }));
+  const steps = (n: number, name = 'dial.turned', from = 0) => Array.from({ length: n }, (_, i) => entry(`${name}${from + i}`, 'continuous', { name, data: { value: ((from + i) * 7) / 100, '7': 'k' } }));
+  const said = (n: number) => Array.from({ length: n }, (_, i) => entry(`t${i}`, 'continuous', { name: 'cursor.moved', text: `cursor at line ${i * 3}` }));
+  const context = entry('own', 'context', { text: 'agent said something' });
+  const folding: Decision['window']['events'][] = [
+    same(26),
+    [...same(2), context, ...same(3, 2)],
+    steps(26),
+    [...steps(3), ...steps(2, 'zoom.changed'), ...steps(1, 'dial.turned', 9)],
+    [...steps(2), entry('p', 'passive', { name: 'dial.turned', data: { value: 0.07, '7': 'k' } }), ...steps(2, 'dial.turned', 5)],
+    Array.from({ length: 4 }, (_, i) => entry(`h${i}`, 'continuous', { name: 'key.held', data: { key: 'a' } })),
+    said(5),
+    [entry('m0', 'continuous', { name: 'cursor.moved', text: 'cursor at line 1' }), entry('m1', 'continuous', { name: 'cursor.moved', data: { line: 4 } }), entry('m2', 'continuous', { name: 'cursor.moved', data: { line: 9 } })],
+    [entry('f0', 'closing', { name: 'file.saved', data: { path: 'a.ts' } }), entry('f1', 'closing', { name: 'file.saved', data: { path: 'b.ts' } }), entry('f2', 'closing', { name: 'file.saved', data: { path: 'b.ts' } })],
+    [entry('x0', 'flush', { text: 'retry' }), entry('x1', 'consequence', { text: 'retry' }), entry('x2', 'continuous', { name: 'retry', text: 'retry' }), entry('x3', 'passive', { text: 'retry' })],
+    [entry('k0', 'continuous', { name: 'key.held', data: { key: 'a' } }), entry('k1', 'continuous', { name: 'key.held', data: { key: 'a' } }), entry('k2', 'closing', { text: 'key.held {"key":"a"}' }), entry('k3', 'continuous', { name: 'key.held', data: { key: 'b' } }), entry('k4', 'continuous', { name: 'key.held', data: { key: 'c' } })],
+    [...same(4), ...steps(6), entry('z', 'closing', { text: 'done' }), ...same(3, 4), ...said(2)],
+  ];
+  for (const events of folding) {
+    add(decision('queue', events));
+    add(decision('queue', events), { fold: false });
+  }
+  const long = folding[folding.length - 1]!;
+  for (const maxLines of [1, 2, 3, 0]) add(decision('note', long, { dropped: 1, gap: true }), { maxLines });
+  add(decision('note', long), { maxLines: 2, fold: false });
+  add(decision('interrupt', [...many, ...same(30), ...many]));
   return { cases: JSON.parse(JSON.stringify(cases)) as typeof cases };
 }
 

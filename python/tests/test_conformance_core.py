@@ -72,6 +72,6 @@ def test_threshold_validate_and_suggest() -> None:
 
 def test_default_notice() -> None:
     for case in load("notice")["cases"]:
-        options = case.get("options")
-        text = default_notice(case["decision"], max_lines=options["maxLines"]) if options else default_notice(case["decision"])
-        assert text == case["text"]
+        options = case.get("options", {})
+        text = default_notice(case["decision"], max_lines=options.get("maxLines", 20), fold=options.get("fold", True))
+        assert text == case["text"], case

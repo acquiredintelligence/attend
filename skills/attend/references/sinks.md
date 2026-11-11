@@ -14,6 +14,8 @@ A sink is `{ deliver(decision, signal) }`. attend calls it at least once per dec
 | `window` | The settled window, with `events` oldest first |
 | `at` | attend's clock when the judge answered |
 
+`defaultNotice(decision)` turns the window into text for the agent: one line per event, oldest first, then one line on the route. A run of events that read the same becomes one line with its count, and a run of `continuous` events under one name becomes its first and last step with the count. Pass `{ fold: false }` for one line per event.
+
 ## Wiring template
 
 Map each route to an operation in the host. The decision id makes each operation idempotent.

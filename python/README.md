@@ -81,6 +81,7 @@ redis-py runs each concurrent command on a pooled connection of its own, and its
 - A judge, sink, dead-letter handler, `context` or `capture` is called with `(value, signal)`, where `signal` is an `aqi_attend.AbortSignal`. Honour it with `await signal.race(work)` or by checking `signal.aborted`.
 - `push`, `flush` and `end` return futures that resolve once the input is persisted. They take the input when called, as the TypeScript promises do.
 - Cancelling the task that runs `run()` stops it the way `stop()` does.
+- `default_notice(decision, max_lines=20, fold=True)` takes its options as keyword arguments. [The notice](../docs/sinks.md#the-notice) says what it folds.
 
 [DEVIATIONS.md](../DEVIATIONS.md#python-port) lists every difference.
 

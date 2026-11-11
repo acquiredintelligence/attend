@@ -26,3 +26,23 @@ const attend = createAttend({
 ```
 
 A dead letter is a window that no judge or sink could take, with the stage that gave up, the error message and the attempt count. Without a `deadLetter` handler, attend writes each one to the decision log as a final row, where `attend.decisions()` and MCP subscribers read it. Give `deadLetter` a handler to act on them yourself. attend retries the handler with capped backoff until it succeeds, so write the letter to durable storage and keep the handler simple. Dead letters travel in their own lane, so a failing handler never holds back decisions; once the lane holds `maxDeadLetters` of them, `push` and a source's `emit` reject with `OutboxFullError` until it drains, and nothing is dropped.
+
+## The notice
+
+`defaultNotice(decision)` is the text for the agent: the window's events oldest first, then one line on the route. An event's line is `Event.text` when it has one, and its name and JSON data otherwise. The agent's own `context` events are left out.
+
+Repeats fold, so a busy window stays short:
+
+- A run of events that read the same becomes one line with its count.
+- A run of `continuous` events under one name is the steps of one act. It becomes its first and last step with the count.
+
+```text
+job.failed {"job":"sync"} (26 times)
+dial.turned {"value":0.1} → {"value":0.8} (14 steps)
+can you look?
+Attend to this now, even mid-task.
+```
+
+Only neighbours fold. Events of another kind with one name and different data stay separate lines, because attend cannot tell a new value for one thing from two different things. Steps of two acts that interleave stay separate too. The notice shows the newest `maxLines` lines (default 20) and counts the events behind the lines it left out.
+
+Folding changes this text and nothing else. `decision.window.events` holds every event, and the judge saw every one. Pass `{ fold: false }` for one line per event, or write your own text from `decision.window.events`. In Python the call is `default_notice(decision, max_lines=20, fold=True)`.

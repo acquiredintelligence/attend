@@ -1185,6 +1185,44 @@ describe('routes and defaultNotice', () => {
       ['(1 older events not shown)', 'Some events before these were lost.', 'build.done {"ok":true}', '(2 background events dropped from this window)', 'Attend to this now, even mid-task.'].join('\n'),
     );
   });
+
+  const entry = (id: string, kind: Decision['window']['events'][number]['kind'], name: string, data: Decision['window']['events'][number]['data'], text?: string) => ({ id, at: 0, name, data, kind, seenAt: 1, ...(text === undefined ? {} : { text }) });
+  const withEvents = (events: Decision['window']['events']): Decision => ({ ...decision('queue'), window: { ...decision('queue').window, events, dropped: 0, gap: false } });
+  const hint = 'Take this up when the current step is done.';
+
+  test('defaultNotice folds a run of events that read the same into one line with its count', () => {
+    const failed = Array.from({ length: 26 }, (_, i) => entry(`f${i}`, 'consequence', 'job.failed', { job: 'sync' }));
+    expect(defaultNotice(withEvents(failed))).toBe(['job.failed {"job":"sync"} (26 times)', hint].join('\n'));
+    // Context sits between two halves of a run without breaking it, and kinds do not matter when the lines match.
+    const mixed = [entry('a', 'flush', 'x', {}, 'retry'), entry('own', 'context', 'agent.said', {}), entry('b', 'passive', 'y', {}, 'retry')];
+    expect(defaultNotice(withEvents(mixed))).toBe(['retry (2 times)', hint].join('\n'));
+    // The same name with different data is not one thing repeating.
+    const saved = [entry('a', 'closing', 'file.saved', { path: 'a.ts' }), entry('b', 'closing', 'file.saved', { path: 'b.ts' })];
+    expect(defaultNotice(withEvents(saved))).toBe(['file.saved {"path":"a.ts"}', 'file.saved {"path":"b.ts"}', hint].join('\n'));
+  });
+
+  test('defaultNotice folds the steps of one continuous act into its first and last step', () => {
+    const turned = Array.from({ length: 26 }, (_, i) => entry(`t${i}`, 'continuous', 'dial.turned', { value: i }));
+    expect(defaultNotice(withEvents(turned))).toBe(['dial.turned {"value":0} → {"value":25} (26 steps)', hint].join('\n'));
+    const worded = [0, 4, 9].map((line, i) => entry(`c${i}`, 'continuous', 'cursor.moved', { line }, `cursor at line ${line}`));
+    expect(defaultNotice(withEvents(worded))).toBe(['cursor at line 0 → cursor at line 9 (3 steps)', hint].join('\n'));
+    // Another name, or an event of another kind, ends the act.
+    const broken = [...turned.slice(0, 2), entry('z', 'continuous', 'zoom.changed', { value: 2 }), entry('p', 'passive', 'dial.turned', { value: 3 }), ...turned.slice(4, 6)];
+    expect(defaultNotice(withEvents(broken))).toBe(
+      ['dial.turned {"value":0} → {"value":1} (2 steps)', 'zoom.changed {"value":2}', 'dial.turned {"value":3}', 'dial.turned {"value":4} → {"value":5} (2 steps)', hint].join('\n'),
+    );
+  });
+
+  test('defaultNotice limits folded lines, counts hidden events, and can leave folding off', () => {
+    const events = [
+      ...Array.from({ length: 4 }, (_, i) => entry(`f${i}`, 'consequence', 'job.failed', { job: 'sync' })),
+      ...Array.from({ length: 3 }, (_, i) => entry(`t${i}`, 'continuous', 'dial.turned', { value: i })),
+      entry('done', 'closing', 'user.said', {}, 'done'),
+    ];
+    expect(defaultNotice(withEvents(events), { maxLines: 2 })).toBe(['(4 older events not shown)', 'dial.turned {"value":0} → {"value":2} (3 steps)', 'done', hint].join('\n'));
+    expect(defaultNotice(withEvents(events), { maxLines: 2, fold: false })).toBe(['(6 older events not shown)', 'dial.turned {"value":2}', 'done', hint].join('\n'));
+    expect(defaultNotice(withEvents(events), { fold: false }).split('\n')).toHaveLength(9);
+  });
 });
 
 function recordedStore(durable = false) {
