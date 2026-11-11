@@ -35,4 +35,4 @@ The source covers these parts of the draft:
 - `onError` receives each `notifications/events/error`, each payload that fails validation, each `overflow`, each `idle`, and each `unrouted` notification, one that names a subscription no stream here opened. None of them ends the subscription.
 - Several streams can share one `Client`. attend installs one handler for each of the five `notifications/events/*` methods on the Client, records the JSON-RPC id of each `events/stream` request and routes notifications by `_meta["io.modelcontextprotocol/subscriptionId"]`. Do not replace those handlers.
 
-MCP events carry no one-line summary, so `Event.text` stays unset and `defaultNotice` prints each event's name and JSON data.
+MCP events carry no one-line summary, so `Event.text` stays unset and `defaultNotice` prints each event's name and JSON data, with [repeats folded](sinks.md#the-notice).

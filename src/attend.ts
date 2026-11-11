@@ -2,7 +2,7 @@ import { ConflictError, isPermanent } from './errors.js';
 import { sleep, systemClock } from './internal/clock.js';
 import { arrayLength, assertNever, messageOf } from './internal/shared.js';
 import { DEFAULT_POLICY, KINDS, ROUTES } from './types.js';
-import type { Clock, Source, SourceBatch, DeadLetter, Decision, DeliveredRoute, DeliverEffect, Effect, Event, EventLog, EventsInput, Input, JudgeEffect, JudgeImage, JudgeInput, Judgment, Kind, ReleasedInput, SettlePolicy, Sink, Trace } from './types.js';
+import type { Clock, Source, SourceBatch, DeadLetter, Decision, DeliveredRoute, DeliverEffect, Effect, Entry, Event, EventLog, EventsInput, Input, JudgeEffect, JudgeImage, JudgeInput, Judgment, Kind, ReleasedInput, SettlePolicy, Sink, Trace } from './types.js';
 import type { Attend, AttendConfig, EventInput } from './shell/types.js';
 import { memoryStore } from './store/memory.js';
 import { createScopes } from './shell/scope.js';
@@ -402,18 +402,66 @@ const ROUTE_HINT: Record<DeliveredRoute, string> = {
   ask: 'The user was offered a way to call you in. Stay quiet unless they do.',
 };
 
-/** The text an agent hears: the window's event lines oldest first, what was left out, and one line on the route. */
-export function defaultNotice(decision: Decision, options?: { maxLines?: number }): string {
+/**
+ * The text an agent hears: the window's event lines oldest first, what was left out, and one line on the route.
+ *
+ * A run of events that read the same becomes one line with its count. A run of `continuous` events under one name is the
+ * steps of one act, so it becomes its first and last step with the count. `fold: false` gives one line per event.
+ */
+export function defaultNotice(decision: Decision, options?: { maxLines?: number; fold?: boolean }): string {
   const max = options?.maxLines ?? 20;
-  const lines = decision.window.events.filter((e) => e.kind !== 'context').map((e) => e.text ?? `${e.name} ${JSON.stringify(e.data)}`);
+  const lines = noticeLines(decision.window.events, options?.fold ?? true);
   const shown = lines.slice(-max);
+  const older = lines.slice(0, lines.length - shown.length).reduce((sum, line) => sum + line.events, 0);
   const out: string[] = [];
-  if (lines.length > shown.length) out.push(`(${lines.length - shown.length} older events not shown)`);
+  if (older > 0) out.push(`(${older} older events not shown)`);
   if (decision.window.gap) out.push('Some events before these were lost.');
-  out.push(...shown);
+  out.push(...shown.map((line) => line.text));
   if (decision.window.dropped > 0) out.push(`(${decision.window.dropped} background events dropped from this window)`);
   out.push(ROUTE_HINT[decision.route]);
   return out.join('\n');
+}
+
+/** The notice's event lines, each with how many events it stands for. Context entries are left out. */
+function noticeLines(entries: readonly Entry[], fold: boolean): { text: string; events: number }[] {
+  const out: { text: string; events: number }[] = [];
+  let run: Entry[] = [];
+  // A run holds while every event reads the same (`same`), or while every event is a step of one act (`steps`).
+  let same = true;
+  let steps = true;
+  const close = () => {
+    if (run.length > 0) out.push({ text: runLine(run, same), events: run.length });
+    run = [];
+  };
+  for (const entry of entries) {
+    if (entry.kind === 'context') continue;
+    const head = run[0];
+    const reads = head !== undefined && eventLine(entry) === eventLine(head);
+    const step = head !== undefined && entry.kind === 'continuous' && entry.name === head.name;
+    if (fold && head && ((same && reads) || (steps && step))) {
+      same &&= reads;
+      steps &&= step;
+    } else {
+      close();
+      same = true;
+      steps = entry.kind === 'continuous';
+    }
+    run.push(entry);
+  }
+  close();
+  return out;
+}
+
+const eventLine = (e: Entry): string => e.text ?? `${e.name} ${JSON.stringify(e.data)}`;
+
+function runLine(run: readonly Entry[], same: boolean): string {
+  const first = run[0]!;
+  const last = run[run.length - 1]!;
+  const line = eventLine(first);
+  if (run.length === 1) return line;
+  if (same) return `${line} (${run.length} times)`;
+  const end = first.text === undefined && last.text === undefined ? JSON.stringify(last.data) : eventLine(last);
+  return `${line} → ${end} (${run.length} steps)`;
 }
 
 /** A resumable source over an event log, with optional polling and blocking waits. */

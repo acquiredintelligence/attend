@@ -9,7 +9,7 @@
 | `continuous` | One step of an ongoing act: typing, scrolling, dragging, a partial transcript | Once no continuous event has arrived for `streamGapMs` |
 | `passive` | A dwell or a look: a hover, a focus, a page view | `passiveQuietMs` after the last passive event |
 | `consequence` | System output: a log line, a status change, a tool result | Never. It joins the open window. |
-| `context` | The agent's own output | Never. It joins the open window as context for the judge, and `defaultNotice` leaves it out. |
+| `context` | The agent's own output | Never. It joins the open window as context for the judge, and [`defaultNotice`](sinks.md#the-notice) leaves it out. |
 
 `closing`, `flush`, `continuous` and `passive` events are acts: things that happen in the scope and can call for the agent, whether the user did them or an outside party did. A window also settles when its first act is `maxWindowMs` old (reason `age`), when it fills its share of the judge's context window (reason `size`, see [the window budget](judges.md#the-window-budget)), when you call `attend.end(scope)` because the producer knows the unit is over (reason `closing`, `wait` still offered), or when you call `attend.flush(scope)` (reason `forced`, with `wait` not offered). When a window passes `maxEvents`, attend drops its oldest consequence and context events and counts them in `window.dropped`. If the window is still too big, it settles with reason `overflow`. attend never drops an act. Consequence and context events that wait longer than `maxWindowMs` for an act are dropped and counted the same way.
 
