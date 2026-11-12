@@ -237,11 +237,17 @@ async def test_prior_reducer_snapshot_and_tail_keep_ingestion_deadlines() -> Non
     record = initial_record("s")
     record.update(version=1, seen=["a"], buffer=buffer(entry("a", 1000)), dueAt=2000)
     checkpoint: ScopeWrite = {
-        "scope": "s", "expectedVersion": 0, "inputs": [{"now": 1000, "input": {"kind": "tick"}}],
-        "snapshot": {"version": 1, "record": record, "policy": policy, "reducer": 1}, "appends": [],
+        "scope": "s",
+        "expectedVersion": 0,
+        "inputs": [{"now": 1000, "input": {"kind": "tick"}}],
+        "snapshot": {"version": 1, "record": record, "policy": policy, "reducer": 1},
+        "appends": [],
     }
     tail: ScopeWrite = {
-        "scope": "s", "expectedVersion": 1, "snapshot": None, "appends": [],
+        "scope": "s",
+        "expectedVersion": 1,
+        "snapshot": None,
+        "appends": [],
         "inputs": [{"now": 1100, "input": {"kind": "events", "events": [{"id": "b", "at": -1, "name": "change", "data": {}, "kind": "continuous"}]}}],
     }
     assert await store.commit([checkpoint]) == ["ok"]
@@ -271,7 +277,10 @@ async def test_conflicting_write_reloads_without_replacing_observation_time() ->
                 self.injected = True
                 assert [write["scope"] for write in writes] == ["s"]
                 rival: ScopeWrite = {
-                    "scope": "s", "expectedVersion": 0, "snapshot": None, "appends": [],
+                    "scope": "s",
+                    "expectedVersion": 0,
+                    "snapshot": None,
+                    "appends": [],
                     "inputs": [{"now": 1000, "input": {"kind": "events", "events": [{"id": "racer", "at": 0, "name": "context", "kind": "context", "data": {}}]}}],
                 }
                 await super().commit([rival])

@@ -57,8 +57,14 @@ def logged(id: str, now: float = 1000) -> LoggedInput:
 
 def _window(id: str) -> Window:
     entry: Entry = {
-        "id": f"event:{id}", "at": 1, "observedAt": 1, "name": "changed", "data": {"nested": [None, True, "héllo 🌍\u0000"]},
-        "text": "héllo 🌍\u0000", "kind": "closing", "seenAt": 2,
+        "id": f"event:{id}",
+        "at": 1,
+        "observedAt": 1,
+        "name": "changed",
+        "data": {"nested": [None, True, "héllo 🌍\u0000"]},
+        "text": "héllo 🌍\u0000",
+        "kind": "closing",
+        "seenAt": 2,
     }
     return {"id": id, "events": [entry], "reason": "closing", "waits": 0, "dropped": 0, "gap": False, "settledAt": 3}
 
@@ -307,8 +313,14 @@ def scope_store_conformance(make: Make) -> list[Case]:
     async def large(store: ScopeStore, w: _Watched) -> None:
         entries: list[Entry] = [
             {
-                "id": f"e{i}", "at": i, "observedAt": i, "seenAt": i + 1, "name": "n", "text": "héllo 🌍\u0000",
-                "data": {"i": i, "nested": [None, {"yes": True}]}, "kind": "passive",
+                "id": f"e{i}",
+                "at": i,
+                "observedAt": i,
+                "seenAt": i + 1,
+                "name": "n",
+                "text": "héllo 🌍\u0000",
+                "data": {"i": i, "nested": [None, {"yes": True}]},
+                "kind": "passive",
             }
             for i in range(250)
         ]

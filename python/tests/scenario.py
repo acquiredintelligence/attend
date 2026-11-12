@@ -250,7 +250,10 @@ async def run_scenario(scenario: Mapping[str, Any]) -> dict[str, Any]:
             scopes.add(step["push"])
             events = [
                 {
-                    "id": e["id"], "at": e.get("at", 0), "name": e["name"], "data": e.get("data", {}),
+                    "id": e["id"],
+                    "at": e.get("at", 0),
+                    "name": e["name"],
+                    "data": e.get("data", {}),
                     **({"text": e["text"]} if "text" in e else {}),
                     **({"observedAt": e["observedAt"]} if "observedAt" in e else {}),
                 }
