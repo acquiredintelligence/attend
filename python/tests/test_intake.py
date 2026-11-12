@@ -746,3 +746,57 @@ def test_capacity_is_a_positive_portable_integer(capacity: int) -> None:
     attend = create_attend(clock=fake_clock(), kind={"move": "continuous"}, judge=scripted_judge([{"route": "queue"}]), sink="log")
     with pytest.raises(ValueError, match="capacity"):
         attend.open_intake("s", capacity=capacity)
+
+
+@pytest.mark.parametrize("during", ["judge", "sink"])
+async def test_cancelled_error_on_close_releases_for_immediate_recovery(during: str) -> None:
+    clock, store, entered = fake_clock(), MemoryStore(), asyncio.Event()
+
+    async def cancel(signal: AbortSignal) -> None:
+        entered.set()
+        await signal.wait()
+        raise asyncio.CancelledError
+
+    async def judge(input: JudgeInput, signal: AbortSignal) -> Judgment:
+        if during == "judge":
+            await cancel(signal)
+        return {"route": "queue"}
+
+    async def sink(decision: Decision, signal: AbortSignal) -> None:
+        await cancel(signal)
+
+    async def prepare(signal: AbortSignal) -> SourceBatch:
+        return batch("a", quiet=0)
+
+    attend = create_attend(store=store, clock=clock, kind={"move": "continuous"}, judge=judge, sink=sink if during == "sink" else "log")
+    intake = attend.open_intake("s")
+    running = asyncio.create_task(attend.run())
+    try:
+        pending = intake.submit(prepare)
+        await entered.wait()
+        await intake.close()
+        await pending
+        record = await attend.inspect("s")
+        assert record is not None
+        if during == "judge":
+            assert record["batch"] is not None
+            assert record["batch"]["phase"]["phase"] == "retrying"
+        else:
+            assert record["outbox"]["decisions"][0]["phase"]["phase"] == "retrying"
+    finally:
+        await attend.stop()
+        await running
+
+    recovered_judge = scripted_judge([{"route": "queue"}])
+    delivered: list[str] = []
+    recovered = create_attend(store=store, clock=clock, kind={"move": "continuous"}, judge=recovered_judge, sink=lambda d, s: delivered.append(d["id"]))
+    resumed_intake = recovered.open_intake("s")
+    resumed = asyncio.create_task(recovered.run())
+    try:
+        await clock.advance(0)
+        assert len(delivered) == 1
+        assert len(recovered_judge.calls) == (1 if during == "judge" else 0)
+    finally:
+        await resumed_intake.close()
+        await recovered.stop()
+        await resumed
