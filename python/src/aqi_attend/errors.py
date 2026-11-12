@@ -5,6 +5,10 @@ from __future__ import annotations
 from .core.types import OutboxLane
 
 
+class IntakeError(RuntimeError):
+    """An operation conflicts with an intake's local ownership or lifecycle."""
+
+
 class PermanentError(Exception):
     """Raise from a judge, a sink or a source to skip retries: the judge or sink dead-letters at once, and ``attach`` stops."""
 

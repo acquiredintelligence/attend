@@ -1,17 +1,13 @@
-import type { Attend, SourceBatch } from './types.js';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import type { Attend, Intake, IntakeOptions } from './shell/types.js';
+import { openRegisteredIntake, type IntakeOwner } from './shell/intake.js';
 
-export type Prepare = (signal: AbortSignal) => Promise<SourceBatch>;
+export type { Intake, IntakeOptions, Prepare } from './shell/types.js';
+export { IntakeError } from './errors.js';
 
-export interface IntakeOptions {
-  capacity?: number;
-}
-
-export interface Intake {
-  submit(prepare: Prepare, options?: { source?: string; signal?: AbortSignal }): Promise<void>;
-  close(): Promise<void>;
-}
+const context = new AsyncLocalStorage<IntakeOwner>();
 
 /** Own local input preparation and immediate work for an untouched scope. */
-export function openIntake(_attend: Attend, _scope: string, _options?: IntakeOptions): Intake {
-  throw new Error('not implemented');
+export function openIntake(attend: Attend, scope: string, options?: IntakeOptions): Intake {
+  return openRegisteredIntake(attend, scope, options, context);
 }

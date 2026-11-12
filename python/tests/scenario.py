@@ -10,13 +10,25 @@ from typing import Any, cast
 from aqi_attend import PermanentError, create_attend, memory_store
 from aqi_attend._json import stable_json
 from aqi_attend.attend import JudgeContext
-from aqi_attend.clock import drain
-from aqi_attend.core.types import DeadLetter, Decision, JudgeImage, JudgeInput, Judgment, Trace
+from aqi_attend.clock import drain, sleep
+from aqi_attend.core.types import DeadLetter, Decision, Event, JudgeImage, JudgeInput, Judgment, SourceBatch, Trace
 from aqi_attend.errors import message_of, name_of
 from aqi_attend.signal import AbortController, AbortSignal
 from aqi_attend.testing import fake_clock
 
 UNCOMPARED_TRACES = {"backpressure"}
+
+
+def event_spec(spec: Mapping[str, Any]) -> Event:
+    event: Event = {"id": spec["id"], "at": spec.get("at", 0), "name": spec["name"], "data": spec.get("data", {})}
+    if "text" in spec:
+        event["text"] = spec["text"]
+    if "observedAt" in spec:
+        event["observedAt"] = spec["observedAt"]
+    if "quietForMs" in spec:
+        event["quietForMs"] = spec["quietForMs"]
+    return event
+
 
 _SETTLE = {
     "closingGraceMs": "closing_grace_ms",
@@ -233,10 +245,12 @@ async def run_scenario(scenario: Mapping[str, Any]) -> dict[str, Any]:
         observe=observe,
         **options,
     )
+    intakes = {scope: attend.open_intake(scope) for scope in scenario.get("intakes", [])}
+    receipts: list[asyncio.Task[None]] = []
     controller = AbortController()
     running = asyncio.ensure_future(attend.run(signal=controller.signal, sweep_ms=scenario.get("sweepMs", 1000)))
     await drain()
-    scopes: set[str] = set()
+    scopes: set[str] = set(scenario.get("intakes", []))
 
     async def result(index: int, work: asyncio.Future[None]) -> None:
         try:
@@ -246,21 +260,34 @@ async def run_scenario(scenario: Mapping[str, Any]) -> dict[str, Any]:
             observed["results"].append({"step": index, "error": {"name": name_of(error), "message": message_of(error)}})
 
     for index, step in enumerate(scenario["steps"]):
-        if "push" in step:
-            scopes.add(step["push"])
-            events = [
-                {
-                    "id": e["id"],
-                    "at": e.get("at", 0),
-                    "name": e["name"],
-                    "data": e.get("data", {}),
-                    **({"text": e["text"]} if "text" in e else {}),
-                    **({"observedAt": e["observedAt"]} if "observedAt" in e else {}),
-                    **({"quietForMs": e["quietForMs"]} if "quietForMs" in e else {}),
-                }
-                for e in step["events"]
-            ]
-            await result(index, attend.push(step["push"], events))
+        if "push" in step or "submit" in step:
+            scope = step.get("push", step.get("submit"))
+            scopes.add(scope)
+            events = [event_spec(event) for event in step["events"]]
+            if "push" in step:
+                await result(index, attend.push(scope, events))
+            else:
+                source_batch: SourceBatch = {"events": events}
+                if "cursor" in step:
+                    source_batch["cursor"] = step["cursor"]
+
+                async def prepare(
+                    signal: AbortSignal, batch: SourceBatch = source_batch, delay: float = step.get("prepareMs", 0), fail: str | None = step.get("prepareFail")
+                ) -> SourceBatch:
+                    if delay:
+                        await sleep(clock, delay, signal)
+                    if fail is not None:
+                        raise Exception(fail)
+                    return batch
+
+                try:
+                    receipt = intakes[scope].submit(prepare, source=step.get("source"))
+                except Exception as error:
+                    receipt = loop.create_future()
+                    receipt.set_exception(error)
+                receipts.append(asyncio.create_task(result(index, receipt)))
+        elif "closeIntake" in step:
+            receipts.append(asyncio.create_task(result(index, asyncio.ensure_future(intakes[step["closeIntake"]].close()))))
         elif "advance" in step:
             await clock.advance(step["advance"])
         elif "flush" in step:
@@ -281,6 +308,7 @@ async def run_scenario(scenario: Mapping[str, Any]) -> dict[str, Any]:
         await drain()
     controller.abort()
     await running
+    await asyncio.gather(*receipts)
     for scope in sorted(scopes, key=lambda s: s.encode("utf-16-be", "surrogatepass")):
         observed["records"][scope] = plain(await attend.inspect(scope))
     observed["log"] = plain((await store.log.read({"after": None, "limit": 10_000}))["rows"])

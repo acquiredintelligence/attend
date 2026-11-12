@@ -20,8 +20,10 @@ from .core.types import (
     ApplyConfig,
     DeadLetter,
     Decision,
+    DeliveredInput,
     DeliveredRoute,
     DeliverEffect,
+    DeliveryFailedInput,
     Effect,
     Event,
     EventsInput,
@@ -29,20 +31,23 @@ from .core.types import (
     InputKind,
     JsonObject,
     JudgeBudget,
+    JudgedInput,
     JudgeEffect,
+    JudgeFailedInput,
     JudgeImage,
     JudgeInput,
     Judgment,
     Kind,
     KindedEvent,
     OfferedRoute,
+    ReleasedInput,
     Route,
     ScopeRecord,
     SettlePolicy,
     SourceBatch,
     Trace,
 )
-from .errors import ConflictError, is_permanent, message_of
+from .errors import ConflictError, IntakeError, is_permanent, message_of
 from .shell.budget import window_bytes_for
 from .shell.copy import copy_decision, copy_event, copy_letter, copy_window
 from .shell.decisions import DecisionCursorPage, read_decisions
@@ -55,6 +60,7 @@ from .store.memory import memory_store
 from .store.types import DecisionKind, ScopeStore
 
 type MaybeAwaitable[T] = T | Awaitable[T]
+type EffectResult = JudgedInput | JudgeFailedInput | DeliveredInput | DeliveryFailedInput
 
 
 class JudgeContext(TypedDict, total=False):
@@ -212,7 +218,9 @@ class Attend:
         self._judge_concurrency = judge_concurrency
         self._modes: tuple[Literal["lane", "log"], Literal["lane", "log"]] = ("log" if self._sink == "log" else "lane", "log" if dead_letter == "log" else "lane")
         self._sources: set[AbortController] = set()
-        self._attached: set[str] = set()
+        self._attached: set[tuple[str, str]] = set()
+        self._intakes: dict[str, Intake] = {}
+        self._intake_identity = object()
         self._calls: dict[asyncio.Task[None], float] = {}
         self._releases: set[asyncio.Future[None]] = set()
         self._running: AbortSignal | None = None
@@ -240,7 +248,22 @@ class Attend:
 
     def open_intake(self, scope: str, *, capacity: int = 20_000) -> Intake:
         """Own local input preparation and immediate work for an untouched scope."""
-        raise NotImplementedError
+        if type(capacity) is not int or not 0 < capacity <= 9007199254740991:
+            raise ValueError("attend: intake capacity must be a positive safe integer")
+        if scope in self._intakes or self._scopes.has(scope) or any(owner == scope for owner, _ in self._attached):
+            raise IntakeError("attend: scope already active")
+        intake = Intake(
+            scope,
+            identity=self._intake_identity,
+            scopes=self._scopes,
+            clock=self._clock,
+            classify=self._classify,
+            running=lambda: self.running,
+            observe=self._observe,
+            capacity=capacity,
+        )
+        self._intakes[scope] = intake
+        return intake
 
     @property
     def running(self) -> bool:
@@ -260,16 +283,22 @@ class Attend:
         redeliveries), ``at`` (default the clock), ``data`` (default ``{}``) and ``text``.
         """
         try:
+            if scope in self._intakes:
+                raise IntakeError("attend: scope has exclusive intake")
             return self._scopes.submit(scope, {"kind": "events", "events": self._classify(events)}, True)
         except Exception as error:
             return self._failed(error)
 
     def end(self, scope: str) -> asyncio.Future[None]:
         """Settles the open window at the next tick, reason ``closing``, with ``wait`` still offered."""
+        if scope in self._intakes:
+            return self._failed(IntakeError("attend: scope has exclusive intake"))
         return self._scopes.submit(scope, {"kind": "end"}, True)
 
     def flush(self, scope: str) -> asyncio.Future[None]:
         """Settles the open window at the next tick, reason ``forced``, with ``wait`` withheld."""
+        if scope in self._intakes:
+            return self._failed(IntakeError("attend: scope has exclusive intake"))
         return self._scopes.submit(scope, {"kind": "flush"}, True)
 
     async def inspect(self, scope: str) -> ScopeRecord | None:
@@ -347,10 +376,15 @@ class Attend:
             self._tick(scope)
 
     def _tick(self, scope: str) -> None:
+        if (intake := self._intakes.get(scope)) is not None:
+            intake.wake()
+            return
         self._background(scope, "tick", self._scopes.submit(scope, {"kind": "tick"}))
 
     def _background(self, scope: str, input: InputKind, future: asyncio.Future[None]) -> asyncio.Future[None]:
         """Observes a failure of background work as a ``failed`` trace. The returned future never fails."""
+        if (intake := self._intakes.get(scope)) is not None:
+            intake.track_receipt(future)
         settled: asyncio.Future[None] = asyncio.get_running_loop().create_future()
 
         def done(f: asyncio.Future[None]) -> None:
@@ -369,12 +403,21 @@ class Attend:
         self._releases.add(released)
         released.add_done_callback(self._releases.discard)
 
-    def _call(self, lease_until: float, work: Awaitable[None]) -> None:
-        task = asyncio.ensure_future(work)
+    def _call(self, scope: str, lease_until: float, work: Awaitable[None]) -> None:
+        intake = self._intakes.get(scope)
+        task = asyncio.ensure_future(intake.callback(work) if intake is not None else work)
         self._calls[task] = lease_until
         task.add_done_callback(lambda t: self._calls.pop(t, None))
 
     def _execute(self, scope: str, effect: Effect) -> None:
+        intake = self._intakes.get(scope)
+        if intake is not None and intake.closed and effect["kind"] != "trace":
+            if effect["kind"] == "judge":
+                self._release(scope, {"kind": "judgeReleased", "batchId": effect["batchId"], "attempt": effect["attempt"]})
+            else:
+                delivery = effect["delivery"]
+                self._release(scope, {"kind": "deliveryReleased", "deliveryId": delivery["item"]["id"], "attempt": delivery["phase"]["attempt"]})
+            return
         if effect["kind"] == "trace":
             self._observe(effect["trace"])
         elif effect["kind"] == "judge":
@@ -388,23 +431,35 @@ class Attend:
                 )
                 return
             self._judges += 1
-            controller = AbortController()
-            cancel = self._clock.at(self._clock.now() + self._policy["judgeTimeoutMs"], lambda: controller.abort(Exception("attend: judge timed out")))
-            self._call(effect["leaseUntil"], self._run_judge(scope, effect, controller, cancel))
+            controller, cancel = self._effect_controller(scope, self._clock.now() + self._policy["judgeTimeoutMs"], "attend: judge timed out")
+            self._call(scope, effect["leaseUntil"], self._run_judge(scope, effect, controller, cancel))
         else:
             if self._running is None:
                 self._release(scope, {"kind": "deliveryReleased", "deliveryId": effect["delivery"]["item"]["id"], "attempt": effect["delivery"]["phase"]["attempt"]})
                 return
-            controller = AbortController()
-            cancel = self._clock.at(effect["delivery"]["phase"]["leaseUntil"], lambda: controller.abort(Exception("attend: delivery timed out")))
-            self._call(effect["delivery"]["phase"]["leaseUntil"], self._run_deliver(scope, effect, controller, cancel))
+            controller, cancel = self._effect_controller(scope, effect["delivery"]["phase"]["leaseUntil"], "attend: delivery timed out")
+            self._call(scope, effect["delivery"]["phase"]["leaseUntil"], self._run_deliver(scope, effect, controller, cancel))
+
+    def _effect_controller(self, scope: str, deadline: float, message: str) -> tuple[AbortController, Callable[[], None]]:
+        controller = AbortController()
+        timer = self._clock.at(deadline, lambda: controller.abort(Exception(message)))
+        intake = self._intakes.get(scope)
+        remove = intake.completion_signal.add_listener(lambda: controller.abort(intake.completion_signal.reason)) if intake is not None else lambda: None
+
+        def cancel() -> None:
+            timer()
+            remove()
+
+        return controller, cancel
 
     async def _run_judge(self, scope: str, effect: JudgeEffect, controller: AbortController, cancel: Callable[[], None]) -> None:
         batch_id = effect["batchId"]
         attempt = effect["attempt"]
         signal = controller.signal
-        result: Input
+        result: JudgedInput | JudgeFailedInput
         try:
+            if scope in self._intakes:
+                signal.throw_if_aborted()
             live: JudgeContext = await _maybe(self._context(scope, signal)) if self._context is not None else {}
             routes: list[OfferedRoute] = []
             for route in effect["offered"]:
@@ -422,10 +477,16 @@ class Attend:
             }
             if self._guidance is not None:
                 input["guidance"] = self._guidance
+            if scope in self._intakes:
+                signal.throw_if_aborted()
             images = await self._captured(scope, batch_id, signal) if self._capture is not None else []
             if images:
                 input["images"] = images
+            if scope in self._intakes:
+                signal.throw_if_aborted()
             judgment: object = await self._judge(input, signal)
+            if scope in self._intakes:
+                signal.throw_if_aborted()
             if _is_judgment(judgment):
                 threshold = None if self._act_threshold is None else threshold_route(judgment, effect["offered"], self._act_threshold)
                 if threshold is not None:
@@ -439,7 +500,7 @@ class Attend:
         finally:
             cancel()
             self._judges -= 1
-        await self._background(scope, "judged", self._scopes.submit(scope, result))
+        await self._background(scope, "judged", self._submit_completion(scope, result))
 
     async def _captured(self, scope: str, batch_id: str, judge_signal: AbortSignal) -> list[JudgeImage]:
         capture = self._capture
@@ -460,26 +521,60 @@ class Attend:
     async def _run_deliver(self, scope: str, effect: DeliverEffect, controller: AbortController, cancel: Callable[[], None]) -> None:
         item = effect["delivery"]["item"]
         attempt = effect["delivery"]["phase"]["attempt"]
-        result: Input
+        result: DeliveredInput | DeliveryFailedInput
         try:
+            if scope in self._intakes:
+                controller.signal.throw_if_aborted()
             sink = self._sink
             handler = self._dead_letter
             if item["kind"] == "decision" and not isinstance(sink, str):
-                await _maybe(sink.deliver(await copy_decision(item["decision"]), controller.signal))
+                decision = await copy_decision(item["decision"])
+                if scope in self._intakes:
+                    controller.signal.throw_if_aborted()
+                await _maybe(sink.deliver(decision, controller.signal))
             elif item["kind"] == "deadLetter" and not isinstance(handler, str):
-                await _maybe(handler(await copy_letter(item["letter"]), controller.signal))
+                letter = await copy_letter(item["letter"])
+                if scope in self._intakes:
+                    controller.signal.throw_if_aborted()
+                await _maybe(handler(letter, controller.signal))
             result = {"kind": "delivered", "deliveryId": item["id"], "attempt": attempt}
         except Exception as error:
             result = {"kind": "deliveryFailed", "deliveryId": item["id"], "attempt": attempt, "message": message_of(error), "permanent": is_permanent(error)}
         finally:
             cancel()
-        await self._background(scope, "delivered", self._scopes.submit(scope, result))
+        await self._background(scope, "delivered", self._submit_completion(scope, result))
 
     # ─── sources ─────────────────────────────────────────────────────────────
 
+    def _submit_completion(self, scope: str, result: EffectResult) -> asyncio.Future[None]:
+        intake = self._intakes.get(scope)
+        if intake is None:
+            return self._scopes.submit(scope, result)
+        release: ReleasedInput
+        if result["kind"] == "judged" or result["kind"] == "judgeFailed":
+            release = {"kind": "judgeReleased", "batchId": result["batchId"], "attempt": result["attempt"]}
+        else:
+            release = {"kind": "deliveryReleased", "deliveryId": result["deliveryId"], "attempt": result["attempt"]}
+        if intake.closed:
+            return self._scopes.submit(scope, release)
+        signal = intake.completion_signal
+        pending = self._scopes.submit(scope, result, signal=signal)
+
+        async def finish() -> None:
+            try:
+                await pending
+            except BaseException as error:
+                if not signal.aborted or error is not signal.reason:
+                    raise
+                await self._scopes.submit(scope, release)
+
+        return asyncio.create_task(finish())
+
     async def attach(self, scope: str, source: Source, *, signal: AbortSignal | None = None) -> None:
         """Subscribes ``scope`` to ``source`` from its persisted cursor, and resubscribes after a backoff until stopped."""
-        slot = f"{scope}\n{source.key}"
+        if scope in self._intakes:
+            raise IntakeError("attend: scope has exclusive intake")
+        slot = (scope, source.key)
         if slot in self._attached:
             raise RuntimeError(f'attend: source "{source.key}" is already attached to scope "{scope}"')
         self._attached.add(slot)
@@ -609,6 +704,8 @@ class Attend:
             self._observe({"kind": "failed", "scope": "*", "input": "tick", "message": message_of(error)})
 
     def _on_abort(self) -> None:
+        for intake in self._intakes.values():
+            intake.fence()
         self._running = None
         self._scheduler.stop()
         for source in list(self._sources):
@@ -645,6 +742,7 @@ class Attend:
         for task in list(self._calls):
             if not task.done():
                 task.cancel()
+        await asyncio.gather(*(intake.fence() for intake in self._intakes.values()), return_exceptions=True)
 
     async def _settled_or_expired(self, task: asyncio.Task[None], lease_until: float) -> None:
         if lease_until <= self._clock.now() or task.done():

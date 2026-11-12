@@ -1,5 +1,11 @@
 # Shell changes from the frozen shell
 
+## Serial intake
+
+The optional serial intake owns registration, asynchronous preparation and immediate effects for one scope. It gives registered raw work precedence over an idle deferred timer and suppresses the pre-input catch-up tick for that owned input only. The existing reducer tick runs after a nonempty batch. Ordinary input and frozen differential cases retain their prior scheduling.
+
+The queue, callbacks and catch-up metadata are local and are never stored. Persisted inputs and reducer revision 3 are unchanged. Closing fences unapplied completion results and joins their native release writes. This is local ordering, not distributed scope ownership. [Serial intake](docs/reference.md#serial-intake) defines the boundary and limits.
+
 ## Continuous quiet duration
 
 An optional `Event.quietForMs` gives a continuous event its own quiet duration. Once any continuous entry supplies it, the continuous deadline is the latest of the entries' individual end times. Entries without a duration use the policy's `streamGapMs`. Other kinds keep their independent triggers. With no explicit duration, the frozen default behavior remains unchanged, including backwards clocks.
@@ -93,6 +99,7 @@ A Python coroutine runs on without yielding until it reaches real I/O, while eve
 
 ## Intake
 
+- Python exposes `Attend.open_intake`; TypeScript exposes `openIntake` from its Node-only `/intake` entry. Both register synchronously. Cancelling a Python submission future detaches the observer, while its explicit abort signal withdraws work. Python `close()` fences synchronously and returns a cancellation-shielded coroutine; TypeScript returns the shared completion promise.
 - `push`, `flush` and `end` return asyncio futures and take their input when called, as the TypeScript promises do, so concurrent pushes merge and group exactly as there. Each caller gets a future of its own, so cancelling one never cancels another push merged into the same input. The input is still applied.
 - `run()` starts when called, as in TypeScript, and returns the coroutine to await or run as a task, so `stop()` straight after `create_task(attend.run())` stops it.
 - Event data must hold JSON values: dicts with string keys, lists or tuples, strings, ints, floats, booleans and None. NaN and the infinities become null and -0.0 becomes 0, as JSON writes them. Any other value raises `TypeError`, where TypeScript would call its `toJSON` (a `Date`) or drop it (`undefined`, a function).

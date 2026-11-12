@@ -1,4 +1,4 @@
-import type { Clock, DeadLetter, Decision, DeliveredRoute, Effect, Event, Input, JsonObject, Judge, JudgeImage, Kind, Route, ScopeRecord, ScopeState, SettlePolicy, DecisionAppend, LoggedInput, Sink, Source, Trace } from '../core/types.js';
+import type { Clock, DeadLetter, Decision, DeliveredRoute, Effect, Event, Input, JsonObject, Judge, JudgeImage, Kind, Route, ScopeRecord, ScopeState, SettlePolicy, DecisionAppend, LoggedInput, Sink, Source, SourceBatch, Trace } from '../core/types.js';
 import type { DecisionKind, DecisionRow, ScopeStore, ScopeWrite, SerializedWrite } from '../store/types.js';
 
 /** A handler for a window that exhausted judge or sink delivery. */
@@ -11,9 +11,9 @@ export interface JudgeContext {
   predicates?: Record<string, string>;
 }
 
-/** Process-wide intake limits. */
+/** Intake limits shared by scopes in one engine. */
 export interface AdmissionOptions {
-  /** Raw, loading and unapplied inputs per process before push rejects with BackpressureError. Default 20,000. */
+  /** Registered preparation, loading and unapplied inputs per engine before admission rejects. Default 20,000. */
   maxQueuedInputs?: number;
   /** Shed load once scheduler lag exceeds this many ms. */
   maxLagMs?: number;
@@ -111,6 +111,20 @@ export interface Attend {
   stop(): Promise<void>;
 }
 
+export type Prepare = (signal: AbortSignal) => Promise<SourceBatch>;
+
+export interface IntakeOptions {
+  /** Queued and active submissions for this handle. Default 20,000. */
+  capacity?: number;
+}
+
+export interface Intake {
+  /** Register before returning; await the input and its immediate causal work. */
+  submit(prepare: Prepare, options?: { source?: string; signal?: AbortSignal }): Promise<void>;
+  /** Fence synchronously and join owned work. The handle cannot reopen. */
+  close(): Promise<void>;
+}
+
 /** An input and its callers, retained until commit or abandonment. */
 export interface RawInput {
   input: Input;
@@ -121,6 +135,7 @@ export interface RawInput {
   reject(error: unknown): void;
   count: number;
   conflicts: number;
+  catchUp: boolean;
 }
 
 /** The owned state, queued callers and persistence accounting for one scope. */

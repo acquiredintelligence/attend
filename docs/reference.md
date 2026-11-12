@@ -86,6 +86,52 @@ When every continuous entry omits `quietForMs`, existing timing remains unchange
 
 attend picks the route, and your sink carries it out. `routes()` makes you write a handler for each of the four delivered routes.
 
+## Serial intake
+
+Use serial intake when asynchronous preparation belongs to a scope's event order. It registers raw work before preparation starts, then runs one preparation and its immediate effects at a time. Ordinary `push` keeps its existing behavior.
+
+In Node, import `openIntake` from `@acquiredintelligence/attend/intake`. This optional entry uses Node's async context; the default package entry does not import it. Open the handle before this engine has touched the scope through input, attachment or a runner sweep. `inspect` only reads the store and does not claim a scope. Start `run()` before submitting; it starts synchronously when called.
+
+```ts
+import { createAttend } from '@acquiredintelligence/attend';
+import { openIntake } from '@acquiredintelligence/attend/intake';
+
+const attend = createAttend({
+  kind: { message: 'flush' },
+  judge: async () => ({ route: 'note' }),
+  sink: 'log',
+});
+const intake = openIntake(attend, 'channel', { capacity: 100 });
+const running = attend.run();
+try {
+  await intake.submit(async (signal) => {
+    signal.throwIfAborted();
+    return {
+      events: [{ id: 'a', name: 'message', at: Date.now(), data: {} }],
+      cursor: '1',
+    };
+  }, { source: 'feed' });
+} finally {
+  await intake.close();
+  await attend.stop();
+  await running;
+}
+```
+
+`submit(prepare, { source?, signal? })` registers synchronously and returns a promise. Preparation returns a native `SourceBatch`; provide `source` to commit its cursor with the events. An empty batch can advance the cursor without settling a window. A preparation error commits nothing. Keep preparation free of writes or other external effects, and honor its abort signal.
+
+A timer claims the scope before its write starts. During preparation or immediate effects, timer wakes coalesce. Registered raw work gets the next turn before an idle deferred timer, which checks the current deadline again. An admitted nonempty batch uses the existing reducer tick after admission. No stored window policy changes.
+
+The promise covers the input write and the immediate chain of judgments, deliveries and their completion, release or deferral writes. A failed immediate write rejects it. A persisted wait or retry with a future deadline releases the turn; the promise does not wait for that future attempt or an open window's quiet deadline. A cursor can therefore already be committed when a later effect write fails. A caller that retries must supply stable event ids and make external delivery idempotent.
+
+An opted-in scope refuses ordinary `push`, `attach`, `flush` and `end`, including after close. Same-engine, same-scope `submit` or `close` from preparation, context, judge or delivery rejects with `IntakeError`; awaiting it would wait on itself. Other scopes progress independently. Do not create cycles by awaiting each other's intakes from callbacks.
+
+`capacity` is a positive safe integer, default 20,000. It bounds queued and active submissions on this handle. Registered preparation also shares `admission.maxQueuedInputs` with ordinary traffic in this engine. The reservation transfers into normal input admission without double charging. These are counts per engine, not byte limits or limits across multiple engines. Full queues reject with `BackpressureError`; they do not silently drop work.
+
+Abort before application prevents event and cursor admission. An input already applied may still commit; abort does not roll it back. `close()` fences new work synchronously, aborts preparation and active effect signals, and waits for owned immediate work. Late preparation results are discarded. Normal effect results still awaiting application become native releases after close. Close cannot undo an external delivery, and a callback or store that never returns can keep it pending. Repeated close calls join the same cleanup.
+
+The handle is terminal after close or engine shutdown. Recreate the engine and open a new handle before running to resume committed state. Raw registrations and callbacks are not durable. Snapshots and tails contain only the existing reducer inputs; another runtime can read them without an intake. This provides local ordering in one engine, not ownership across processes sharing a store.
+
 ## Guarantees
 
 - **One snapshot and a short tail per scope.** The snapshot holds the open window, the judge slot and the outbox. A write appends the inputs that changed state, and a snapshot replaces the tail once it grows past the snapshot's own size. A source's cursor commits in the same write as the events it covers.
