@@ -1,0 +1,134 @@
+"""A withdrawn receipt and a finished preparation callback are different facts."""
+
+import asyncio
+
+import pytest
+
+from aqi_attend import AbortController, AbortSignal, IntakeError, SourceBatch, create_attend
+from aqi_attend.signal import AbortError
+from aqi_attend.testing import fake_clock, scripted_judge
+
+
+@pytest.mark.parametrize("via", ["close", "stop", "cancel_runner"])
+async def test_close_joins_cooperative_preparation_cleanup(via: str) -> None:
+    clock = fake_clock()
+    engine = create_attend(clock=clock, kind={}, judge=scripted_judge([]), sink="log")
+    intake = engine.open_intake("scope")
+    running = asyncio.create_task(engine.run())
+    started, cleaning, release, ended = [asyncio.Event() for _ in range(4)]
+
+    async def prepare(signal: AbortSignal) -> SourceBatch:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaning.set()
+            await release.wait()
+            ended.set()
+        return {"events": []}
+
+    try:
+        receipt = intake.submit(prepare)
+        await started.wait()
+        closing = asyncio.create_task(intake.close() if via == "close" else engine.stop())
+        await cleaning.wait()
+        await clock.advance(0)
+        assert receipt.done()
+        with pytest.raises(IntakeError):
+            await receipt
+        assert not closing.done() and not ended.is_set()
+        if via == "cancel_runner":
+            running.cancel()
+            await clock.advance(0)
+            assert not closing.done()
+            other = asyncio.create_task(intake.close())
+            await clock.advance(0)
+            assert not other.done()
+        release.set()
+        await closing
+        await intake.close()
+        assert ended.is_set()
+        assert await engine.inspect("scope") is None
+    finally:
+        release.set()
+        await engine.stop()
+        await asyncio.gather(running, return_exceptions=True)
+
+
+async def test_close_joins_an_earlier_withdrawn_callback_without_delaying_its_receipt() -> None:
+    clock = fake_clock()
+    engine = create_attend(clock=clock, kind={}, judge=scripted_judge([]), sink="log", max_queued_inputs=1)
+    intake = engine.open_intake("scope")
+    running = asyncio.create_task(engine.run())
+    started, cleaning, release = [asyncio.Event() for _ in range(3)]
+    controller = AbortController()
+
+    async def prepare(signal: AbortSignal) -> SourceBatch:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaning.set()
+            await release.wait()
+        return {"events": [], "cursor": "late"}
+
+    async def next_input(signal: AbortSignal) -> SourceBatch:
+        return {"events": [], "cursor": "kept"}
+
+    try:
+        receipt = intake.submit(prepare, source="feed", signal=controller.signal)
+        await started.wait()
+        controller.abort()
+        with pytest.raises(AbortError):
+            await receipt
+        await cleaning.wait()
+        await intake.submit(next_input, source="feed")
+        closing = asyncio.create_task(intake.close())
+        cancelled_waiter = asyncio.create_task(intake.close())
+        await clock.advance(0)
+        cancelled_waiter.cancel()
+        await asyncio.gather(cancelled_waiter, return_exceptions=True)
+        assert not closing.done()
+        release.set()
+        await closing
+        record = await engine.inspect("scope")
+        assert record is not None and record["cursors"] == {"feed": "kept"}
+    finally:
+        release.set()
+        await engine.stop()
+        await running
+
+
+async def test_abort_during_callback_creation_cancels_the_returned_task() -> None:
+    clock = fake_clock()
+    engine = create_attend(clock=clock, kind={}, judge=scripted_judge([]), sink="log")
+    intake = engine.open_intake("scope")
+    running = asyncio.create_task(engine.run())
+    controller = AbortController()
+    called: list[bool] = []
+    created: list[asyncio.Task[SourceBatch]] = []
+
+    async def work() -> SourceBatch:
+        called.append(True)
+        await asyncio.Event().wait()
+        return {"events": []}
+
+    def prepare(signal: AbortSignal) -> asyncio.Task[SourceBatch]:
+        controller.abort()
+        task = asyncio.create_task(work())
+        created.append(task)
+        return task
+
+    try:
+        with pytest.raises(AbortError):
+            await intake.submit(prepare, signal=controller.signal)
+        await clock.advance(0)
+        assert called == []
+        assert created[0].cancelled()
+        await intake.close()
+    finally:
+        for task in created:
+            task.cancel()
+        await asyncio.gather(*created, return_exceptions=True)
+        await engine.stop()
+        await running

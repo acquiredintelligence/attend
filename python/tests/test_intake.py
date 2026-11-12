@@ -703,9 +703,12 @@ async def test_late_preparation_cannot_admit_after_withdrawal() -> None:
         controller.abort()
         with pytest.raises(AbortError):
             await pending
-        await intake.close()
+        closing = asyncio.create_task(intake.close())
+        await drain()
+        assert not closing.done()
         release.set()
         await returned.wait()
+        await closing
         await drain()
         assert await attend.inspect("s") is None
     finally:
