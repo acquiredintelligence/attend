@@ -279,9 +279,13 @@ class Scopes:
         state = slot.state
         assert state is not None
         slot.last_touch = self._clock.now()
+        if raw.signal is not None and raw.signal.aborted:
+            reason = raw.signal.reason
+            assert reason is not None
+            self._reject(raw, reason)
+            self._request_flush()
+            return
         try:
-            if raw.signal is not None:
-                raw.signal.throw_if_aborted()
             input = raw.input
             policy = self._config.policy
             if input["kind"] == "events" and input["events"]:

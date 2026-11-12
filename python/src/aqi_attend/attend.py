@@ -24,6 +24,7 @@ from .core.types import (
     DeliveredRoute,
     DeliverEffect,
     DeliveryFailedInput,
+    DeliveryReleasedInput,
     Effect,
     Event,
     EventsInput,
@@ -36,6 +37,7 @@ from .core.types import (
     JudgeFailedInput,
     JudgeImage,
     JudgeInput,
+    JudgeReleasedInput,
     Judgment,
     Kind,
     KindedEvent,
@@ -60,7 +62,7 @@ from .store.memory import memory_store
 from .store.types import DecisionKind, ScopeStore
 
 type MaybeAwaitable[T] = T | Awaitable[T]
-type EffectResult = JudgedInput | JudgeFailedInput | DeliveredInput | DeliveryFailedInput
+type EffectResult = JudgedInput | JudgeFailedInput | DeliveredInput | DeliveryFailedInput | ReleasedInput
 
 
 class JudgeContext(TypedDict, total=False):
@@ -456,7 +458,7 @@ class Attend:
         batch_id = effect["batchId"]
         attempt = effect["attempt"]
         signal = controller.signal
-        result: JudgedInput | JudgeFailedInput
+        result: JudgedInput | JudgeFailedInput | JudgeReleasedInput
         try:
             if scope in self._intakes:
                 signal.throw_if_aborted()
@@ -495,12 +497,17 @@ class Attend:
                 result = {"kind": "judged", "batchId": batch_id, "attempt": attempt, "judgment": cast(Judgment, clone(chosen))}
             else:
                 result = {"kind": "judgeFailed", "batchId": batch_id, "attempt": attempt, "message": "malformed judgment", "permanent": False}
+        except asyncio.CancelledError:
+            intake = self._intakes.get(scope)
+            if intake is None or not intake.closed:
+                raise
+            result = {"kind": "judgeReleased", "batchId": batch_id, "attempt": attempt}
         except Exception as error:
             result = {"kind": "judgeFailed", "batchId": batch_id, "attempt": attempt, "message": message_of(error), "permanent": is_permanent(error)}
         finally:
             cancel()
             self._judges -= 1
-        await self._background(scope, "judged", self._submit_completion(scope, result))
+        await self._background(scope, "judgeReleased" if result["kind"] == "judgeReleased" else "judged", self._submit_completion(scope, result))
 
     async def _captured(self, scope: str, batch_id: str, judge_signal: AbortSignal) -> list[JudgeImage]:
         capture = self._capture
@@ -521,7 +528,7 @@ class Attend:
     async def _run_deliver(self, scope: str, effect: DeliverEffect, controller: AbortController, cancel: Callable[[], None]) -> None:
         item = effect["delivery"]["item"]
         attempt = effect["delivery"]["phase"]["attempt"]
-        result: DeliveredInput | DeliveryFailedInput
+        result: DeliveredInput | DeliveryFailedInput | DeliveryReleasedInput
         try:
             if scope in self._intakes:
                 controller.signal.throw_if_aborted()
@@ -538,15 +545,22 @@ class Attend:
                     controller.signal.throw_if_aborted()
                 await _maybe(handler(letter, controller.signal))
             result = {"kind": "delivered", "deliveryId": item["id"], "attempt": attempt}
+        except asyncio.CancelledError:
+            intake = self._intakes.get(scope)
+            if intake is None or not intake.closed:
+                raise
+            result = {"kind": "deliveryReleased", "deliveryId": item["id"], "attempt": attempt}
         except Exception as error:
             result = {"kind": "deliveryFailed", "deliveryId": item["id"], "attempt": attempt, "message": message_of(error), "permanent": is_permanent(error)}
         finally:
             cancel()
-        await self._background(scope, "delivered", self._submit_completion(scope, result))
+        await self._background(scope, "deliveryReleased" if result["kind"] == "deliveryReleased" else "delivered", self._submit_completion(scope, result))
 
     # ─── sources ─────────────────────────────────────────────────────────────
 
     def _submit_completion(self, scope: str, result: EffectResult) -> asyncio.Future[None]:
+        if result["kind"] == "judgeReleased" or result["kind"] == "deliveryReleased":
+            return self._scopes.submit(scope, result)
         intake = self._intakes.get(scope)
         if intake is None:
             return self._scopes.submit(scope, result)
