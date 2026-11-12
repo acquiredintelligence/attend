@@ -1,0 +1,115 @@
+import { expect, test } from 'vitest';
+import { createAttend, memoryStore } from '../src/index.js';
+import { openIntake } from '../src/intake.js';
+import type { Event, SettlePolicy } from '../src/types.js';
+import { fakeClock, scriptedJudge } from '../src/testing.js';
+
+type Answer = 'wait' | 'queue' | 'fail';
+interface Offer { at: number; ids: string[]; wait: boolean; waits: number }
+const event = (id: string, observedAt: number, quietForMs = 10): Event => ({ id, at: observedAt, observedAt, quietForMs, name: 'reading', text: 'q'.repeat(20), data: {} });
+
+async function run(answers: Answer[], body: (clock: ReturnType<typeof fakeClock>, put: (events: Event[]) => Promise<void>, calls: Offer[]) => Promise<void>, settle: Partial<SettlePolicy> = {}, start = 0) {
+  const clock = fakeClock(start), calls: Offer[] = [];
+  const attend = createAttend({ clock, kind: { reading: 'continuous' }, sink: 'log',
+    settle: { continuation: 'accumulate', streamGapMs: 10, waitHorizonMs: 20, maxWaits: 2, retryBackoffMs: [30, 60], ...settle },
+    judge: async (input) => {
+      calls.push({ at: clock.now(), ids: input.window.events.map((e) => e.id), wait: input.routes.some((r) => r.route === 'wait'), waits: input.window.waits });
+      const answer = answers[calls.length - 1] ?? 'queue';
+      if (answer === 'fail') throw new Error('controlled outage');
+      return { route: answer };
+    },
+  });
+  const intake = openIntake(attend, 's'), running = attend.run();
+  try { await body(clock, (events) => intake.submit(async () => ({ events })), calls); }
+  finally { await intake.close(); await attend.stop(); await running; }
+}
+
+test('horizon reoffers until the wait allowance is used', async () => {
+  await run(['wait', 'wait', 'queue'], async (clock, put, calls) => {
+    await put([event('a', 0)]);
+    await clock.advance(50);
+    expect(calls).toEqual([
+      { at: 10, ids: ['a'], wait: true, waits: 0 },
+      { at: 30, ids: ['a'], wait: true, waits: 1 },
+      { at: 50, ids: ['a'], wait: false, waits: 2 },
+    ]);
+  });
+});
+
+test.each([10, 100])('retry absorbs fresh events at not-before with quiet duration %s', async (quiet) => {
+  await run(['fail', 'queue'], async (clock, put, calls) => {
+    await put([event('a', 0)]);
+    await clock.advance(15);
+    await put([event('b', 15, quiet)]);
+    await clock.advance(24);
+    expect(calls).toHaveLength(1);
+    await clock.advance(1);
+    expect(calls).toEqual([
+      { at: 10, ids: ['a'], wait: true, waits: 0 },
+      { at: 40, ids: ['a', 'b'], wait: true, waits: 0 },
+    ]);
+  });
+});
+
+test('a wait retains the provider failure allowance', async () => {
+  await run(['fail', 'wait', 'fail', 'queue'], async (clock, put, calls) => {
+    await put([event('a', 0)]);
+    await clock.advance(120);
+    expect(calls.map((c) => c.at)).toEqual([10, 40, 60, 120]);
+    expect(calls.map((c) => c.waits)).toEqual([0, 0, 1, 1]);
+  });
+});
+
+test.each([1, 2])('merged count evaluates all entries with %s fresh acts', async (fresh) => {
+  await run(['fail', 'queue'], async (clock, put, calls) => {
+    await put([event('a', 0)]);
+    await clock.advance(15);
+    await put(Array.from({ length: fresh }, (_, i) => event(`b${i}`, 15, 100)));
+    await clock.advance(25);
+    expect(calls[1]).toEqual({ at: 40, ids: ['a', ...Array.from({ length: fresh }, (_, i) => `b${i}`)], wait: fresh === 1, waits: 0 });
+  }, { maxEvents: 2 });
+});
+
+test('age withholds wait at the initial quiet tie', async () => {
+  await run(['queue'], async (clock, put, calls) => {
+    await put([event('a', 0)]);
+    await clock.advance(10);
+    expect(calls).toEqual([{ at: 10, ids: ['a'], wait: false, waits: 0 }]);
+  }, { maxWindowMs: 10 });
+});
+
+test('an older absorbed observation participates in age eligibility', async () => {
+  await run(['fail', 'queue'], async (clock, put, calls) => {
+    await put([event('a', 100)]);
+    await clock.advance(20);
+    await put([event('b', 0, 1000)]);
+    expect(calls).toHaveLength(1);
+    await clock.advance(20);
+    expect(calls[1]).toEqual({ at: 140, ids: ['a', 'b'], wait: false, waits: 0 });
+  }, { maxWindowMs: 100 }, 100);
+});
+
+test.each<Answer>(['wait', 'fail'])('combined byte threshold is enforced after %s', async (answer) => {
+  await run([answer, 'queue'], async (clock, put, calls) => {
+    await put([event('a', 0)]);
+    await clock.advance(15);
+    await put([event('b', 15, 100)]);
+    if (answer === 'fail') { expect(calls).toHaveLength(1); await clock.advance(25); }
+    expect(calls[1]).toEqual({ at: answer === 'wait' ? 15 : 40, ids: ['a', 'b'], wait: false, waits: answer === 'wait' ? 1 : 0 });
+  }, { maxWindowBytes: 100 });
+});
+
+test.each(['separate', 'accumulate'] as const)('cannot change continuation with an open window from %s', async (from) => {
+  const store = memoryStore(), clock = fakeClock();
+  const config = { store, clock, kind: { reading: 'continuous' } as const, judge: scriptedJudge([{ route: 'queue' }]), sink: 'log' as const };
+  const previous = createAttend({ ...config, settle: { continuation: from } });
+  await previous.push('s', event('a', 0));
+  const before = await previous.inspect('s');
+  const next = createAttend({ ...config, settle: { continuation: from === 'separate' ? 'accumulate' : 'separate' } });
+  await expect(next.push('s', event('b', 0))).rejects.toThrow('continuation');
+  expect(await next.inspect('s')).toEqual(before);
+});
+
+test.each([null, false, 0, 'other'])('refuses invalid continuation %s', (value) => {
+  expect(() => Reflect.apply(createAttend, undefined, [{ kind: {}, judge: scriptedJudge([]), sink: 'log', settle: { continuation: value } }])).toThrow('continuation');
+});

@@ -61,6 +61,8 @@ export type SettleReason = 'closing' | 'flush' | 'stream_quiet' | 'passive_quiet
 
 /** Round starting points, not tuned values. Every number is in ms unless it is a count. */
 export interface SettlePolicy {
+  /** Keep one unresolved window through waits and retries. Omitted means separate. */
+  continuation?: 'separate' | 'accumulate';
   closingGraceMs: number;
   streamGapMs: number;
   passiveQuietMs: number;

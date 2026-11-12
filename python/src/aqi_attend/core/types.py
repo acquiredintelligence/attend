@@ -50,6 +50,7 @@ class Entry(KindedEvent):
 class SettlePolicy(TypedDict):
     """Round starting points, not tuned values. Every number is in ms unless it is a count."""
 
+    continuation: NotRequired[Literal["separate", "accumulate"]]
     closingGraceMs: float
     streamGapMs: float
     passiveQuietMs: float

@@ -104,6 +104,7 @@ class Source(Protocol):
 
 
 _SETTLE_KEYS: dict[str, str] = {
+    "continuation": "continuation",
     "closing_grace_ms": "closingGraceMs",
     "stream_gap_ms": "streamGapMs",
     "passive_quiet_ms": "passiveQuietMs",
