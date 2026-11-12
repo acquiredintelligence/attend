@@ -800,3 +800,25 @@ async def test_cancelled_error_on_close_releases_for_immediate_recovery(during: 
         await resumed_intake.close()
         await recovered.stop()
         await resumed
+
+
+async def test_cancelled_error_signal_during_load_refuses_unapplied_input() -> None:
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class Store(MemoryStore):
+        async def load(self, scope: str):
+            entered.set()
+            await release.wait()
+            return await super().load(scope)
+
+    attend = create_attend(store=Store(), clock=fake_clock(), kind={}, judge=scripted_judge([]), sink="log")
+    controller = AbortController()
+    pending = attend._scopes.submit("s", {"kind": "events", "events": [], "source": "feed", "cursor": "bad"}, True, controller.signal)  # pyright: ignore[reportPrivateUsage]
+    await entered.wait()
+    controller.abort(asyncio.CancelledError())
+    release.set()
+    await drain()
+    assert pending.done()
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+    assert await attend.inspect("s") is None
