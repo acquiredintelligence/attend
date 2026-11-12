@@ -46,6 +46,7 @@ from .errors import ConflictError, is_permanent, message_of
 from .shell.budget import window_bytes_for
 from .shell.copy import copy_decision, copy_event, copy_letter, copy_window
 from .shell.decisions import DecisionCursorPage, read_decisions
+from .shell.intake import Intake
 from .shell.read import read_record
 from .shell.scheduler import Scheduler
 from .shell.scope import Scopes
@@ -236,6 +237,10 @@ class Attend:
     @property
     def store(self) -> ScopeStore:
         return self._store
+
+    def open_intake(self, scope: str, *, capacity: int = 20_000) -> Intake:
+        """Own local input preparation and immediate work for an untouched scope."""
+        raise NotImplementedError
 
     @property
     def running(self) -> bool:
