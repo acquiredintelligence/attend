@@ -271,6 +271,8 @@ async def run_scenario(scenario: Mapping[str, Any]) -> dict[str, Any]:
                 source_batch: SourceBatch = {"events": events}
                 if "cursor" in step:
                     source_batch["cursor"] = step["cursor"]
+                if step.get("truncated"):
+                    source_batch["truncated"] = True
 
                 async def prepare(
                     signal: AbortSignal, batch: SourceBatch = source_batch, delay: float = step.get("prepareMs", 0), fail: str | None = step.get("prepareFail")

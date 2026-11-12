@@ -180,7 +180,7 @@ def test_refuses_invalid_continuation(value: object) -> None:
 LEGACY: dict[str, Any] = json.loads((Path(__file__).parents[2] / "conformance/fixtures/continuation-legacy.json").read_text())
 
 
-@pytest.mark.parametrize("control", ["flush", "end"])
+@pytest.mark.parametrize("control", ["flush", "end", "held-end"])
 async def test_explicit_control_retains_meaning_at_retry(control: str) -> None:
     clock = fake_clock()
     calls: list[tuple[float, str, bool]] = []
@@ -203,7 +203,8 @@ async def test_explicit_control_retains_meaning_at_retry(control: str) -> None:
         await clock.advance(24)
         assert len(calls) == 1
         await clock.advance(1)
-        assert calls[1] == (40, "forced" if control == "flush" else "closing", control == "end")
+        reason = "forced" if control == "flush" else "closing" if control == "end" else "stream_quiet"
+        assert calls[1] == (40, reason, control != "flush")
         record = await engine.inspect("s")
         assert record is not None and record["buffer"]["forcedAt"] is None
     finally:

@@ -213,11 +213,8 @@ function sweep(ctx: Ctx, state: ScopeState): void {
   if (ctx.config.policy.continuation === 'accumulate' && pending) {
     if (pending.phase.phase === 'retrying') {
       if (pending.phase.at <= ctx.now) {
-        if (windowSize(state.open) > 0 || state.open.forcedAt !== null) {
-          const reason = state.open.endedAt !== null ? 'closing' : pending.window.reason;
-          settleBuffer(ctx, state, reason, pending.phase.offerWait);
-        }
-        else beginJudging(ctx, state, pending.window, pending.phase, pending.phase.offerWait, pending.hash);
+        const reason = state.open.endedAt !== null ? 'closing' : pending.window.reason;
+        settleBuffer(ctx, state, reason, pending.phase.offerWait);
       }
       return;
     }
@@ -235,7 +232,7 @@ function sweep(ctx: Ctx, state: ScopeState): void {
   if (held.phase.phase === 'retrying' && held.phase.at <= ctx.now) beginJudging(ctx, state, held.window, held.phase, held.phase.offerWait, held.hash);
   else if (held.phase.phase === 'waiting' && held.phase.until <= ctx.now) {
     const offerWait = ctx.config.policy.continuation === 'accumulate' && held.window.waits < ctx.config.policy.maxWaits;
-    if (windowSize(state.open) === 0) beginJudging(ctx, state, held.window, held.phase, offerWait, held.hash);
+    if (windowSize(state.open) === 0 && ctx.config.policy.continuation !== 'accumulate') beginJudging(ctx, state, held.window, held.phase, offerWait, held.hash);
     else settleBuffer(ctx, state, held.window.reason, offerWait);
   }
 }
@@ -252,8 +249,18 @@ function settleBuffer(ctx: Ctx, state: ScopeState, fired: SettleReason, mayWait:
   let forced = open.forcedAt !== null;
   if (entries.length === 0) {
     if (open.forcedAt !== null) { open.forcedAt = null; ctx.out.changed = true; }
-    const reason = ctx.config.policy.continuation === 'accumulate' ? fired : held?.window.reason ?? fired;
-    if (held) beginJudging(ctx, state, { ...held.window, reason: settleReason(held.window.events, forced, reason) }, held.phase, false, held.hash);
+    if (held) {
+      const accumulating = ctx.config.policy.continuation === 'accumulate';
+      const reason = accumulating ? fired : held.window.reason;
+      const window = { ...held.window, reason: settleReason(held.window.events, forced, reason) };
+      if (accumulating) {
+        window.gap = held.window.gap || open.gap;
+        window.dropped = held.window.dropped + open.dropped;
+        state.open = openWindow(state.scope);
+      }
+      const offer = accumulating && mayWait && window.reason !== 'flush' && window.reason !== 'forced' && window.waits < ctx.config.policy.maxWaits;
+      beginJudging(ctx, state, window, held.phase, offer, held.hash);
+    }
     return;
   }
   const events = held ? [...held.window.events, ...entries] : entries;

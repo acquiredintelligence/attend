@@ -14,6 +14,23 @@ const advance = (ms: number) => ({ advance: ms });
 const T = 'test/attend.test.ts';
 
 export const SCENARIOS: Scenario[] = [
+  ...['gap', 'dropped'].map((metadata): Scenario => ({
+    name: `accumulating retry attributes empty ${metadata} metadata to held input`,
+    start: 0, intakes: ['s'], kinds: KINDS,
+    settle: { continuation: 'accumulate', maxWindowMs: 100, retryBackoffMs: [30] },
+    judge: { '*': { answers: [{ fail: 'outage' }, { route: 'queue' }, { route: 'queue' }] } },
+    steps: [{ submit: 's', events: [ev('a', 'drag', { quietForMs: 10 })] }, advance(15),
+      metadata === 'gap' ? { submit: 's', events: [], source: 'feed', cursor: '2', truncated: true }
+        : { submit: 's', events: [ev('old', 'out', { observedAt: -100 })], source: 'feed', cursor: '2' },
+      advance(25), { inspect: 's' }, { submit: 's', events: [ev('next', 'drag', { quietForMs: 10 })] }, advance(10)],
+  })),
+  {
+    name: 'accumulating horizon folds empty gap metadata without removing wait',
+    start: 0, intakes: ['s'], kinds: KINDS, settle: { continuation: 'accumulate', waitHorizonMs: 20 },
+    judge: { '*': { answers: [{ route: 'wait' }, { route: 'queue' }] } },
+    steps: [{ submit: 's', events: [ev('a', 'drag', { quietForMs: 10 })] }, advance(15),
+      { submit: 's', events: [], truncated: true }, advance(15), { inspect: 's' }],
+  },
   {
     name: 'accumulating horizons include fresh entries and keep wait allowance',
     start: 0, intakes: ['s'], kinds: KINDS,

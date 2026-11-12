@@ -321,11 +321,8 @@ def _sweep(ctx: _Ctx, state: ScopeState) -> None:
         phase = held.phase
         if phase["phase"] == "retrying":
             if phase["at"] <= ctx.now:
-                if state.open.entries or state.open.forced_at is not None:
-                    reason = "closing" if state.open.ended_at is not None else held.window["reason"]
-                    _settle_buffer(ctx, state, reason, phase["offerWait"])
-                else:
-                    _begin_judging(ctx, state, held.window, phase["attempt"], phase["failures"], phase["offerWait"], held.hash)
+                reason = "closing" if state.open.ended_at is not None else held.window["reason"]
+                _settle_buffer(ctx, state, reason, phase["offerWait"])
             return
         if phase["phase"] == "waiting":
             bound = _window_bound(ctx.config.policy, _continuation_entries(ctx.config.policy, state), ctx.now)
@@ -344,7 +341,7 @@ def _sweep(ctx: _Ctx, state: ScopeState) -> None:
         _begin_judging(ctx, state, held.window, phase["attempt"], phase["failures"], phase["offerWait"], held.hash)
     elif phase["phase"] == "waiting" and phase["until"] <= ctx.now:
         offer_wait = ctx.config.policy.get("continuation") == "accumulate" and held.window["waits"] < ctx.config.policy["maxWaits"]
-        if not state.open.entries:
+        if not state.open.entries and ctx.config.policy.get("continuation") != "accumulate":
             _begin_judging(ctx, state, held.window, phase["attempt"], phase.get("failures", 0), offer_wait, held.hash)
         else:
             _settle_buffer(ctx, state, held.window["reason"], offer_wait)
@@ -366,10 +363,16 @@ def _settle_buffer(ctx: _Ctx, state: ScopeState, fired: SettleReason, may_wait: 
             open.forced_at = None
             ctx.out.changed = True
         if held is not None:
-            reason = fired if ctx.config.policy.get("continuation") == "accumulate" else held.window["reason"]
+            accumulating = ctx.config.policy.get("continuation") == "accumulate"
+            reason = fired if accumulating else held.window["reason"]
             window = cast(Window, {**held.window, "reason": _settle_reason(held.window["events"], forced, reason)})
+            if accumulating:
+                window["gap"] = held.window["gap"] or open.gap
+                window["dropped"] = held.window["dropped"] + open.dropped
+                state.open = open_window(state.scope)
             attempt, failures = _counters(held)
-            _begin_judging(ctx, state, window, attempt, failures, False, held.hash)
+            offer = accumulating and may_wait and window["reason"] not in ("flush", "forced") and window["waits"] < ctx.config.policy["maxWaits"]
+            _begin_judging(ctx, state, window, attempt, failures, offer, held.hash)
         return
     events = [*held.window["events"], *entries] if held is not None else entries
     dropped = open.dropped + (held.window["dropped"] if held is not None else 0)

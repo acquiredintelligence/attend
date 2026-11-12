@@ -62,7 +62,7 @@ export interface EventSpec {
 
 export type Step =
   | { push: string; events: EventSpec[] }
-  | { submit: string; events: EventSpec[]; prepareMs?: number; source?: string; cursor?: string | null; prepareFail?: string }
+  | { submit: string; events: EventSpec[]; prepareMs?: number; source?: string; cursor?: string | null; truncated?: boolean; prepareFail?: string }
   | { closeIntake: string }
   | { advance: number }
   | { flush: string }
@@ -283,6 +283,7 @@ export async function runScenario(scenario: Scenario): Promise<Observed> {
         const intake = intakes.get(scope);
         if (!intake) throw new Error('scenario intake is not open');
         const batch: SourceBatch = { events, ...(step.cursor === undefined ? {} : { cursor: step.cursor }) };
+        if (step.truncated) batch.truncated = true;
         receipts.push(result(index, () => intake.submit(async (signal) => {
           if (step.prepareMs) await sleep(clock, step.prepareMs, signal);
           if (step.prepareFail !== undefined) throw new Error(step.prepareFail);
