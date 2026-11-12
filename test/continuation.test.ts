@@ -1,7 +1,8 @@
 import { expect, test } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { createAttend, memoryStore } from '../src/index.js';
 import { openIntake } from '../src/intake.js';
-import type { Event, SettlePolicy } from '../src/types.js';
+import type { Event, ScopeRecord, ScopeWrite, SettlePolicy, StoredScope } from '../src/types.js';
 import { fakeClock, scriptedJudge } from '../src/testing.js';
 
 type Answer = 'wait' | 'queue' | 'fail';
@@ -32,6 +33,20 @@ test('horizon reoffers until the wait allowance is used', async () => {
       { at: 10, ids: ['a'], wait: true, waits: 0 },
       { at: 30, ids: ['a'], wait: true, waits: 1 },
       { at: 50, ids: ['a'], wait: false, waits: 2 },
+    ]);
+  });
+});
+
+test('horizon absorbs fresh entries before their quiet deadline', async () => {
+  await run(['wait', 'wait', 'queue'], async (clock, put, calls) => {
+    await put([event('a', 0)]);
+    await clock.advance(25);
+    await put([event('b', 25, 100)]);
+    await clock.advance(25);
+    expect(calls).toEqual([
+      { at: 10, ids: ['a'], wait: true, waits: 0 },
+      { at: 30, ids: ['a', 'b'], wait: true, waits: 1 },
+      { at: 50, ids: ['a', 'b'], wait: false, waits: 2 },
     ]);
   });
 });
@@ -112,4 +127,26 @@ test.each(['separate', 'accumulate'] as const)('cannot change continuation with 
 
 test.each([null, false, 0, 'other'])('refuses invalid continuation %s', (value) => {
   expect(() => Reflect.apply(createAttend, undefined, [{ kind: {}, judge: scriptedJudge([]), sink: 'log', settle: { continuation: value } }])).toThrow('continuation');
+});
+
+interface LegacyCase { name: string; through: number; writes: ScopeWrite[][]; stored: StoredScope; expected: ScopeRecord }
+const legacy: { source: string; cases: LegacyCase[] } = JSON.parse(readFileSync(new URL('../conformance/fixtures/continuation-legacy.json', import.meta.url), 'utf8'));
+
+test.each(legacy.cases)('reads revision-3 $name and refuses an unresolved mode switch', async (item) => {
+  const store = memoryStore(), clock = fakeClock(item.through);
+  for (const writes of item.writes) expect(await store.commit(writes)).toEqual(writes.map(() => 'ok'));
+  expect(await store.load('scope')).toEqual(item.stored);
+  const engine = createAttend({ store, clock, kind: { reading: 'continuous' }, judge: scriptedJudge([{ route: 'queue' }]), sink: 'log', settle: { continuation: 'accumulate' } });
+  expect(await engine.inspect('scope')).toEqual(item.expected);
+  const pending = engine.push('scope', event('b', item.through));
+  if (item.name === 'complete') {
+    await pending;
+    const stored = await store.load('scope');
+    expect(stored?.snapshot?.policy.continuation).toBe('accumulate');
+    expect(stored?.snapshot?.reducer).toBe(4);
+    expect((await engine.inspect('scope'))?.recent).toEqual(item.expected.recent);
+  } else {
+    await expect(pending).rejects.toThrow('continuation');
+    expect(await store.load('scope')).toEqual(item.stored);
+  }
 });

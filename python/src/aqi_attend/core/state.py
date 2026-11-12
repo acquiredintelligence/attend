@@ -18,6 +18,8 @@ def initial_state(scope: str) -> ScopeState:
 def from_record(record: ScopeRecord, policy: SettlePolicy) -> ScopeState:
     """Builds owned state from a snapshot. Copies every list it will mutate and never mutates ``record``."""
     held = record["batch"]
+    if policy.get("continuation") == "accumulate" and held is not None and held["phase"]["phase"] == "waiting" and "failures" not in held["phase"]:
+        raise ValueError("attend: accumulating waiting state requires failures")
     scope = record["scope"]
     buffer = record["buffer"]
     seen, known = seen_from(

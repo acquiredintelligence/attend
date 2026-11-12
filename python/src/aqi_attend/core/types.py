@@ -124,6 +124,7 @@ class JudgingPhase(TypedDict):
 
 
 class WaitingPhase(TypedDict):
+    failures: NotRequired[int]
     phase: Literal["waiting"]
     attempt: int
     until: float

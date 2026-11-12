@@ -1,7 +1,7 @@
 import { BackpressureError, ConflictError, OutboxFullError } from '../errors.js';
 import { apply, newOutput, nextDue, REDUCER_VERSION } from '../core/reducer.js';
 import { initialState, quiescent, toRecord } from '../core/state.js';
-import { estimateRenderedBytes } from '../core/window.js';
+import { estimateRenderedBytes, windowSize } from '../core/window.js';
 import type { Event, DecisionAppend, ApplyConfig, Clock, Effect, Input, LoggedInput, ScopeState, Trace } from '../core/types.js';
 import { stableJson } from '../internal/json.js';
 import type { CommitOutcome, ScopeStore, ScopeWrite, SerializedWrite } from '../store/types.js';
@@ -60,6 +60,10 @@ export function createScopes(options: Options) {
       try {
         const stored = await store.load(slot.scope);
         slot.state = stored === null ? initialState(slot.scope, config.policy) : replay(slot.scope, stored, config);
+        if (stored !== null && (stored.snapshot?.policy.continuation ?? 'separate') !== (config.policy.continuation ?? 'separate')
+          && (slot.state.batch !== null || windowSize(slot.state.open) > 0)) {
+          throw new Error('attend: cannot change continuation while a window is unresolved');
+        }
         slot.tailCount = stored?.tail.length ?? 0;
         slot.tailBytes = stored?.tail.reduce((sum, logged) => sum + inputBytes(logged), 0) ?? 0;
         slot.snapshotBytes = stored?.snapshot ? bytes(stored.snapshot.record) : 0;

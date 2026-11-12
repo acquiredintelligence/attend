@@ -35,6 +35,9 @@ export function createAttendInternal(config: AttendConfig, snapshot: 'ratio' | '
     throw new RangeError('attend: judgeConcurrency must be a positive integer');
   }
   const policy: SettlePolicy = { ...DEFAULT_POLICY, ...config.settle };
+  if (policy.continuation !== undefined && policy.continuation !== 'separate' && policy.continuation !== 'accumulate') {
+    throw new TypeError('attend: continuation must be separate or accumulate');
+  }
   if (config.judge.budget) {
     const bytes = windowBytesFor(config.judge.budget, share);
     if (!Number.isFinite(bytes) || bytes <= 0) throw new RangeError('attend: judge window budget must be positive and finite');

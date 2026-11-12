@@ -189,9 +189,12 @@ class Scopes:
         try:
             stored = await self._store.load(slot.scope)
             slot.state = initial_state(slot.scope) if stored is None else replay(slot.scope, stored, config.decisions, config.dead_letters)
+            snapshot = stored["snapshot"] if stored is not None else None
+            prior_mode = snapshot["policy"].get("continuation", "separate") if snapshot is not None else "separate"
+            if stored is not None and prior_mode != config.policy.get("continuation", "separate") and (slot.state.batch is not None or slot.state.open.entries):
+                raise ValueError("attend: cannot change continuation while a window is unresolved")
             slot.tail_count = len(stored["tail"]) if stored is not None else 0
             slot.tail_bytes = sum(self._input_bytes(logged) for logged in stored["tail"]) if stored is not None else 0
-            snapshot = stored["snapshot"] if stored is not None else None
             slot.snapshot_bytes = self._bytes(snapshot["record"]) if snapshot is not None else 0
             slot.snapshot_needed = snapshot is None
             slot.force_write = False

@@ -31,6 +31,7 @@ def event_spec(spec: Mapping[str, Any]) -> Event:
 
 
 _SETTLE = {
+    "continuation": "continuation",
     "closingGraceMs": "closing_grace_ms",
     "streamGapMs": "stream_gap_ms",
     "passiveQuietMs": "passive_quiet_ms",

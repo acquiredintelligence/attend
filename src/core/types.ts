@@ -149,13 +149,12 @@ export interface Window {
 }
 
 /**
- * `attempt` numbers the judge calls for this window and only grows, across a wait and across a
- * merge, so a result from an earlier call never matches a later one. `failures` counts the
- * failed calls since the last wait and indexes the backoff; a wait resets it.
+ * `attempt` identifies a completion; release and deferral refund its number. `failures` indexes
+ * provider backoff. Separate continuation resets failures after wait; accumulate retains them.
  */
 export type BatchPhase =
   | { phase: 'judging'; attempt: number; failures: number; leaseUntil: number; offerWait: boolean }
-  | { phase: 'waiting'; attempt: number; until: number }
+  | { phase: 'waiting'; attempt: number; until: number; failures?: number }
   | { phase: 'retrying'; attempt: number; failures: number; at: number; offerWait: boolean };
 
 /** The one settled window. One slot: that is single-flight. */

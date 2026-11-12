@@ -1,8 +1,10 @@
 """An opted-in unresolved window retains data and counters through waits/retries."""
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable
+import json
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, Literal, TypedDict
 
 import pytest
@@ -27,7 +29,7 @@ def event(id: str, observed: float, quiet: float = 10) -> Event:
 @asynccontextmanager
 async def run(
     answers: list[Answer], *, settle: dict[str, Any] | None = None, start: float = 0
-) -> AsyncIterator[tuple[FakeClock, Callable[[list[Event]], Awaitable[None]], list[Offer]]]:
+) -> AsyncGenerator[tuple[FakeClock, Callable[[list[Event]], Awaitable[None]], list[Offer]], None]:
     clock = fake_clock(start)
     calls: list[Offer] = []
 
@@ -72,6 +74,19 @@ async def test_horizon_reoffers_until_wait_allowance_is_used() -> None:
             {"at": 10, "ids": ["a"], "wait": True, "waits": 0},
             {"at": 30, "ids": ["a"], "wait": True, "waits": 1},
             {"at": 50, "ids": ["a"], "wait": False, "waits": 2},
+        ]
+
+
+async def test_horizon_absorbs_fresh_before_quiet() -> None:
+    async with run(["wait", "wait", "queue"]) as (clock, put, calls):
+        await put([event("a", 0)])
+        await clock.advance(25)
+        await put([event("b", 25, 100)])
+        await clock.advance(25)
+        assert calls == [
+            {"at": 10, "ids": ["a"], "wait": True, "waits": 0},
+            {"at": 30, "ids": ["a", "b"], "wait": True, "waits": 1},
+            {"at": 50, "ids": ["a", "b"], "wait": False, "waits": 2},
         ]
 
 
@@ -157,3 +172,29 @@ async def test_cannot_change_continuation_with_open_window(before_mode: str) -> 
 def test_refuses_invalid_continuation(value: object) -> None:
     with pytest.raises(ValueError, match="continuation"):
         create_attend(kind={}, judge=scripted_judge([]), sink="log", settle={"continuation": value})
+
+
+LEGACY: dict[str, Any] = json.loads((Path(__file__).parents[2] / "conformance/fixtures/continuation-legacy.json").read_text())
+
+
+@pytest.mark.parametrize("item", LEGACY["cases"], ids=[item["name"] for item in LEGACY["cases"]])
+async def test_revision_three_read_and_mode_boundary(item: dict[str, Any]) -> None:
+    store, clock = memory_store(), fake_clock(item["through"])
+    for writes in item["writes"]:
+        assert await store.commit(writes) == ["ok"] * len(writes)
+    assert await store.load("scope") == item["stored"]
+    engine = create_attend(store=store, clock=clock, kind={"reading": "continuous"}, judge=scripted_judge([{"route": "queue"}]), sink="log", settle={"continuation": "accumulate"})
+    assert await engine.inspect("scope") == item["expected"]
+    pending = engine.push("scope", event("b", item["through"]))
+    if item["name"] == "complete":
+        await pending
+        stored = await store.load("scope")
+        assert stored is not None and stored["snapshot"] is not None
+        assert stored["snapshot"]["policy"].get("continuation") == "accumulate"
+        assert stored["snapshot"]["reducer"] == 4
+        record = await engine.inspect("scope")
+        assert record is not None and record["recent"] == item["expected"]["recent"]
+    else:
+        with pytest.raises(ValueError, match="continuation"):
+            await pending
+        assert await store.load("scope") == item["stored"]

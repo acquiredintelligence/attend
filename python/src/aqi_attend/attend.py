@@ -132,6 +132,8 @@ def settle_policy(settle: Mapping[str, Any] | None = None) -> SettlePolicy:
         key = _SETTLE_KEYS.get(name)
         if key is None:
             raise TypeError(f"attend: unknown settle option {name!r}")
+        if name == "continuation" and (not isinstance(value, str) or value not in ("separate", "accumulate")):
+            raise ValueError("attend: continuation must be separate or accumulate")
         policy[key] = list(value) if name == "retry_backoff_ms" else value
     return cast(SettlePolicy, policy)
 

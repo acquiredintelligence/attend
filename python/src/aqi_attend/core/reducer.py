@@ -37,6 +37,7 @@ from .types import (
 )
 from .window import (
     estimate_rendered_bytes,
+    observation_time,
     open_window,
     shed_entries,
     window_append,
@@ -45,7 +46,7 @@ from .window import (
     window_shed,
 )
 
-REDUCER_VERSION = 3
+REDUCER_VERSION = 4
 """Bumped whenever a release changes a transition. Stored with every snapshot."""
 
 _LANES: tuple[OutboxLane, OutboxLane] = ("decisions", "deadLetters")
@@ -239,6 +240,36 @@ def _ingest(ctx: _Ctx, state: ScopeState, input: EventsInput) -> None:
     ctx.trace({"kind": "ingested", "scope": state.scope, "count": len(input["events"]) - duplicates, "duplicates": duplicates})
 
 
+def _continuation_entries(policy: SettlePolicy, state: ScopeState) -> list[Entry]:
+    entries = [*(state.batch.window["events"] if state.batch is not None else []), *state.open.entries]
+    shed_entries(entries, policy["maxEvents"])
+    return entries
+
+
+def _size_bound(policy: SettlePolicy, entries: list[Entry]) -> SettleReason | None:
+    if not entries:
+        return None
+    if len(entries) > policy["maxEvents"]:
+        return "overflow"
+    limit = policy.get("maxWindowBytes")
+    if limit is not None and sum(estimate_rendered_bytes(entry) for entry in entries) >= limit:
+        return "size"
+    return None
+
+
+def _age_deadline(policy: SettlePolicy, entries: list[Entry]) -> float | None:
+    times = [observation_time(entry) for entry in entries if entry["kind"] not in ("context", "consequence")]
+    return min(times) + policy["maxWindowMs"] if times else None
+
+
+def _window_bound(policy: SettlePolicy, entries: list[Entry], now: float) -> SettleReason | None:
+    size = _size_bound(policy, entries)
+    if size is not None:
+        return size
+    age = _age_deadline(policy, entries)
+    return "age" if age is not None and age <= now else None
+
+
 def next_due(policy: SettlePolicy, state: ScopeState) -> float | None:
     """The instant the state next wants a tick: the batch's time, the open window's deadline unless judging, and each lane head's time."""
     at: float | None = None
@@ -250,10 +281,20 @@ def next_due(policy: SettlePolicy, state: ScopeState) -> float | None:
             at = phase["until"]
         else:
             at = phase["at"]
-    if phase is None or phase["phase"] != "judging":
+    accumulating = policy.get("continuation") == "accumulate"
+    if (phase is None or phase["phase"] != "judging") and not (accumulating and phase is not None and phase["phase"] == "retrying"):
         due = window_deadline(policy, state.open)
         if due is not None:
             at = due[0] if at is None else _min(at, due[0])
+    if accumulating and phase is not None and phase["phase"] == "waiting":
+        entries = _continuation_entries(policy, state)
+        age = _age_deadline(policy, entries)
+        if age is not None:
+            at = age if at is None else _min(at, age)
+        if _size_bound(policy, entries) is not None:
+            # Count and byte triggers use admission time, as the open-window triggers do.
+            due_at = entries[-1]["seenAt"]
+            at = due_at if at is None else _min(at, due_at)
     for queue in (state.decisions, state.dead_letters):
         if queue:
             head = queue[0]["phase"]
@@ -275,6 +316,21 @@ def _sweep(ctx: _Ctx, state: ScopeState) -> None:
     for lane in _LANES:
         _pump_lane(ctx, state, lane)
     _prune(ctx, state)
+    held = state.batch
+    if ctx.config.policy.get("continuation") == "accumulate" and held is not None:
+        phase = held.phase
+        if phase["phase"] == "retrying":
+            if phase["at"] <= ctx.now:
+                if state.open.entries:
+                    _settle_buffer(ctx, state, held.window["reason"], phase["offerWait"])
+                else:
+                    _begin_judging(ctx, state, held.window, phase["attempt"], phase["failures"], phase["offerWait"], held.hash)
+            return
+        if phase["phase"] == "waiting":
+            bound = _window_bound(ctx.config.policy, _continuation_entries(ctx.config.policy, state), ctx.now)
+            if bound is not None:
+                _settle_buffer(ctx, state, bound, False)
+                return
     if state.batch is None or state.batch.phase["phase"] != "judging":
         due = window_deadline(ctx.config.policy, state.open)
         if due is not None and not (due[0] > ctx.now):
@@ -286,10 +342,11 @@ def _sweep(ctx: _Ctx, state: ScopeState) -> None:
     if phase["phase"] == "retrying" and phase["at"] <= ctx.now:
         _begin_judging(ctx, state, held.window, phase["attempt"], phase["failures"], phase["offerWait"], held.hash)
     elif phase["phase"] == "waiting" and phase["until"] <= ctx.now:
+        offer_wait = ctx.config.policy.get("continuation") == "accumulate" and held.window["waits"] < ctx.config.policy["maxWaits"]
         if not state.open.entries:
-            _begin_judging(ctx, state, held.window, phase["attempt"], 0, False, held.hash)
+            _begin_judging(ctx, state, held.window, phase["attempt"], phase.get("failures", 0), offer_wait, held.hash)
         else:
-            _settle_buffer(ctx, state, held.window["reason"], False)
+            _settle_buffer(ctx, state, held.window["reason"], offer_wait)
 
 
 def _settle_reason(events: list[Entry], forced: bool, fired: SettleReason) -> SettleReason:
@@ -308,7 +365,8 @@ def _settle_buffer(ctx: _Ctx, state: ScopeState, fired: SettleReason, may_wait: 
             open.forced_at = None
             ctx.out.changed = True
         if held is not None:
-            window = cast(Window, {**held.window, "reason": _settle_reason(held.window["events"], forced, held.window["reason"])})
+            reason = fired if ctx.config.policy.get("continuation") == "accumulate" else held.window["reason"]
+            window = cast(Window, {**held.window, "reason": _settle_reason(held.window["events"], forced, reason)})
             attempt, failures = _counters(held)
             _begin_judging(ctx, state, window, attempt, failures, False, held.hash)
         return
@@ -341,10 +399,12 @@ def _settle_buffer(ctx: _Ctx, state: ScopeState, fired: SettleReason, may_wait: 
 
 def _counters(held: HeldBatch) -> tuple[int, int]:
     phase = held.phase
-    return phase["attempt"], (0 if phase["phase"] == "waiting" else phase["failures"])
+    return phase["attempt"], phase.get("failures", 0)
 
 
 def _begin_judging(ctx: _Ctx, state: ScopeState, window: Window, prior_attempt: int, failures: int, offer_wait: bool, hash: FnvState | None) -> None:
+    if ctx.config.policy.get("continuation") == "accumulate":
+        offer_wait = offer_wait and _window_bound(ctx.config.policy, window["events"], ctx.now) is None and window["reason"] not in ("age", "overflow", "size")
     attempt = prior_attempt + 1
     lease_until = ctx.now + ctx.config.policy["judgeTimeoutMs"] * 2
     state.batch = HeldBatch(window, {"phase": "judging", "attempt": attempt, "failures": failures, "leaseUntil": lease_until, "offerWait": offer_wait}, hash)
@@ -407,6 +467,8 @@ def _on_judged(ctx: _Ctx, state: ScopeState, input: JudgedInput) -> None:
         until = ctx.now + ctx.config.policy["waitHorizonMs"]
         waits = window["waits"] + 1
         state.batch = HeldBatch(cast(Window, {**window, "waits": waits}), {"phase": "waiting", "attempt": phase["attempt"], "until": until}, b.hash)
+        if ctx.config.policy.get("continuation") == "accumulate":
+            state.batch.phase["failures"] = phase["failures"]
         ctx.trace({"kind": "waiting", "scope": state.scope, "batchId": window["id"], "waits": waits, "until": until})
         return
     decided: DecidedRoute = route
