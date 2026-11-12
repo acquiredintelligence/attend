@@ -19,6 +19,11 @@ type Prepare = Callable[[AbortSignal], Awaitable[SourceBatch]]
 _owner: ContextVar[tuple[object, str] | None] = ContextVar("attend_intake_owner", default=None)
 
 
+def owns_callback(identity: object) -> bool:
+    owner = _owner.get()
+    return owner is not None and owner[0] is identity
+
+
 def _consume(future: asyncio.Future[None]) -> None:
     if not future.cancelled():
         future.exception()

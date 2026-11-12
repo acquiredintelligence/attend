@@ -93,3 +93,20 @@ test('stop refuses to join its own preparation callback', async () => {
     await receipt;
   } finally { rescue.open(); await intake.close(); await engine.stop(); await running; }
 });
+
+test.each(['prepare', 'context', 'judge', 'sink'])('stop refuses its own %s callback without stopping other work', async (where) => {
+  const reached: string[] = [];
+  const stopInside = async () => { await expect(engine.stop()).rejects.toThrow('own callback'); reached.push(where); };
+  const engine = createAttend({ clock: fakeClock(), kind: { message: 'flush' },
+    context: async () => { if (where === 'context') await stopInside(); return {}; },
+    judge: async () => { if (where === 'judge') await stopInside(); return { route: 'queue' }; },
+    sink: async () => { if (where === 'sink') await stopInside(); },
+  });
+  const intake = openIntake(engine, 'scope'), running = engine.run();
+  try {
+    await intake.submit(async () => { if (where === 'prepare') await stopInside(); return { events: [{ id: 'a', name: 'message', at: 0, data: {} }] }; });
+    expect(reached).toEqual([where]);
+    await intake.submit(async () => ({ events: [], cursor: '2' }), { source: 'feed' });
+    expect((await engine.inspect('scope'))?.cursors).toEqual({ feed: '2' });
+  } finally { await intake.close(); await engine.stop(); await running; }
+});

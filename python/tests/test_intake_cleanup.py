@@ -4,7 +4,8 @@ import asyncio
 
 import pytest
 
-from aqi_attend import AbortController, AbortSignal, IntakeError, SourceBatch, create_attend
+from aqi_attend import AbortController, AbortSignal, Decision, IntakeError, JudgeInput, Judgment, SourceBatch, create_attend
+from aqi_attend.attend import JudgeContext
 from aqi_attend.signal import AbortError
 from aqi_attend.testing import fake_clock, scripted_judge
 
@@ -175,5 +176,46 @@ async def test_close_consumes_a_withdrawn_callback_that_later_fails() -> None:
         assert await engine.inspect("scope") is None
     finally:
         release.set()
+        await engine.stop()
+        await running
+
+
+@pytest.mark.parametrize("where", ["prepare", "context", "judge", "sink"])
+async def test_stop_refuses_to_join_an_owned_callback(where: str) -> None:
+    reached: list[str] = []
+
+    async def stop_inside() -> None:
+        with pytest.raises(IntakeError, match="own callback"):
+            await engine.stop()
+        reached.append(where)
+
+    async def context(scope: str, signal: AbortSignal) -> JudgeContext:
+        if where == "context":
+            await stop_inside()
+        return {}
+
+    async def judge(input: JudgeInput, signal: AbortSignal) -> Judgment:
+        if where == "judge":
+            await stop_inside()
+        return {"route": "queue"}
+
+    async def sink(decision: Decision, signal: AbortSignal) -> None:
+        if where == "sink":
+            await stop_inside()
+
+    async def prepare(signal: AbortSignal) -> SourceBatch:
+        if where == "prepare":
+            await stop_inside()
+        return {"events": [{"id": "a", "name": "message", "at": 0, "data": {}}]}
+
+    engine = create_attend(clock=fake_clock(), kind={"message": "flush"}, context=context, judge=judge, sink=sink)
+    intake = engine.open_intake("scope")
+    running = asyncio.create_task(engine.run())
+    try:
+        await intake.submit(prepare)
+        assert reached == [where]
+        assert engine.running
+    finally:
+        await intake.close()
         await engine.stop()
         await running

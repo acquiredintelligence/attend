@@ -117,6 +117,8 @@ async def accept():
 
 A withdrawn receipt can fail before preparation cleanup finishes; intake close joins every preparation task it started. Outside that ownership, `AbortSignal.race(work)` requests cancellation without waiting for cleanup. Keep a task handle and join it when its resource lifetime matters. A callback that detaches child work remains responsible for joining it.
 
+Repeated cancellation of the runner does not skip its cleanup join. `stop()` rejects from the engine's own intake callback context; use the caller-owned run signal to request shutdown there and return without awaiting that shutdown.
+
 ## Judges
 
 `aqi_attend.judges` has `jev_judge` (TypeSafe's Jev, with your own key), `decisions_judge` (the OpenAI Decisions API) and `llm_judge`, which wraps any structured-output call you pass as `complete`. They send the same requests as the TypeScript judges, byte for byte. [Choose a judge](../docs/judges.md) explains each one, the window budget and the act threshold.

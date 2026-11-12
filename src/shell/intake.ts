@@ -80,6 +80,8 @@ export class IntakeQueue implements Intake {
   get closed(): boolean { return this.closing !== null; }
   get completionSignal(): AbortSignal { return this.completion.signal; }
 
+  ownsCurrentCallback(): boolean { return this.context.getStore()?.engine === this.owner.engine; }
+
   private checkContext(): void {
     const active = this.context.getStore();
     if (active?.engine === this.owner.engine && active.scope === this.scope) throw new IntakeError('attend: cannot await this intake from its own callback');

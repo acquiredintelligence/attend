@@ -365,6 +365,9 @@ export function createAttendInternal(config: AttendConfig, snapshot: 'ratio' | '
     },
 
     async stop() {
+      for (const intake of intakes.values()) {
+        if (intake.ownsCurrentCallback()) throw new IntakeError('attend: cannot stop an engine from its own callback');
+      }
       stopper?.abort();
       await finished;
     },
