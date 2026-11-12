@@ -271,11 +271,12 @@ def window_deadline(policy: SettlePolicy, open: OpenWindow) -> tuple[float, Sett
     if not math.isnan(s.last_closing_at) and (reason is None or closing < at):
         at = closing
         reason = "closing"
-    stream = (
-        s.last_stream_at + policy["streamGapMs"]
-        if s.max_explicit_stream_end_at == -math.inf
-        else _max(s.max_explicit_stream_end_at, s.max_default_stream_at + policy["streamGapMs"])
-    )
+    if s.max_explicit_stream_end_at == -math.inf:
+        stream = s.last_stream_at + policy["streamGapMs"]
+    elif s.max_default_stream_at == -math.inf:
+        stream = s.max_explicit_stream_end_at
+    else:
+        stream = _max(s.max_explicit_stream_end_at, s.max_default_stream_at + policy["streamGapMs"])
     if not math.isnan(s.last_stream_at) and (reason is None or stream < at):
         at = stream
         reason = "stream_quiet"

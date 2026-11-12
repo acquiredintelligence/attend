@@ -279,9 +279,10 @@ export function windowDeadline(policy: SettlePolicy, open: OpenWindow): { at: nu
     at = closing;
     reason = 'closing';
   }
-  const stream = s.maxExplicitStreamEndAt === -Infinity
-    ? s.lastStreamAt + policy.streamGapMs
-    : Math.max(s.maxExplicitStreamEndAt, s.maxDefaultStreamAt + policy.streamGapMs);
+  let stream: number;
+  if (s.maxExplicitStreamEndAt === -Infinity) stream = s.lastStreamAt + policy.streamGapMs;
+  else if (s.maxDefaultStreamAt === -Infinity) stream = s.maxExplicitStreamEndAt;
+  else stream = Math.max(s.maxExplicitStreamEndAt, s.maxDefaultStreamAt + policy.streamGapMs);
   if (!Number.isNaN(s.lastStreamAt) && (reason === null || stream < at)) {
     at = stream;
     reason = 'stream_quiet';
