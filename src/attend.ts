@@ -78,6 +78,7 @@ export function createAttendInternal(config: AttendConfig, snapshot: 'ratio' | '
     const classified: EventsInput['events'] = new Array(length);
     for (let i = 0; i < length; i += 1) {
       const { event, bytes } = copyEventSized(events[i]! as Event, fill);
+      if (event.observedAt !== undefined && event.observedAt > clock.now()) throw new TypeError('attend: observedAt must not be in the future');
       const kind = kindOf(event);
       if (!KINDS.includes(kind)) throw new TypeError('attend: invalid event kind');
       const entry = { ...event, kind };

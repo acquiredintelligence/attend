@@ -16,7 +16,7 @@ function logged(id: string, now = 1000): LoggedInput {
 
 function window(id: string): Window {
   return {
-    id, events: [{ id: `event:${id}`, at: 1, name: 'changed', data: { nested: [null, true, 'héllo 🌍\u0000'] }, text: 'héllo 🌍\u0000', kind: 'closing', seenAt: 2 }],
+    id, events: [{ id: `event:${id}`, at: 1, observedAt: 1, name: 'changed', data: { nested: [null, true, 'héllo 🌍\u0000'] }, text: 'héllo 🌍\u0000', kind: 'closing', seenAt: 2 }],
     reason: 'closing', waits: 0, dropped: 0, gap: false, settledAt: 3,
   };
 }
@@ -202,7 +202,7 @@ export function scopeStoreConformance(make: () => Promise<ScopeStore> | ScopeSto
       assertEqual(await store.load('s'), { version: 7, snapshot: replacement, tail: [] }, 'older snapshot replaced');
     }],
     ['a snapshot and its tail round-trip with unicode, a NUL, a 250-entry window and a 1,000-id ring', async (store) => {
-      const entries: Entry[] = Array.from({ length: 250 }, (_, i) => ({ id: `e${i}`, at: i, seenAt: i + 1, name: 'n', text: 'héllo 🌍\u0000', data: { i, nested: [null, { yes: true }] }, kind: 'passive' }));
+      const entries: Entry[] = Array.from({ length: 250 }, (_, i) => ({ id: `e${i}`, at: i, observedAt: i, seenAt: i + 1, name: 'n', text: 'héllo 🌍\u0000', data: { i, nested: [null, { yes: true }] }, kind: 'passive' }));
       const d = decision('delivered', 's');
       const l = letter('failed', 's');
       if (l.kind !== 'deadLetter') throw new Error('expected dead letter');

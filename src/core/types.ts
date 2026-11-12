@@ -511,6 +511,15 @@ export interface TriggerSummary {
   lastStreamAt: number;
   lastPassiveAt: number;
   firstActAt: number;
+  /** Candidate extrema retain earlier entries before a kind first uses observation time. */
+  maxClosingAt: number;
+  maxStreamAt: number;
+  maxPassiveAt: number;
+  minActAt: number;
+  closingObserved: boolean;
+  streamObserved: boolean;
+  passiveObserved: boolean;
+  actObserved: boolean;
   /** Index of the first act relative to `start`, or -1. Adjusted on removal, unchanged by compaction. */
   firstActIndex: number;
   /** Smallest `seenAt` among sheddable entries before the first act: the O(1) prune test. */
@@ -518,6 +527,7 @@ export interface TriggerSummary {
   /** Live consequence and context entries; zero means nothing can be shed. */
   sheddable: number;
   lastSeenAt: number;
+  lastObservationAt: number;
 }
 
 /** The open window, appended in place by its single writer. Live entries are `entries[start..]`. */
@@ -538,7 +548,7 @@ export interface OpenWindow {
   hash: FnvState;
   /** False after a prune or shed inside the window; the settle then refolds the final list. */
   hashValid: boolean;
-  /** False once an appended `seenAt` was smaller than the last one; prune then scans the whole prefix. */
+  /** False once observation time decreases in arrival order; prune then scans the whole prefix. */
   monotone: boolean;
 }
 

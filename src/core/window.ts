@@ -19,23 +19,50 @@ function emptySummary(): TriggerSummary {
   return {
     minFlushAt: Infinity, lastClosingAt: NaN, lastStreamAt: NaN, lastPassiveAt: NaN,
     firstActAt: NaN, firstActIndex: -1, prefixMinSheddableAt: Infinity, sheddable: 0, lastSeenAt: NaN,
+    maxClosingAt: -Infinity, maxStreamAt: -Infinity, maxPassiveAt: -Infinity, minActAt: Infinity,
+    closingObserved: false, streamObserved: false, passiveObserved: false, actObserved: false, lastObservationAt: NaN,
   };
 }
 
 function summarizeEntry(summary: TriggerSummary, entry: Entry, index: number): void {
+  const observedAt = observationTime(entry);
+  const explicit = entry.observedAt !== undefined;
   if (entry.kind === 'flush') summary.minFlushAt = Math.min(summary.minFlushAt, entry.seenAt);
-  if (entry.kind === 'closing') summary.lastClosingAt = entry.seenAt;
-  if (entry.kind === 'continuous') summary.lastStreamAt = entry.seenAt;
-  if (entry.kind === 'passive') summary.lastPassiveAt = entry.seenAt;
+  // Without explicit observations, keep the handling of a backwards engine clock.
+  if (entry.kind === 'closing') {
+    summary.maxClosingAt = Math.max(summary.maxClosingAt, observedAt);
+    summary.closingObserved ||= explicit;
+    summary.lastClosingAt = summary.closingObserved ? summary.maxClosingAt : entry.seenAt;
+  }
+  if (entry.kind === 'continuous') {
+    summary.maxStreamAt = Math.max(summary.maxStreamAt, observedAt);
+    summary.streamObserved ||= explicit;
+    summary.lastStreamAt = summary.streamObserved ? summary.maxStreamAt : entry.seenAt;
+  }
+  if (entry.kind === 'passive') {
+    summary.maxPassiveAt = Math.max(summary.maxPassiveAt, observedAt);
+    summary.passiveObserved ||= explicit;
+    summary.lastPassiveAt = summary.passiveObserved ? summary.maxPassiveAt : entry.seenAt;
+  }
   if (summary.firstActIndex === -1 && isAct(entry)) {
     summary.firstActIndex = index;
     summary.firstActAt = entry.seenAt;
   }
+  if (isAct(entry)) {
+    summary.minActAt = Math.min(summary.minActAt, observedAt);
+    summary.actObserved ||= explicit;
+    if (summary.actObserved) summary.firstActAt = summary.minActAt;
+  }
   if (isSheddable(entry)) {
     summary.sheddable += 1;
-    if (summary.firstActIndex === -1) summary.prefixMinSheddableAt = Math.min(summary.prefixMinSheddableAt, entry.seenAt);
+    if (summary.firstActIndex === -1) summary.prefixMinSheddableAt = Math.min(summary.prefixMinSheddableAt, observedAt);
   }
   summary.lastSeenAt = entry.seenAt;
+  summary.lastObservationAt = observedAt;
+}
+
+function observationTime(entry: Entry): number {
+  return entry.observedAt ?? entry.seenAt;
 }
 
 function summarize(entries: readonly Entry[], start = 0): TriggerSummary {
@@ -89,7 +116,7 @@ export function windowCompact(open: OpenWindow): Entry[] {
 
 /** Appends an entry and updates sizes, summary, monotonicity and any valid hash in O(1). */
 export function windowAppend(open: OpenWindow, entry: Entry, bytes: number): void {
-  if (entry.seenAt < open.summary.lastSeenAt) open.monotone = false;
+  if (observationTime(entry) < open.summary.lastObservationAt) open.monotone = false;
   const index = windowSize(open);
   open.entries.push(entry);
   open.sizes.push(bytes);
@@ -104,8 +131,8 @@ function prefixMinimum(open: OpenWindow): number {
   for (let i = 0; i < end; i += 1) {
     const entry = open.entries[open.start + i]!;
     if (isSheddable(entry)) {
-      if (open.monotone) return entry.seenAt;
-      min = Math.min(min, entry.seenAt);
+      if (open.monotone) return observationTime(entry);
+      min = Math.min(min, observationTime(entry));
     }
   }
   return min;
@@ -118,6 +145,7 @@ function removedFrom(open: OpenWindow, count: number, bytes: number, prefixCount
   if (open.summary.firstActIndex !== -1) open.summary.firstActIndex -= prefixCount;
   if (prefixCount > 0) open.summary.prefixMinSheddableAt = prefixMinimum(open);
   open.summary.lastSeenAt = windowSize(open) === 0 ? NaN : open.entries[open.entries.length - 1]!.seenAt;
+  open.summary.lastObservationAt = windowSize(open) === 0 ? NaN : observationTime(open.entries[open.entries.length - 1]!);
   open.hashValid = false;
 }
 
@@ -156,7 +184,7 @@ export function windowPrune(open: OpenWindow, maxWindowMs: number, now: number):
   let read = 0;
   for (; read < end; read += 1) {
     const entry = entries[start + read]!;
-    const stale = entry.seenAt + maxWindowMs <= now;
+    const stale = observationTime(entry) + maxWindowMs <= now;
     if (!stale && open.monotone) break;
     if (stale && isSheddable(entry)) {
       if (gone === null) gone = [entry];
@@ -301,7 +329,7 @@ export function assertWindow(scope: string, open: OpenWindow): void {
   }
   if (open.monotone) {
     for (let i = open.start + 1; i < open.entries.length; i += 1) {
-      if (open.entries[i]!.seenAt < open.entries[i - 1]!.seenAt) throw new Error('monotone: seenAt decreased');
+      if (observationTime(open.entries[i]!) < observationTime(open.entries[i - 1]!)) throw new Error('monotone: observation time decreased');
     }
   }
 }

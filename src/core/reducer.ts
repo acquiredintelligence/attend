@@ -9,7 +9,7 @@ import { seenAdmit, seenRelease, seenTrim } from './seen.js';
 import { estimateRenderedBytes, openWindow, shedEntries, windowAppend, windowCompact, windowDeadline, windowPrune, windowShed, windowSize } from './window.js';
 
 /** Bumped whenever a release changes a transition. Stored with every snapshot. */
-export const REDUCER_VERSION = 1;
+export const REDUCER_VERSION = 2;
 
 /** An empty output. One output may collect several inputs: `apply` only ever sets `changed`. */
 export function newOutput(): ApplyOutput {

@@ -15,6 +15,37 @@
 
 A system event that should wake the agent on its own, such as a failed deploy or a fired alert, needs an act kind. `closing` is the usual choice.
 
+## Observation time
+
+An event can supply `observedAt` when its source observed it before delivering it to attend. It is a finite timestamp in the same millisecond coordinates as the engine's `Clock`. `push` and `attach` reject future values before admitting the batch. Convert a source clock to the engine's time coordinates before supplying it; attend does not clamp the value.
+
+| Field | Meaning |
+|---|---|
+| `at` | Informational time reported by the source. It does not set deadlines. |
+| `observedAt` | Optional source observation time for quiet periods, the act age bound and background age pruning. |
+| `seenAt` | Time the engine applies the input. The engine sets it and retains it even when `observedAt` is present. |
+
+When a kind includes an explicit observation time, its quiet period starts at the latest effective observation for that kind. The age bound uses the earliest effective act time once an act supplies `observedAt`. An omitted field uses that entry's `seenAt`. Kinds whose entries omit `observedAt` retain their existing handling of backwards engine clocks. Entry order and duplicate handling do not change.
+
+```ts
+import { createAttend } from '@acquiredintelligence/attend';
+import { fakeClock } from '@acquiredintelligence/attend/testing';
+
+const clock = fakeClock(1000);
+const attend = createAttend({
+  clock,
+  kind: { change: 'continuous' },
+  judge: async () => ({ route: 'note' }),
+  sink: 'log',
+});
+await attend.push('repo', { id: 'a', name: 'change', at: 0, observedAt: 100 });
+console.log((await attend.inspect('repo'))?.dueAt); // 1100
+```
+
+An already-due observation settles through the normal runner at processing time. It never reopens a resolved window or backdates `settledAt`. A bulk push remains one batch. Flush, overflow and byte limits keep processing-time semantics. Waits, retries, leases, timeouts and decision timestamps also keep engine time. A stale background observation can be pruned as soon as it arrives, with the usual dropped count and trace.
+
+Both runtimes retain `observedAt` through snapshots, logged inputs, windows and decision records. See [storage](storage.md) for version coordination when sharing a store.
+
 ## Routes
 
 | Route | The agent | Reaches the sink |

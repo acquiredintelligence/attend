@@ -120,6 +120,7 @@ export function copyEvent(event: Event, defaultData = false): Event {
       const data = toJson(fields.data, 'data', 1);
       if (!isRecord(data)) throw new TypeError('attend: event data must be a JSON object');
       fields.data = data;
+      checkObservation(fields.observedAt);
       return fields as unknown as Event;
     }
     return checkedEvent(toJson(fields, '', 0), defaultData);
@@ -130,5 +131,10 @@ export function copyEvent(event: Event, defaultData = false): Event {
 function checkedEvent(copied: JsonValue | undefined, defaultData: boolean): Event {
   if (defaultData && isRecord(copied) && copied.data === undefined) copied.data = {};
   if (!isRecord(copied) || !isRecord(copied.data)) throw new TypeError('attend: event data must be a JSON object');
+  checkObservation(copied.observedAt);
   return copied as unknown as Event;
+}
+
+function checkObservation(value: unknown): void {
+  if (value !== undefined && (typeof value !== 'number' || !isFinite(value))) throw new TypeError('attend: observedAt must be a finite number');
 }

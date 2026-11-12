@@ -27,22 +27,47 @@ def estimate_rendered_bytes(event: Event) -> int:
 def _summarize_entry(summary: TriggerSummary, entry: Entry, index: int) -> None:
     kind = entry["kind"]
     seen_at = entry["seenAt"]
+    observed_at = observation_time(entry)
+    explicit = "observedAt" in entry
     if kind == "flush":
         summary.min_flush_at = _min(summary.min_flush_at, seen_at)
     elif kind == "closing":
-        summary.last_closing_at = seen_at
+        summary.max_closing_at = _max(summary.max_closing_at, observed_at)
+        summary.closing_observed |= explicit
+        summary.last_closing_at = summary.max_closing_at if summary.closing_observed else seen_at
     elif kind == "continuous":
-        summary.last_stream_at = seen_at
+        summary.max_stream_at = _max(summary.max_stream_at, observed_at)
+        summary.stream_observed |= explicit
+        summary.last_stream_at = summary.max_stream_at if summary.stream_observed else seen_at
     elif kind == "passive":
-        summary.last_passive_at = seen_at
+        summary.max_passive_at = _max(summary.max_passive_at, observed_at)
+        summary.passive_observed |= explicit
+        summary.last_passive_at = summary.max_passive_at if summary.passive_observed else seen_at
     if summary.first_act_index == -1 and is_act(kind):
         summary.first_act_index = index
         summary.first_act_at = seen_at
+    if is_act(kind):
+        summary.min_act_at = _min(summary.min_act_at, observed_at)
+        summary.act_observed |= explicit
+        if summary.act_observed:
+            summary.first_act_at = summary.min_act_at
     if _sheddable(kind):
         summary.sheddable += 1
         if summary.first_act_index == -1:
-            summary.prefix_min_sheddable_at = _min(summary.prefix_min_sheddable_at, seen_at)
+            summary.prefix_min_sheddable_at = _min(summary.prefix_min_sheddable_at, observed_at)
     summary.last_seen_at = seen_at
+    summary.last_observation_at = observed_at
+
+
+def observation_time(entry: Entry) -> float:
+    return entry.get("observedAt", entry["seenAt"])
+
+
+def _max(a: float, b: float) -> float:
+    """``Math.max`` of two numbers, including NaN propagation."""
+    if a != a or b != b:
+        return math.nan
+    return a if a >= b else b
 
 
 def _min(a: float, b: float) -> float:
@@ -90,7 +115,7 @@ def window_from(scope: str, buffer: Buffer) -> OpenWindow:
 
 def window_append(open: OpenWindow, entry: Entry, size: int) -> None:
     """Appends an entry and updates sizes, summary, monotonicity and any valid hash in O(1)."""
-    if entry["seenAt"] < open.summary.last_seen_at:
+    if observation_time(entry) < open.summary.last_observation_at:
         open.monotone = False
     index = len(open.entries)
     open.entries.append(entry)
@@ -109,8 +134,8 @@ def _prefix_minimum(open: OpenWindow) -> float:
         entry = entries[i]
         if _sheddable(entry["kind"]):
             if open.monotone:
-                return entry["seenAt"]
-            least = _min(least, entry["seenAt"])
+                return observation_time(entry)
+            least = _min(least, observation_time(entry))
     return least
 
 
@@ -124,6 +149,7 @@ def _removed_from(open: OpenWindow, count: int, size: int, prefix_count: int) ->
     if prefix_count > 0:
         summary.prefix_min_sheddable_at = _prefix_minimum(open)
     summary.last_seen_at = open.entries[-1]["seenAt"] if open.entries else math.nan
+    summary.last_observation_at = observation_time(open.entries[-1]) if open.entries else math.nan
     open.hash_valid = False
 
 
@@ -141,7 +167,7 @@ def window_prune(open: OpenWindow, max_window_ms: float, now: float) -> list[Ent
     read = 0
     while read < end:
         entry = entries[read]
-        stale = entry["seenAt"] + max_window_ms <= now
+        stale = observation_time(entry) + max_window_ms <= now
         if not stale and open.monotone:
             break
         if stale and _sheddable(entry["kind"]):

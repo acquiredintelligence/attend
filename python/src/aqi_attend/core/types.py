@@ -512,10 +512,19 @@ class TriggerSummary:
     last_stream_at: float = math.nan
     last_passive_at: float = math.nan
     first_act_at: float = math.nan
+    max_closing_at: float = -math.inf
+    max_stream_at: float = -math.inf
+    max_passive_at: float = -math.inf
+    min_act_at: float = math.inf
+    closing_observed: bool = False
+    stream_observed: bool = False
+    passive_observed: bool = False
+    act_observed: bool = False
     first_act_index: int = -1
     prefix_min_sheddable_at: float = math.inf
     sheddable: int = 0
     last_seen_at: float = math.nan
+    last_observation_at: float = math.nan
 
 
 @dataclass(slots=True)
