@@ -334,3 +334,83 @@ async def test_whole_window_byte_threshold(limit: int) -> None:
         await put([event("b", 15, 100)])
         await clock.advance(15)
         assert calls[1] == {"at": 15 if limit == 134 else 30, "ids": ["a", "b"], "wait": limit == 135, "waits": 1}
+
+
+@pytest.mark.parametrize("metadata", ["gap", "dropped"])
+async def test_empty_fresh_metadata_belongs_to_unresolved_retry(metadata: str) -> None:
+    clock = fake_clock()
+    calls: list[tuple[list[str], bool, int]] = []
+
+    async def judge(input: JudgeInput, signal: AbortSignal) -> Judgment:
+        window = input["window"]
+        calls.append(([e["id"] for e in window["events"]], window["gap"], window["dropped"]))
+        if len(calls) == 1:
+            raise RuntimeError("outage")
+        return {"route": "queue"}
+
+    engine = create_attend(
+        clock=clock,
+        kind={"reading": "continuous", "out": "consequence"},
+        judge=judge,
+        sink="log",
+        settle={"continuation": "accumulate", "max_window_ms": 100, "retry_backoff_ms": [30]},
+    )
+    intake = engine.open_intake("s")
+    running = asyncio.create_task(engine.run())
+
+    async def first(signal: AbortSignal) -> SourceBatch:
+        return {"events": [event("a", 0)]}
+
+    async def loss(signal: AbortSignal) -> SourceBatch:
+        return (
+            {"events": [], "truncated": True, "cursor": "2"}
+            if metadata == "gap"
+            else {"events": [{"id": "old", "at": -100, "observedAt": -100, "name": "out", "data": {}}], "cursor": "2"}
+        )
+
+    async def later(signal: AbortSignal) -> SourceBatch:
+        return {"events": [event("next", 40)]}
+
+    try:
+        await intake.submit(first)
+        await clock.advance(15)
+        await intake.submit(loss, source="feed")
+        await clock.advance(25)
+        assert calls[1] == (["a"], metadata == "gap", 1 if metadata == "dropped" else 0)
+        record = await engine.inspect("s")
+        assert record is not None and record["buffer"] == {"entries": [], "gap": False, "dropped": 0, "forcedAt": None}
+        assert record["cursors"] == {"feed": "2"}
+        await intake.submit(later)
+        await clock.advance(10)
+        assert calls[2] == (["next"], False, 0)
+    finally:
+        await intake.close()
+        await engine.stop()
+        await running
+
+
+async def test_gap_at_horizon_retains_wait_allowance() -> None:
+    clock, judge = fake_clock(), scripted_judge([{"route": "wait"}, {"route": "queue"}])
+    engine = create_attend(clock=clock, kind={"reading": "continuous"}, judge=judge, sink="log", settle={"continuation": "accumulate", "wait_horizon_ms": 20})
+    intake = engine.open_intake("s")
+    running = asyncio.create_task(engine.run())
+
+    async def first(signal: AbortSignal) -> SourceBatch:
+        return {"events": [event("a", 0)]}
+
+    async def gap(signal: AbortSignal) -> SourceBatch:
+        return {"events": [], "truncated": True}
+
+    try:
+        await intake.submit(first)
+        await clock.advance(15)
+        await intake.submit(gap)
+        await clock.advance(15)
+        assert judge.calls[1]["window"]["gap"]
+        assert any(r["route"] == "wait" for r in judge.calls[1]["routes"])
+        record = await engine.inspect("s")
+        assert record is not None and not record["buffer"]["gap"]
+    finally:
+        await intake.close()
+        await engine.stop()
+        await running

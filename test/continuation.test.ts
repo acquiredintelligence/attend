@@ -228,3 +228,45 @@ test.each([134, 135])('whole-window byte eligibility honors threshold %s', async
     expect(calls[1]).toEqual({ at: limit === 134 ? 15 : 30, ids: ['a', 'b'], wait: limit === 135, waits: 1 });
   }, { maxWindowBytes: limit });
 });
+
+test.each(['gap', 'dropped'] as const)('empty fresh %s metadata belongs to the unresolved retry', async (metadata) => {
+  const clock = fakeClock(), calls: { ids: string[]; gap: boolean; dropped: number }[] = [];
+  const engine = createAttend({ clock, kind: { reading: 'continuous', out: 'consequence' }, sink: 'log', settle: { continuation: 'accumulate', maxWindowMs: 100, retryBackoffMs: [30] },
+    judge: async (input) => {
+      calls.push({ ids: input.window.events.map((e) => e.id), gap: input.window.gap, dropped: input.window.dropped });
+      if (calls.length === 1) throw new Error('outage');
+      return { route: 'queue' };
+    },
+  });
+  const intake = openIntake(engine, 's'), running = engine.run();
+  try {
+    await intake.submit(async () => ({ events: [event('a', 0)] }));
+    await clock.advance(15);
+    await intake.submit(async () => metadata === 'gap'
+      ? { events: [], truncated: true, cursor: '2' }
+      : { events: [{ id: 'old', at: -100, observedAt: -100, name: 'out', data: {} }], cursor: '2' }, { source: 'feed' });
+    await clock.advance(25);
+    expect(calls[1]).toEqual({ ids: ['a'], gap: metadata === 'gap', dropped: metadata === 'dropped' ? 1 : 0 });
+    const record = await engine.inspect('s');
+    expect(record?.buffer).toMatchObject({ entries: [], gap: false, dropped: 0 });
+    expect(record?.cursors).toEqual({ feed: '2' });
+    await intake.submit(async () => ({ events: [event('next', 40)] }));
+    await clock.advance(10);
+    expect(calls[2]).toEqual({ ids: ['next'], gap: false, dropped: 0 });
+  } finally { await intake.close(); await engine.stop(); await running; }
+});
+
+test('empty gap metadata at a wait horizon does not remove wait allowance', async () => {
+  const clock = fakeClock(), judge = scriptedJudge([{ route: 'wait' }, { route: 'queue' }]);
+  const engine = createAttend({ clock, kind: { reading: 'continuous' }, judge, sink: 'log', settle: { continuation: 'accumulate', waitHorizonMs: 20 } });
+  const intake = openIntake(engine, 's'), running = engine.run();
+  try {
+    await intake.submit(async () => ({ events: [event('a', 0)] }));
+    await clock.advance(15);
+    await intake.submit(async () => ({ events: [], truncated: true }));
+    await clock.advance(15);
+    expect(judge.calls[1]?.window.gap).toBe(true);
+    expect(judge.calls[1]?.routes.some((r) => r.route === 'wait')).toBe(true);
+    expect((await engine.inspect('s'))?.buffer.gap).toBe(false);
+  } finally { await intake.close(); await engine.stop(); await running; }
+});
