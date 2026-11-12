@@ -132,6 +132,29 @@ test.each([null, false, 0, 'other'])('refuses invalid continuation %s', (value) 
 interface LegacyCase { name: string; through: number; writes: ScopeWrite[][]; stored: StoredScope; expected: ScopeRecord }
 const legacy: { source: string; cases: LegacyCase[] } = JSON.parse(readFileSync(new URL('../conformance/fixtures/continuation-legacy.json', import.meta.url), 'utf8'));
 
+test.each(['flush', 'end'] as const)('%s retains its meaning at retry not-before', async (control) => {
+  const clock = fakeClock(), calls: { at: number; reason: string; wait: boolean }[] = [];
+  const engine = createAttend({ clock, kind: { reading: 'continuous' }, sink: 'log', settle: { continuation: 'accumulate', retryBackoffMs: [30] },
+    judge: async (input) => {
+      calls.push({ at: clock.now(), reason: input.window.reason, wait: input.routes.some((r) => r.route === 'wait') });
+      if (calls.length === 1) throw new Error('controlled outage');
+      return { route: 'queue' };
+    },
+  });
+  const running = engine.run();
+  try {
+    await engine.push('s', event('a', 0));
+    await clock.advance(15);
+    if (control === 'end') await engine.push('s', event('b', 15, 100));
+    await engine[control]('s');
+    await clock.advance(24);
+    expect(calls).toHaveLength(1);
+    await clock.advance(1);
+    expect(calls[1]).toEqual({ at: 40, reason: control === 'flush' ? 'forced' : 'closing', wait: control === 'end' });
+    expect((await engine.inspect('s'))?.buffer.forcedAt).toBeNull();
+  } finally { await engine.stop(); await running; }
+});
+
 test.each(legacy.cases)('reads revision-3 $name and refuses an unresolved mode switch', async (item) => {
   const store = memoryStore(), clock = fakeClock(item.through);
   for (const writes of item.writes) expect(await store.commit(writes)).toEqual(writes.map(() => 'ok'));

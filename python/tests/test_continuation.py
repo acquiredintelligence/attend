@@ -177,6 +177,37 @@ def test_refuses_invalid_continuation(value: object) -> None:
 LEGACY: dict[str, Any] = json.loads((Path(__file__).parents[2] / "conformance/fixtures/continuation-legacy.json").read_text())
 
 
+@pytest.mark.parametrize("control", ["flush", "end"])
+async def test_explicit_control_retains_meaning_at_retry(control: str) -> None:
+    clock = fake_clock()
+    calls: list[tuple[float, str, bool]] = []
+
+    async def judge(input: JudgeInput, signal: AbortSignal) -> Judgment:
+        calls.append((clock.now(), input["window"]["reason"], any(r["route"] == "wait" for r in input["routes"])))
+        if len(calls) == 1:
+            raise RuntimeError("controlled outage")
+        return {"route": "queue"}
+
+    engine = create_attend(clock=clock, kind={"reading": "continuous"}, sink="log", judge=judge, settle={"continuation": "accumulate", "retry_backoff_ms": [30]})
+    running = asyncio.create_task(engine.run())
+    try:
+        await engine.push("s", event("a", 0))
+        await clock.advance(15)
+        if control == "end":
+            await engine.push("s", event("b", 15, 100))
+        finish = engine.flush if control == "flush" else engine.end
+        await finish("s")
+        await clock.advance(24)
+        assert len(calls) == 1
+        await clock.advance(1)
+        assert calls[1] == (40, "forced" if control == "flush" else "closing", control == "end")
+        record = await engine.inspect("s")
+        assert record is not None and record["buffer"]["forcedAt"] is None
+    finally:
+        await engine.stop()
+        await running
+
+
 @pytest.mark.parametrize("item", LEGACY["cases"], ids=[item["name"] for item in LEGACY["cases"]])
 async def test_revision_three_read_and_mode_boundary(item: dict[str, Any]) -> None:
     store, clock = memory_store(), fake_clock(item["through"])
