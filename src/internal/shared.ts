@@ -69,7 +69,9 @@ function copyObject(value: object, key: string | number, depth: number): JsonVal
   const object: JsonObject = {};
   const source = value as Record<string, unknown>;
   for (const name of keys(source)) {
-    const copied = toJson(source[name], name, depth + 1);
+    const field = source[name];
+    if (depth === 0 && name === 'observedAt') checkObservation(field);
+    const copied = toJson(field, name, depth + 1);
     if (copied === undefined) continue;
     if (name === '__proto__') defineProperty(object, name, { value: copied, enumerable: true, writable: true, configurable: true });
     else object[name] = copied;
