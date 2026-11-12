@@ -759,7 +759,7 @@ class Attend:
         for task in list(self._calls):
             if not task.done():
                 task.cancel()
-        await asyncio.gather(*(intake.fence() for intake in self._intakes.values()), return_exceptions=True)
+        await asyncio.gather(*(asyncio.shield(intake.fence()) for intake in self._intakes.values()), return_exceptions=True)
 
     async def _settled_or_expired(self, task: asyncio.Task[None], lease_until: float) -> None:
         if lease_until <= self._clock.now() or task.done():

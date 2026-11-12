@@ -74,6 +74,7 @@ class Intake:
         self._work_done.set()
         self._closed: asyncio.Future[None] | None = None
         self._tasks: set[asyncio.Task[None]] = set()
+        self._preparations: set[asyncio.Future[SourceBatch]] = set()
         self._completion = AbortController()
 
     @property
@@ -173,7 +174,12 @@ class Intake:
                 return
             signal = operation.controller.signal
             signal.throw_if_aborted()
-            batch = await signal.race(operation.prepare(signal))
+            preparation = asyncio.ensure_future(operation.prepare(signal))
+            self._preparations.add(preparation)
+            preparation.add_done_callback(self._prepared)
+            if signal.aborted:
+                preparation.cancel()
+            batch = await signal.race(preparation)
             signal.throw_if_aborted()
             events = self._classify(batch["events"])
             input: EventsInput = {"kind": "events", "events": events}
@@ -209,6 +215,11 @@ class Intake:
             self._active = None
             activity.finished.set_result(None)
             self._pump()
+
+    def _prepared(self, future: asyncio.Future[SourceBatch]) -> None:
+        self._preparations.discard(future)
+        if not future.cancelled():
+            future.exception()
 
     def _begin_work(self) -> _Activity | None:
         self._work += 1
@@ -271,6 +282,7 @@ class Intake:
                 if activity is not None:
                     await activity.finished
                 await self._work_done.wait()
+                await asyncio.gather(*tuple(self._preparations), return_exceptions=True)
                 if activity is not None and activity.failure is not None:
                     raise activity.failure
                 future.set_result(None)

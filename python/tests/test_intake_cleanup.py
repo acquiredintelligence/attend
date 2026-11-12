@@ -99,7 +99,12 @@ async def test_close_joins_an_earlier_withdrawn_callback_without_delaying_its_re
         await running
 
 
-async def test_abort_during_callback_creation_cancels_the_returned_task() -> None:
+@pytest.mark.parametrize("eager", [False, True])
+async def test_abort_during_callback_creation_cancels_the_returned_task(eager: bool) -> None:
+    loop = asyncio.get_running_loop()
+    previous_factory = loop.get_task_factory()
+    if eager:
+        loop.set_task_factory(asyncio.eager_task_factory)
     clock = fake_clock()
     engine = create_attend(clock=clock, kind={}, judge=scripted_judge([]), sink="log")
     intake = engine.open_intake("scope")
@@ -123,12 +128,48 @@ async def test_abort_during_callback_creation_cancels_the_returned_task() -> Non
         with pytest.raises(AbortError):
             await intake.submit(prepare, signal=controller.signal)
         await clock.advance(0)
-        assert called == []
+        assert called == ([True] if eager else [])
         assert created[0].cancelled()
         await intake.close()
     finally:
         for task in created:
             task.cancel()
         await asyncio.gather(*created, return_exceptions=True)
+        await engine.stop()
+        await running
+        loop.set_task_factory(previous_factory)
+
+
+async def test_close_consumes_a_withdrawn_callback_that_later_fails() -> None:
+    clock = fake_clock()
+    engine = create_attend(clock=clock, kind={}, judge=scripted_judge([]), sink="log")
+    intake = engine.open_intake("scope")
+    running = asyncio.create_task(engine.run())
+    started, cleaning, release = [asyncio.Event() for _ in range(3)]
+
+    async def prepare(signal: AbortSignal) -> SourceBatch:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cleaning.set()
+            await release.wait()
+            raise ValueError("late failure")
+        return {"events": []}
+
+    try:
+        receipt = intake.submit(prepare)
+        await started.wait()
+        closing = asyncio.create_task(intake.close())
+        await cleaning.wait()
+        await clock.advance(0)
+        assert not closing.done()
+        release.set()
+        await closing
+        with pytest.raises(IntakeError):
+            await receipt
+        assert await engine.inspect("scope") is None
+    finally:
+        release.set()
         await engine.stop()
         await running

@@ -12,6 +12,8 @@ The optional serial intake owns registration, asynchronous preparation and immed
 
 The queue, callbacks and catch-up metadata are local and are never stored. Serial intake introduced no new persisted inputs or reducer-version change. Closing fences unapplied completion results and joins their native release writes. This is local ordering, not distributed scope ownership. [Serial intake](docs/reference.md#serial-intake) defines the boundary and limits.
 
+Intake also retains each started preparation awaitable until it settles. Withdrawal can reject its receipt before cleanup ends, but close and engine shutdown join that cleanup, including work withdrawn before close. This changes no reducer transition or saved state. Python's shared close completion is shielded from shutdown-waiter cancellation.
+
 ## Continuous quiet duration
 
 An optional `Event.quietForMs` gives a continuous event its own quiet duration. Once any continuous entry supplies it, the continuous deadline is the latest of the entries' individual end times. Entries without a duration use the policy's `streamGapMs`. Other kinds keep their independent triggers. With no explicit duration, the frozen default behavior remains unchanged, including backwards clocks.

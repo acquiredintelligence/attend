@@ -115,6 +115,8 @@ async def accept():
 
 `submit` registers when called, before returning its future. Cancelling that future only detaches its observer; pass an `AbortSignal` to withdraw work. `close()` also fences when called, before its returned coroutine is awaited. Cancelling one close waiter does not cancel shared cleanup. Python uses `ContextVar` to reject same-scope reentrant calls. The TypeScript counterpart uses its Node-only `/intake` entry.
 
+A withdrawn receipt can fail before preparation cleanup finishes; intake close joins every preparation task it started. Outside that ownership, `AbortSignal.race(work)` requests cancellation without waiting for cleanup. Keep a task handle and join it when its resource lifetime matters. A callback that detaches child work remains responsible for joining it.
+
 ## Judges
 
 `aqi_attend.judges` has `jev_judge` (TypeSafe's Jev, with your own key), `decisions_judge` (the OpenAI Decisions API) and `llm_judge`, which wraps any structured-output call you pass as `complete`. They send the same requests as the TypeScript judges, byte for byte. [Choose a judge](../docs/judges.md) explains each one, the window budget and the act threshold.

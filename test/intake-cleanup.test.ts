@@ -58,3 +58,19 @@ test('close joins previously withdrawn work and preserves prompt receipt/capacit
     expect((await engine.inspect('scope'))?.cursors).toEqual({ feed: 'kept' });
   } finally { release.open(); await engine.stop(); await running; }
 });
+
+test('close joins a withdrawn callback that later rejects', async () => {
+  const clock = fakeClock(), engine = createAttend({ clock, kind: {}, judge: scriptedJudge([]), sink: 'log' });
+  const intake = openIntake(engine, 'scope'), running = engine.run();
+  const started = gate(), release = gate();
+  let closed = false;
+  try {
+    const receipt = intake.submit(async () => { started.open(); await release.promise; throw new Error('late failure'); });
+    await started.promise;
+    const closing = intake.close().then(() => { closed = true; });
+    await clock.advance(0); expect(closed).toBe(false);
+    release.open(); await closing;
+    await expect(receipt).rejects.toThrow('closed');
+    expect(await engine.inspect('scope')).toBeNull();
+  } finally { release.open(); await engine.stop(); await running; }
+});

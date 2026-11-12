@@ -78,7 +78,10 @@ class AbortSignal:
             remove()
 
     async def race(self, work: Awaitable[T]) -> T:
-        """Awaits ``work`` unless the signal aborts first, then cancels it and raises the reason."""
+        """Awaits work unless aborted; requests cancellation without joining its cleanup.
+
+        Keep an owned task and join it separately when cleanup completion matters.
+        """
         self.throw_if_aborted()
         task = asyncio.ensure_future(work)
         aborted = asyncio.ensure_future(self.wait())
@@ -86,7 +89,7 @@ class AbortSignal:
             await asyncio.wait({task, aborted}, return_when=asyncio.FIRST_COMPLETED)
         finally:
             aborted.cancel()
-            # Also when the awaiting task is cancelled, so the work never outlives its caller.
+            # Request cancellation when the awaiting task is cancelled too.
             if not task.done():
                 task.cancel()
         if task.done() and not task.cancelled():
