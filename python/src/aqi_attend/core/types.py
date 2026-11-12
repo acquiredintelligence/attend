@@ -506,7 +506,7 @@ class IdRing:
 
 @dataclass(slots=True)
 class TriggerSummary:
-    """Everything ``deadline`` reads, kept O(1). NaN means none for the ``*_at`` fields; ``min_flush_at`` and ``prefix_min_sheddable_at`` use inf."""
+    """Everything ``deadline`` reads, kept O(1). Absent times use NaN; minima start at inf and maxima at -inf."""
 
     min_flush_at: float = math.inf
     last_closing_at: float = math.nan
@@ -515,6 +515,8 @@ class TriggerSummary:
     first_act_at: float = math.nan
     max_closing_at: float = -math.inf
     max_stream_at: float = -math.inf
+    max_default_stream_at: float = -math.inf
+    max_explicit_stream_end_at: float = -math.inf
     max_passive_at: float = -math.inf
     min_act_at: float = math.inf
     closing_observed: bool = False

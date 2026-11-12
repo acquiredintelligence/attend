@@ -1,13 +1,16 @@
 """Continuous events can carry distinct quiet durations within one window."""
 
 import asyncio
+from collections.abc import Awaitable, Callable
 
 import pytest
 
-from aqi_attend import create_attend
-from aqi_attend.core.types import Buffer, Entry, Kind, default_policy
+from aqi_attend import AbortController, AbortSignal, create_attend, memory_store
+from aqi_attend.core.step import initial_record
+from aqi_attend.core.types import Buffer, Entry, Kind, SourceBatch, default_policy
 from aqi_attend.core.window import deadline
-from aqi_attend.testing import fake_clock, recording_sink, scripted_judge
+from aqi_attend.store.types import ScopeWrite
+from aqi_attend.testing import ScriptedAnswer, fake_clock, harness, recording_sink, scripted_judge
 
 
 def entry(id: str, seen_at: float, *, observed_at: float | None = None, quiet: float | None = None, kind: Kind = "continuous") -> Entry:
@@ -121,3 +124,137 @@ async def test_zero_duration_and_late_observation_settle_at_processing_time() ->
         await attend.stop()
         await running
         await attend.store.close()
+
+
+@pytest.mark.parametrize("kind", ["continuous", "passive"])
+async def test_source_duration_admission_controls_cursor(kind: Kind) -> None:
+    clock = fake_clock(100)
+    attend = create_attend(clock=clock, kind={"move": kind}, judge=scripted_judge([{"route": "queue"}]), sink="log")
+    controller = AbortController()
+    emitted = asyncio.Event()
+    refused = False
+
+    class Feed:
+        key = "feed"
+
+        async def subscribe(self, cursor: str | None, emit: Callable[[SourceBatch], Awaitable[None]], signal: AbortSignal) -> None:
+            nonlocal refused
+            try:
+                await emit({"events": [{"id": "a", "at": 0, "name": "move", "data": {}, "observedAt": 100, "quietForMs": 40}], "cursor": "1"})
+            except TypeError:
+                refused = True
+            finally:
+                emitted.set()
+            ended = asyncio.Event()
+            remove = signal.add_listener(ended.set)
+            try:
+                if not signal.aborted:
+                    await ended.wait()
+            finally:
+                remove()
+
+    running = asyncio.create_task(attend.run())
+    attached = asyncio.create_task(attend.attach("s", Feed(), signal=controller.signal))
+    try:
+        await emitted.wait()
+        assert refused == (kind != "continuous")
+        record = await attend.inspect("s")
+        if refused:
+            assert record is None
+        else:
+            assert record is not None and record["dueAt"] == 140 and record["cursors"] == {"feed": "1"}
+            assert record["buffer"]["entries"][0].get("quietForMs") == 40
+    finally:
+        controller.abort()
+        await attached
+        await attend.stop()
+        await running
+        await attend.store.close()
+
+
+@pytest.mark.parametrize(("answer", "phase", "delay"), [({"route": "wait"}, "waiting", 10_000), ({"fail": "temporary"}, "retrying", 1000)])
+async def test_duration_survives_crash_without_changing_processing_clock(answer: ScriptedAnswer, phase: str, delay: float) -> None:
+    judge = scripted_judge([answer, {"route": "queue"}])
+    h = await harness({"kind": {"move": "continuous"}, "judge": judge, "sink": recording_sink()})
+    try:
+        await h.push([{"id": "a", "at": -1, "name": "move", "data": {}, "quietForMs": 40}])
+        await h.advance(40)
+        record = await h.inspect()
+        assert record is not None and record["batch"] is not None and record["batch"]["phase"]["phase"] == phase
+        h.crash()
+        await h.restart()
+        await h.advance(delay - 1)
+        assert len(judge.calls) == 1
+        await h.advance(1)
+        assert [call["now"] for call in judge.calls] == [40, 40 + delay]
+        assert [call["window"]["settledAt"] for call in judge.calls] == [40, 40]
+        assert judge.calls[1]["window"]["events"][0].get("quietForMs") == 40
+    finally:
+        await h.stop()
+
+
+async def test_live_policy_change_recomputes_only_omitted_durations() -> None:
+    store = memory_store()
+    clock = fake_clock(100)
+    first = create_attend(store=store, clock=clock, kind={"move": "continuous"}, judge=scripted_judge([{"route": "queue"}]), sink="log", settle={"stream_gap_ms": 80})
+    await first.push("s", [{"id": "a", "name": "move"}, {"id": "b", "name": "move", "quietForMs": 40}])
+    record = await first.inspect("s")
+    assert record is not None and record["dueAt"] == 180
+    await first.stop()
+    second = create_attend(store=store, clock=clock, kind={"move": "continuous"}, judge=scripted_judge([{"route": "queue"}]), sink="log", settle={"stream_gap_ms": 20})
+    try:
+        before = await second.inspect("s")
+        assert before is not None and before["dueAt"] == 180
+        await second.push("s", [])
+        record = await second.inspect("s")
+        assert record is not None and record["dueAt"] == 140
+        assert [event.get("quietForMs") for event in record["buffer"]["entries"]] == [None, 40]
+    finally:
+        await second.stop()
+        await store.close()
+
+
+async def test_revision_two_snapshot_and_mixed_tail_rebuild_end_times() -> None:
+    store = memory_store()
+    policy = default_policy()
+    policy["streamGapMs"] = 30
+    record = initial_record("s")
+    record.update(version=1, seen=["a"], buffer=buffer(entry("a", 100, observed_at=100)), dueAt=130)
+    checkpoint: ScopeWrite = {
+        "scope": "s",
+        "expectedVersion": 0,
+        "inputs": [{"now": 100, "input": {"kind": "tick"}}],
+        "snapshot": {"version": 1, "record": record, "policy": policy, "reducer": 2},
+        "appends": [],
+    }
+    tail: ScopeWrite = {
+        "scope": "s",
+        "expectedVersion": 1,
+        "snapshot": None,
+        "appends": [],
+        "inputs": [
+            {
+                "now": 120,
+                "input": {
+                    "kind": "events",
+                    "events": [
+                        {"id": "b", "at": 0, "name": "move", "data": {}, "kind": "continuous", "observedAt": 110, "quietForMs": 90},
+                        {"id": "c", "at": 0, "name": "move", "data": {}, "kind": "continuous"},
+                    ],
+                },
+            }
+        ],
+    }
+    assert await store.commit([checkpoint]) == ["ok"]
+    assert await store.commit([tail]) == ["ok"]
+    attend = create_attend(store=store, clock=fake_clock(120), settle={"stream_gap_ms": 30}, kind={"move": "continuous"}, judge=scripted_judge([{"route": "queue"}]), sink="log")
+    try:
+        await attend.push("s", [])
+        loaded = await attend.inspect("s")
+        assert loaded is not None and loaded["dueAt"] == 200
+        assert [(event["id"], event.get("quietForMs"), event["seenAt"]) for event in loaded["buffer"]["entries"]] == [("a", None, 100), ("b", 90, 120), ("c", None, 120)]
+        stored = await store.load("s")
+        assert stored is not None and stored["snapshot"] is not None and stored["snapshot"]["reducer"] == 3
+    finally:
+        await attend.stop()
+        await store.close()

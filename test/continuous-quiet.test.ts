@@ -1,8 +1,9 @@
 import { expect, test } from 'vitest';
-import { createAttend, DEFAULT_POLICY, KINDS } from '../src/index.js';
-import type { Buffer, Entry } from '../src/types.js';
+import { createAttend, DEFAULT_POLICY, KINDS, memoryStore, type AttendConfig } from '../src/index.js';
+import type { Buffer, Entry, Kind, Source } from '../src/types.js';
 import { deadline } from '../src/core/window.js';
-import { fakeClock, recordingSink, scriptedJudge } from '../src/testing.js';
+import { initialRecord } from '../src/step.js';
+import { fakeClock, harness, recordingSink, scriptedJudge, type ScriptedAnswer } from '../src/testing.js';
 
 function entry(id: string, seenAt: number, extra: Partial<Entry> = {}): Entry {
   return { id, at: -1, name: 'move', data: {}, kind: 'continuous', seenAt, ...extra };
@@ -96,5 +97,99 @@ test('zero duration is immediate and late observations settle at processing time
   } finally {
     await attend.stop();
     await running;
+  }
+});
+
+test.each(['continuous', 'passive'] satisfies Kind[])('source duration admission for %s controls its cursor', async (kind) => {
+  const clock = fakeClock(100);
+  const attend = createAttend({ clock, kind: { move: kind }, judge: scriptedJudge([{ route: 'queue' }]), sink: 'log' });
+  const controller = new AbortController();
+  const emitted = new AbortController();
+  const done = new Promise<void>((resolve) => emitted.signal.addEventListener('abort', () => resolve(), { once: true }));
+  let refused = false;
+  const source: Source = {
+    key: 'feed',
+    async subscribe(_cursor, emit, signal) {
+      try { await emit({ events: [{ id: 'a', at: 0, observedAt: 100, quietForMs: 40, name: 'move', data: {} }], cursor: '1' }); }
+      catch (error) { if (!(error instanceof TypeError)) throw error; refused = true; }
+      finally { emitted.abort(); }
+      if (!signal.aborted) await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
+    },
+  };
+  const running = attend.run();
+  const attached = attend.attach('s', source, { signal: controller.signal });
+  try {
+    await done;
+    expect(refused).toBe(kind !== 'continuous');
+    const record = await attend.inspect('s');
+    if (refused) expect(record).toBeNull();
+    else expect(record).toMatchObject({ dueAt: 140, cursors: { feed: '1' }, buffer: { entries: [{ quietForMs: 40, observedAt: 100 }] } });
+  } finally {
+    controller.abort();
+    await attached;
+    await attend.stop();
+    await running;
+  }
+});
+
+test.each([
+  { answer: { route: 'wait' }, phase: 'waiting', delay: 10_000 },
+  { answer: { fail: 'temporary' }, phase: 'retrying', delay: 1000 },
+] satisfies { answer: ScriptedAnswer; phase: string; delay: number }[])('duration survives a crash during $phase without changing its processing clock', async ({ answer, phase, delay }) => {
+  const judge = scriptedJudge([answer, { route: 'queue' }]);
+  const h = harness({ kind: () => 'continuous', judge, sink: recordingSink() });
+  try {
+    await h.push([{ id: 'a', at: -1, name: 'move', data: {}, quietForMs: 40 }]);
+    await h.advance(40);
+    expect((await h.inspect())?.batch?.phase.phase).toBe(phase);
+    h.crash();
+    await h.restart();
+    await h.advance(delay - 1);
+    expect(judge.calls).toHaveLength(1);
+    await h.advance(1);
+    expect(judge.calls.map((call) => call.now)).toEqual([40, 40 + delay]);
+    expect(judge.calls.map((call) => call.window.settledAt)).toEqual([40, 40]);
+    expect(judge.calls[1]?.window.events[0]?.quietForMs).toBe(40);
+  } finally {
+    await h.stop();
+  }
+});
+
+test('a live policy change recomputes only omitted continuous durations', async () => {
+  const store = memoryStore();
+  const config = { store, clock: fakeClock(100), kind: { move: 'continuous' }, judge: scriptedJudge([{ route: 'queue' }]), sink: 'log' } satisfies AttendConfig;
+  const first = createAttend({ ...config, settle: { streamGapMs: 80 } });
+  await first.push('s', [{ id: 'a', name: 'move' }, { id: 'b', name: 'move', quietForMs: 40 }]);
+  expect((await first.inspect('s'))?.dueAt).toBe(180);
+  await first.stop();
+  const second = createAttend({ ...config, settle: { streamGapMs: 20 } });
+  try {
+    expect((await second.inspect('s'))?.dueAt).toBe(180);
+    await second.push('s', []);
+    expect((await second.inspect('s'))?.dueAt).toBe(140);
+    expect((await second.inspect('s'))?.buffer.entries.map((event) => event.quietForMs)).toEqual([undefined, 40]);
+  } finally {
+    await second.stop();
+  }
+});
+
+test('a revision-two snapshot and mixed tail rebuild continuous end times', async () => {
+  const store = memoryStore();
+  const policy = { ...DEFAULT_POLICY, streamGapMs: 30 };
+  const record = { ...initialRecord('s'), version: 1, seen: ['a'], buffer: buffer(entry('a', 100, { observedAt: 100 })), dueAt: 130 };
+  expect(await store.commit([{ scope: 's', expectedVersion: 0, inputs: [{ now: 100, input: { kind: 'tick' } }], snapshot: { version: 1, record, policy, reducer: 2 }, appends: [] }])).toEqual(['ok']);
+  expect(await store.commit([{ scope: 's', expectedVersion: 1, snapshot: null, appends: [], inputs: [{ now: 120, input: { kind: 'events', events: [
+    { id: 'b', at: 0, name: 'move', data: {}, kind: 'continuous', observedAt: 110, quietForMs: 90 },
+    { id: 'c', at: 0, name: 'move', data: {}, kind: 'continuous' },
+  ] } }] }])).toEqual(['ok']);
+  const attend = createAttend({ store, clock: fakeClock(120), settle: { streamGapMs: 30 }, kind: { move: 'continuous' }, judge: scriptedJudge([{ route: 'queue' }]), sink: 'log' });
+  try {
+    await attend.push('s', []);
+    const loaded = await attend.inspect('s');
+    expect(loaded?.dueAt).toBe(200);
+    expect(loaded?.buffer.entries.map((event) => [event.id, event.quietForMs, event.seenAt])).toEqual([['a', undefined, 100], ['b', 90, 120], ['c', undefined, 120]]);
+    expect((await store.load('s'))?.snapshot?.reducer).toBe(3);
+  } finally {
+    await attend.stop();
   }
 });

@@ -121,6 +121,7 @@ export function copyEvent(event: Event, defaultData = false): Event {
       if (!isRecord(data)) throw new TypeError('attend: event data must be a JSON object');
       fields.data = data;
       checkObservation(fields.observedAt);
+      checkQuietDuration(fields.quietForMs);
       return fields as unknown as Event;
     }
     return checkedEvent(toJson(fields, '', 0), defaultData);
@@ -132,9 +133,14 @@ function checkedEvent(copied: JsonValue | undefined, defaultData: boolean): Even
   if (defaultData && isRecord(copied) && copied.data === undefined) copied.data = {};
   if (!isRecord(copied) || !isRecord(copied.data)) throw new TypeError('attend: event data must be a JSON object');
   checkObservation(copied.observedAt);
+  checkQuietDuration(copied.quietForMs);
   return copied as unknown as Event;
 }
 
 function checkObservation(value: unknown): void {
   if (value !== undefined && (typeof value !== 'number' || !isFinite(value))) throw new TypeError('attend: observedAt must be a finite number');
+}
+
+function checkQuietDuration(value: unknown): void {
+  if (value !== undefined && (typeof value !== 'number' || !isFinite(value) || value < 0)) throw new TypeError('attend: quietForMs must be a finite nonnegative number');
 }

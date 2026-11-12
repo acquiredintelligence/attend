@@ -81,6 +81,7 @@ export function createAttendInternal(config: AttendConfig, snapshot: 'ratio' | '
       if (event.observedAt !== undefined && event.observedAt > clock.now()) throw new TypeError('attend: observedAt must not be in the future');
       const kind = kindOf(event);
       if (!KINDS.includes(kind)) throw new TypeError('attend: invalid event kind');
+      if (event.quietForMs !== undefined && kind !== 'continuous') throw new TypeError('attend: quietForMs requires a continuous event');
       const entry = { ...event, kind };
       sizedEvents.set(entry, bytes);
       classified[i] = entry;

@@ -45,7 +45,7 @@ from .window import (
     window_shed,
 )
 
-REDUCER_VERSION = 2
+REDUCER_VERSION = 3
 """Bumped whenever a release changes a transition. Stored with every snapshot."""
 
 _LANES: tuple[OutboxLane, OutboxLane] = ("decisions", "deadLetters")

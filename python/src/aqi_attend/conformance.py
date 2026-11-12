@@ -60,10 +60,11 @@ def _window(id: str) -> Window:
         "id": f"event:{id}",
         "at": 1,
         "observedAt": 1,
+        "quietForMs": 12,
         "name": "changed",
         "data": {"nested": [None, True, "héllo 🌍\u0000"]},
         "text": "héllo 🌍\u0000",
-        "kind": "closing",
+        "kind": "continuous",
         "seenAt": 2,
     }
     return {"id": id, "events": [entry], "reason": "closing", "waits": 0, "dropped": 0, "gap": False, "settledAt": 3}

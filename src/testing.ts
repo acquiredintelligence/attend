@@ -182,7 +182,7 @@ export function logConformance(make: () => Promise<EventLog> | EventLog, options
     [
       'events round-trip deep-equal',
       async (log) => {
-        const e: Event = { id: 'a', at: 7, observedAt: 9, name: 'x.y', data: { n: 1, s: 'ünï 🌍', l: [null, { k: false }] }, text: 'one line' };
+        const e: Event = { id: 'a', at: 7, observedAt: 9, quietForMs: 12, name: 'x.y', data: { n: 1, s: 'ünï 🌍', l: [null, { k: false }] }, text: 'one line' };
         await log.append('s', [e]);
         assertEqual((await log.read('s', null, { limit: 1 }))[0]?.event, e, 'round trip');
       },

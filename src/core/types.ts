@@ -516,6 +516,9 @@ export interface TriggerSummary {
   /** Candidate extrema retain earlier entries before a kind first uses observation time. */
   maxClosingAt: number;
   maxStreamAt: number;
+  /** Default durations retain observation time so policy changes can recompute their ends. */
+  maxDefaultStreamAt: number;
+  maxExplicitStreamEndAt: number;
   maxPassiveAt: number;
   minActAt: number;
   closingObserved: boolean;

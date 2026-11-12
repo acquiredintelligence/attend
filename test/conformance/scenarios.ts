@@ -15,6 +15,57 @@ const T = 'test/attend.test.ts';
 
 export const SCENARIOS: Scenario[] = [
   {
+    name: 'different continuous durations settle after the latest event end',
+    start: 100,
+    kinds: KINDS,
+    judge: { '*': { answers: [{ route: 'queue' }] } },
+    steps: [push('s', ev('a', 'drag', { quietForMs: 40 })), advance(20), push('s', ev('b', 'drag', { quietForMs: 90 })), { inspect: 's' }, advance(89), { inspect: 's' }, advance(1)],
+  },
+  {
+    name: 'a later short duration does not replace an earlier long end',
+    start: 100,
+    kinds: KINDS,
+    judge: { '*': { answers: [{ route: 'queue' }] } },
+    steps: [push('s', ev('a', 'drag', { quietForMs: 90 })), advance(20), push('s', ev('b', 'drag', { quietForMs: 40 })), { inspect: 's' }, advance(69), { inspect: 's' }, advance(1)],
+  },
+  {
+    name: 'out-of-order source times and durations take the maximum sum',
+    start: 180,
+    kinds: KINDS,
+    judge: { '*': { answers: [{ route: 'note' }] } },
+    steps: [push('s', ev('a', 'drag', { observedAt: 140, quietForMs: 20 }), ev('b', 'drag', { observedAt: 100, quietForMs: 90 })), { inspect: 's' }, advance(9), { inspect: 's' }, advance(1)],
+  },
+  {
+    name: 'omitted continuous durations use the policy within an opted-in window',
+    start: 100,
+    kinds: KINDS,
+    settle: { streamGapMs: 30 },
+    judge: { '*': { answers: [{ route: 'queue' }] } },
+    steps: [push('s', ev('a', 'drag', { quietForMs: 90 })), advance(20), push('s', ev('b', 'drag')), { inspect: 's' }, advance(70)],
+  },
+  {
+    name: 'held durations do not extend a fresh quiet period after wait',
+    start: 100,
+    kinds: KINDS,
+    settle: { closingGraceMs: 10 },
+    judge: { '*': { answers: [{ route: 'wait' }, { route: 'queue' }] } },
+    steps: [push('s', ev('a', 'drag', { quietForMs: 90 }), ev('b', 'close')), advance(10), { inspect: 's' }, advance(10), push('s', ev('c', 'drag', { quietForMs: 20 })), { inspect: 's' }, advance(20)],
+  },
+  {
+    name: 'zero quiet duration on an old observation settles at processing time',
+    start: 100,
+    kinds: KINDS,
+    judge: { '*': { answers: [{ route: 'queue' }] } },
+    steps: [push('s', ev('a', 'drag', { observedAt: 10, quietForMs: 0 })), advance(0)],
+  },
+  {
+    name: 'quiet duration on another kind refuses the batch without deduplication',
+    start: 100,
+    kinds: KINDS,
+    judge: { '*': { answers: [{ route: 'note' }] } },
+    steps: [push('s', ev('a', 'drag', { quietForMs: 40 }), ev('b', 'look', { quietForMs: 20 })), { inspect: 's' }, push('s', ev('a', 'drag', { quietForMs: 0 })), advance(0)],
+  },
+  {
     name: 'observation time sets a quiet deadline while at and seenAt remain distinct',
     kinds: KINDS,
     judge: { '*': { answers: [{ route: 'queue' }] } },

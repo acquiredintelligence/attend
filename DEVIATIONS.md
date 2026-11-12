@@ -1,10 +1,16 @@
 # Shell changes from the frozen shell
 
+## Continuous quiet duration
+
+An optional `Event.quietForMs` gives a continuous event its own quiet duration. Once any continuous entry supplies it, the continuous deadline is the latest of the entries' individual end times. Entries without a duration use the policy's `streamGapMs`. Other kinds keep their independent triggers. With no explicit duration, the frozen default behavior remains unchanged, including backwards clocks.
+
+The reducer revision is 3. Explicit durations persist in entries and logged inputs; summaries rebuild from them. Tail replay uses the snapshot policy for omitted durations. A live policy change recomputes those defaults under the new policy, as before. Processes sharing a store must use the same revision before opting in. Shared fixtures and runtime tests cover the extension; the frozen differential cases omit it. [The reference](docs/reference.md#continuous-quiet-duration) defines admission and timing.
+
 ## Observation time
 
 An explicit `Event.observedAt` supplies quiet and age timing independently of ingestion. The frozen reducer has no observation-time input. Its differential cases omit that field and continue to pin the existing behavior, including backwards engine clocks. Shared runtime fixtures and dedicated tests cover explicit observation times, mixed timestamps, pruning, admission and recovery in both runtimes.
 
-The reducer revision is 2. Snapshots and logged tails without the field retain ingestion timing. The existing upgrade path replays and resnapshots; it is not a downgrade fence. Processes sharing a store must use the same reducer version before opting in. [The reference](docs/reference.md#observation-time) defines the clocks.
+Observation time was introduced in reducer revision 2. Snapshots and logged tails without the field retain ingestion timing. The existing upgrade path replays and resnapshots; it is not a downgrade fence. Processes sharing a store must use the same reducer version before opting in. [The reference](docs/reference.md#observation-time) defines the clocks.
 
 ## Commit boundaries
 

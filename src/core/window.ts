@@ -20,6 +20,7 @@ function emptySummary(): TriggerSummary {
     minFlushAt: Infinity, lastClosingAt: NaN, lastStreamAt: NaN, lastPassiveAt: NaN,
     firstActAt: NaN, firstActIndex: -1, prefixMinSheddableAt: Infinity, sheddable: 0, lastSeenAt: NaN,
     maxClosingAt: -Infinity, maxStreamAt: -Infinity, maxPassiveAt: -Infinity, minActAt: Infinity,
+    maxDefaultStreamAt: -Infinity, maxExplicitStreamEndAt: -Infinity,
     closingObserved: false, streamObserved: false, passiveObserved: false, actObserved: false, lastObservationAt: NaN,
   };
 }
@@ -38,6 +39,8 @@ function summarizeEntry(summary: TriggerSummary, entry: Entry, index: number): v
     summary.maxStreamAt = Math.max(summary.maxStreamAt, observedAt);
     summary.streamObserved ||= explicit;
     summary.lastStreamAt = summary.streamObserved ? summary.maxStreamAt : entry.seenAt;
+    if (entry.quietForMs === undefined) summary.maxDefaultStreamAt = Math.max(summary.maxDefaultStreamAt, observedAt);
+    else summary.maxExplicitStreamEndAt = Math.max(summary.maxExplicitStreamEndAt, observedAt + entry.quietForMs);
   }
   if (entry.kind === 'passive') {
     summary.maxPassiveAt = Math.max(summary.maxPassiveAt, observedAt);
@@ -276,7 +279,9 @@ export function windowDeadline(policy: SettlePolicy, open: OpenWindow): { at: nu
     at = closing;
     reason = 'closing';
   }
-  const stream = s.lastStreamAt + policy.streamGapMs;
+  const stream = s.maxExplicitStreamEndAt === -Infinity
+    ? s.lastStreamAt + policy.streamGapMs
+    : Math.max(s.maxExplicitStreamEndAt, s.maxDefaultStreamAt + policy.streamGapMs);
   if (!Number.isNaN(s.lastStreamAt) && (reason === null || stream < at)) {
     at = stream;
     reason = 'stream_quiet';

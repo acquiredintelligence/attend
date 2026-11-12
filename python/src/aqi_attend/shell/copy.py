@@ -58,6 +58,10 @@ def copy_event(event: Mapping[str, object], fill: tuple[Callable[[], str], Calla
         observed = fields["observedAt"]
         if isinstance(observed, bool) or not isinstance(observed, (int, float)) or not -sys.float_info.max <= observed <= sys.float_info.max:
             raise TypeError("attend: observedAt must be a finite number")
+    if "quietForMs" in fields:
+        quiet = fields["quietForMs"]
+        if isinstance(quiet, bool) or not isinstance(quiet, (int, float)) or not 0 <= quiet <= sys.float_info.max:
+            raise TypeError("attend: quietForMs must be a finite nonnegative number")
     if fill is not None:
         if "id" not in fields:
             fields["id"] = fill[0]()
