@@ -1,6 +1,9 @@
 import { expect, test } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createAttend, memoryStore } from '../src/index.js';
+import { createAttendInternal } from '../src/attend.js';
+import { fromRecord } from '../src/core/state.js';
+import { DEFAULT_POLICY } from '../src/types.js';
 import { openIntake } from '../src/intake.js';
 import type { Event, ScopeRecord, ScopeWrite, SettlePolicy, StoredScope } from '../src/types.js';
 import { fakeClock, scriptedJudge } from '../src/testing.js';
@@ -172,4 +175,56 @@ test.each(legacy.cases)('reads revision-3 $name and refuses an unresolved mode s
     await expect(pending).rejects.toThrow('continuation');
     expect(await store.load('scope')).toEqual(item.stored);
   }
+});
+
+test.each(['ratio', 'always'] as const)('failure budget survives a waiting restart with %s snapshots', async (cadence) => {
+  const store = memoryStore(), clock = fakeClock(), resumedCalls: number[] = [];
+  let firstCalls = 0;
+  const settle = { continuation: 'accumulate', streamGapMs: 10, waitHorizonMs: 20, retryBackoffMs: [30, 60] } as const;
+  const config = { store, clock, kind: { reading: 'continuous' } as const, sink: 'log' as const, settle: { ...settle, retryBackoffMs: [30, 60] } };
+  const first = createAttendInternal({ ...config, judge: async () => { if (++firstCalls === 1) throw new Error('outage'); return { route: 'wait' }; } }, cadence);
+  const intake = openIntake(first, 's'), running = first.run();
+  await intake.submit(async () => ({ events: [event('a', 0)] }));
+  await clock.advance(40);
+  expect((await first.inspect('s'))?.batch?.phase).toMatchObject({ phase: 'waiting', failures: 1 });
+  await intake.close(); await first.stop(); await running;
+  const resumed = createAttend({ ...config, judge: async () => { resumedCalls.push(clock.now()); if (resumedCalls.length === 1) throw new Error('outage'); return { route: 'queue' }; } });
+  const nextIntake = openIntake(resumed, 's'), nextRun = resumed.run();
+  try {
+    await clock.advance(0);
+    expect(clock.nextAt()).toBe(60);
+    await clock.advance(80);
+    expect(resumedCalls).toEqual([60, 120]);
+    expect((await resumed.inspect('s'))?.batch).toBeNull();
+  } finally { await nextIntake.close(); await resumed.stop(); await nextRun; }
+});
+
+test('an accumulating snapshot cannot invent missing waiting failures', () => {
+  const waiting = legacy.cases.find((item) => item.name === 'waiting-snapshot');
+  expect(waiting).toBeDefined();
+  if (!waiting) throw new Error('missing fixture');
+  expect(() => fromRecord(waiting.expected, { ...DEFAULT_POLICY, continuation: 'accumulate' })).toThrow('requires failures');
+});
+
+test('exhaustion after a wait keeps the native dead letter', async () => {
+  const store = memoryStore(), clock = fakeClock();
+  const judge = scriptedJudge([{ fail: 'outage' }, { route: 'wait' }, { fail: 'outage' }, { fail: 'outage' }]);
+  const engine = createAttend({ store, clock, kind: { reading: 'continuous' }, judge, sink: 'log', settle: { continuation: 'accumulate', waitHorizonMs: 20, retryBackoffMs: [30, 60] } });
+  const intake = openIntake(engine, 's'), running = engine.run();
+  try {
+    await intake.submit(async () => ({ events: [event('a', 0)] }));
+    await clock.advance(120);
+    const page = await store.log.read({ after: null, scope: 's', limit: 10 });
+    expect(page.rows).toHaveLength(1);
+    expect(page.rows[0]).toMatchObject({ kind: 'deadLetter', at: 120, body: { stage: 'judge', attempts: 4, window: { waits: 1 } } });
+    expect((await engine.inspect('s'))?.batch).toBeNull();
+  } finally { await intake.close(); await engine.stop(); await running; }
+});
+
+test.each([134, 135])('whole-window byte eligibility honors threshold %s', async (limit) => {
+  await run(['wait', 'queue'], async (clock, put, calls) => {
+    await put([event('a', 0)]); await clock.advance(15);
+    await put([event('b', 15, 100)]); await clock.advance(15);
+    expect(calls[1]).toEqual({ at: limit === 134 ? 15 : 30, ids: ['a', 'b'], wait: limit === 135, waits: 1 });
+  }, { maxWindowBytes: limit });
 });

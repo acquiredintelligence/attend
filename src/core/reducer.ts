@@ -213,7 +213,10 @@ function sweep(ctx: Ctx, state: ScopeState): void {
   if (ctx.config.policy.continuation === 'accumulate' && pending) {
     if (pending.phase.phase === 'retrying') {
       if (pending.phase.at <= ctx.now) {
-        if (windowSize(state.open) > 0) settleBuffer(ctx, state, pending.window.reason, pending.phase.offerWait);
+        if (windowSize(state.open) > 0 || state.open.forcedAt !== null) {
+          const reason = state.open.endedAt !== null ? 'closing' : pending.window.reason;
+          settleBuffer(ctx, state, reason, pending.phase.offerWait);
+        }
         else beginJudging(ctx, state, pending.window, pending.phase, pending.phase.offerWait, pending.hash);
       }
       return;

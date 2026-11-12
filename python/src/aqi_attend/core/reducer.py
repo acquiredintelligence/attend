@@ -321,8 +321,9 @@ def _sweep(ctx: _Ctx, state: ScopeState) -> None:
         phase = held.phase
         if phase["phase"] == "retrying":
             if phase["at"] <= ctx.now:
-                if state.open.entries:
-                    _settle_buffer(ctx, state, held.window["reason"], phase["offerWait"])
+                if state.open.entries or state.open.forced_at is not None:
+                    reason = "closing" if state.open.ended_at is not None else held.window["reason"]
+                    _settle_buffer(ctx, state, reason, phase["offerWait"])
                 else:
                     _begin_judging(ctx, state, held.window, phase["attempt"], phase["failures"], phase["offerWait"], held.hash)
             return

@@ -132,6 +132,31 @@ Abort before application prevents event and cursor admission. An input already a
 
 The handle is terminal after close or engine shutdown. Recreate the engine and open a new handle before running to resume committed state. Raw registrations and callbacks are not durable. Snapshots and tails contain only the existing reducer inputs; another runtime can read them without an intake. This provides local ordering in one engine, not ownership across processes sharing a store.
 
+## Accumulating continuation
+
+Set `settle.continuation` to `accumulate` when waits and provider retries should retain one unresolved window. Omission or `separate` keeps the existing behavior. Serial intake and this option are independent: intake orders preparation and immediate work; continuation determines what retained state does afterward.
+
+```ts
+import { createAttend } from '@acquiredintelligence/attend';
+
+const attend = createAttend({
+  kind: { reading: 'continuous' },
+  judge: async () => ({ route: 'queue' }),
+  sink: 'log',
+  settle: { continuation: 'accumulate' },
+});
+```
+
+After a `wait`, fresh entries alone drive quiet. At the horizon, attend reoffers the whole unresolved window, including fresh entries that are not quiet yet. It can offer `wait` again until `maxWaits` or a whole-window bound requires resolution. A provider failure retains the wait count; a successful `wait` retains the provider failure count. The latter selects the next retry backoff.
+
+During retry, its deadline is a strict not-before time. Fresh quiet, direct address, `flush()`, `end()`, age, count and bytes do not start a judgment earlier. At retry time, every entry already admitted joins the held window. A timer that owns serial intake before a later raw registration can retry without that later entry. `flush()` still removes wait and supplies reason `forced`; `end()` keeps reason `closing` and permits wait within the limits.
+
+Eligibility uses the complete offered payload after the usual background shedding. Acts are never dropped. Count above `maxEvents`, rendered bytes at or above `maxWindowBytes`, and age at or above `maxWindowMs` withhold wait. Age starts at the earliest unresolved act's effective observation time. These checks also apply at initial offers, exact quiet/age ties and after absorbing an older observation. A bound makes a waiting window due; during backoff it takes effect at retry time. It does not interrupt an already running judge. A bound can withhold wait even when another deadline supplied the window's reason. Count and rendered bytes are not hard memory-allocation limits.
+
+Wait count, provider failures and the native attempt token are separate. Release and deferral refund the attempt token, so it is not a count of physical callback starts. A non-wait judgment or terminal failure ends the held window. Exhaustion keeps the existing dead-letter record and fields; `attempts` does not become a provider-failure count. Delivery retries do not reopen judgment. Engine or intake close retains committed state for recovery and does not reset its counters.
+
+Continuation is saved with the snapshot. A live writer cannot change between modes while a held batch or fresh entries remain. Empty scopes can change mode while retaining recent decisions and outbox work. In particular, an old separate waiting snapshot has no historic failure count to recover; switching it to accumulate is refused. `inspect` reads using the saved policy. See [storage](storage.md) for version coordination.
+
 ## Guarantees
 
 - **One snapshot and a short tail per scope.** The snapshot holds the open window, the judge slot and the outbox. A write appends the inputs that changed state, and a snapshot replaces the tail once it grows past the snapshot's own size. A source's cursor commits in the same write as the events it covers.

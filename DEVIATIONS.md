@@ -1,16 +1,22 @@
 # Shell changes from the frozen shell
 
+## Accumulating continuation
+
+The optional `settle.continuation = 'accumulate'` reoffers waits within their allowance, retains provider failures across waits and absorbs admitted input at a strict retry not-before time. Whole-window count, rendered bytes and age constrain wait eligibility, including ties. Ordinary continuation keeps the frozen behavior. The existing reducer and delivery machinery remain in use; no host timer or alternate scheduler is introduced.
+
+Reducer revision 4 records this transition change. Accumulating waiting state retains failures; legacy separate waiting state keeps its historical zero-reset meaning. A live writer mode change requires no held batch or fresh entries. Old readers are not fenced by this revision number. [The reference](docs/reference.md#accumulating-continuation) defines the API and limits.
+
 ## Serial intake
 
 The optional serial intake owns registration, asynchronous preparation and immediate effects for one scope. It gives registered raw work precedence over an idle deferred timer and suppresses the pre-input catch-up tick for that owned input only. The existing reducer tick runs after a nonempty batch. Ordinary input and frozen differential cases retain their prior scheduling.
 
-The queue, callbacks and catch-up metadata are local and are never stored. Persisted inputs and reducer revision 3 are unchanged. Closing fences unapplied completion results and joins their native release writes. This is local ordering, not distributed scope ownership. [Serial intake](docs/reference.md#serial-intake) defines the boundary and limits.
+The queue, callbacks and catch-up metadata are local and are never stored. Serial intake introduced no new persisted inputs or reducer-version change. Closing fences unapplied completion results and joins their native release writes. This is local ordering, not distributed scope ownership. [Serial intake](docs/reference.md#serial-intake) defines the boundary and limits.
 
 ## Continuous quiet duration
 
 An optional `Event.quietForMs` gives a continuous event its own quiet duration. Once any continuous entry supplies it, the continuous deadline is the latest of the entries' individual end times. Entries without a duration use the policy's `streamGapMs`. Other kinds keep their independent triggers. With no explicit duration, the frozen default behavior remains unchanged, including backwards clocks.
 
-The reducer revision is 3. Explicit durations persist in entries and logged inputs; summaries rebuild from them. Tail replay uses the snapshot policy for omitted durations. A live policy change recomputes those defaults under the new policy, as before. Processes sharing a store must use the same revision before opting in. Shared fixtures and runtime tests cover the extension; the frozen differential cases omit it. [The reference](docs/reference.md#continuous-quiet-duration) defines admission and timing.
+Continuous durations were introduced in reducer revision 3. Explicit durations persist in entries and logged inputs; summaries rebuild from them. Tail replay uses the snapshot policy for omitted durations. A live policy change recomputes those defaults under the new policy, as before. Processes sharing a store must use the same revision before opting in. Shared fixtures and runtime tests cover the extension; the frozen differential cases omit it. [The reference](docs/reference.md#continuous-quiet-duration) defines admission and timing.
 
 ## Observation time
 

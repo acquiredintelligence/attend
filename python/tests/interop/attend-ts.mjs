@@ -3,28 +3,14 @@
 import { createAttend } from '../../../dist/index.js';
 import { openIntake } from '../../../dist/intake.js';
 import { fakeClock } from '../../../dist/testing.js';
+import { openStore } from './store.mjs';
 
 const [kind, url, prefix, mode, scope] = process.argv.slice(2);
 const kinds = { close: 'closing', say: 'flush', look: 'passive', out: 'consequence', move: 'continuous' };
 const judge = async ({ window, routes }) => ({ route: window.events.some((e) => e.name === 'look') && routes.some((r) => r.route === 'wait') ? 'wait' : 'interrupt' });
 const delivered = [];
 
-let store;
-let close = async () => {};
-if (kind === 'redis') {
-  const { createClient } = await import('redis');
-  const { redisStore } = await import('../../../dist/redis.js');
-  const client = createClient({ url });
-  await client.connect();
-  store = redisStore((args) => client.sendCommand(args), { prefix });
-  close = () => client.close();
-} else {
-  const pg = (await import('pg')).default;
-  const { postgresStore } = await import('../../../dist/postgres.js');
-  const pool = new pg.Pool({ connectionString: url, max: 2 });
-  store = postgresStore(pool, { prefix });
-  close = () => pool.end();
-}
+const { store, close } = await openStore(kind, url, prefix);
 
 const clock = fakeClock(10_000);
 const attend = createAttend({ store, clock, kind: kinds, judge, sink: (d) => { delivered.push(d.id); }, settle: { closingGraceMs: 100 } });
@@ -57,6 +43,5 @@ controller.abort();
 await running;
 const record = await attend.inspect(scope);
 const { rows } = await store.log.read({ after: null, scope, limit: 100 });
-await store.close?.();
 await close();
 process.stdout.write(JSON.stringify({ record, rows, delivered }));

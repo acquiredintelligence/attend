@@ -10,6 +10,9 @@ from typing import Any, Literal, TypedDict
 import pytest
 
 from aqi_attend import AbortSignal, Event, JudgeInput, Judgment, SourceBatch, create_attend, memory_store
+from aqi_attend.attend import Attend
+from aqi_attend.core.state import from_record
+from aqi_attend.core.types import default_policy
 from aqi_attend.testing import FakeClock, fake_clock, scripted_judge
 
 type Answer = Literal["wait", "queue", "fail"]
@@ -229,3 +232,105 @@ async def test_revision_three_read_and_mode_boundary(item: dict[str, Any]) -> No
         with pytest.raises(ValueError, match="continuation"):
             await pending
         assert await store.load("scope") == item["stored"]
+
+
+@pytest.mark.parametrize("cadence", ["ratio", "always"])
+async def test_failure_budget_survives_waiting_restart(cadence: Literal["ratio", "always"]) -> None:
+    store, clock = memory_store(), fake_clock()
+    first_calls = 0
+    resumed_calls: list[float] = []
+    settle = {"continuation": "accumulate", "stream_gap_ms": 10, "wait_horizon_ms": 20, "retry_backoff_ms": [30, 60]}
+
+    async def first_judge(input: JudgeInput, signal: AbortSignal) -> Judgment:
+        nonlocal first_calls
+        first_calls += 1
+        if first_calls == 1:
+            raise RuntimeError("outage")
+        return {"route": "wait"}
+
+    async def next_judge(input: JudgeInput, signal: AbortSignal) -> Judgment:
+        resumed_calls.append(clock.now())
+        if len(resumed_calls) == 1:
+            raise RuntimeError("outage")
+        return {"route": "queue"}
+
+    first = Attend(store=store, clock=clock, kind={"reading": "continuous"}, sink="log", judge=first_judge, settle=settle, snapshot=cadence)
+    intake = first.open_intake("s")
+    running = asyncio.create_task(first.run())
+
+    async def prepare(signal: AbortSignal) -> SourceBatch:
+        return {"events": [event("a", 0)]}
+
+    await intake.submit(prepare)
+    await clock.advance(40)
+    record = await first.inspect("s")
+    assert record is not None and record["batch"] is not None
+    assert record["batch"]["phase"]["phase"] == "waiting" and record["batch"]["phase"].get("failures") == 1
+    await intake.close()
+    await first.stop()
+    await running
+    resumed = create_attend(store=store, clock=clock, kind={"reading": "continuous"}, sink="log", judge=next_judge, settle=settle)
+    next_intake = resumed.open_intake("s")
+    next_run = asyncio.create_task(resumed.run())
+    try:
+        await clock.advance(0)
+        assert clock.next_at() == 60
+        await clock.advance(80)
+        assert resumed_calls == [60, 120]
+        record = await resumed.inspect("s")
+        assert record is not None and record["batch"] is None
+    finally:
+        await next_intake.close()
+        await resumed.stop()
+        await next_run
+
+
+def test_accumulating_snapshot_requires_waiting_failure_count() -> None:
+    waiting = next(item for item in LEGACY["cases"] if item["name"] == "waiting-snapshot")
+    policy = default_policy()
+    policy["continuation"] = "accumulate"
+    with pytest.raises(ValueError, match="requires failures"):
+        from_record(waiting["expected"], policy)
+
+
+async def test_exhaustion_after_wait_keeps_native_dead_letter() -> None:
+    store, clock = memory_store(), fake_clock()
+    judge = scripted_judge([{"fail": "outage"}, {"route": "wait"}, {"fail": "outage"}, {"fail": "outage"}])
+    engine = create_attend(
+        store=store,
+        clock=clock,
+        kind={"reading": "continuous"},
+        judge=judge,
+        sink="log",
+        settle={"continuation": "accumulate", "wait_horizon_ms": 20, "retry_backoff_ms": [30, 60]},
+    )
+    intake = engine.open_intake("s")
+    running = asyncio.create_task(engine.run())
+
+    async def prepare(signal: AbortSignal) -> SourceBatch:
+        return {"events": [event("a", 0)]}
+
+    try:
+        await intake.submit(prepare)
+        await clock.advance(120)
+        page = await store.log.read({"after": None, "scope": "s", "limit": 10})
+        assert len(page["rows"]) == 1
+        row = page["rows"][0]
+        assert row["kind"] == "deadLetter" and row["at"] == 120
+        assert row["body"]["stage"] == "judge" and row["body"]["attempts"] == 4 and row["body"]["window"]["waits"] == 1
+        record = await engine.inspect("s")
+        assert record is not None and record["batch"] is None
+    finally:
+        await intake.close()
+        await engine.stop()
+        await running
+
+
+@pytest.mark.parametrize("limit", [134, 135])
+async def test_whole_window_byte_threshold(limit: int) -> None:
+    async with run(["wait", "queue"], settle={"max_window_bytes": limit}) as (clock, put, calls):
+        await put([event("a", 0)])
+        await clock.advance(15)
+        await put([event("b", 15, 100)])
+        await clock.advance(15)
+        assert calls[1] == {"at": 15 if limit == 134 else 30, "ids": ["a", "b"], "wait": limit == 135, "waits": 1}
