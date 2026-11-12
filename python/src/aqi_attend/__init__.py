@@ -31,6 +31,7 @@ from .core.types import (
     Window,
 )
 from .errors import BackpressureError, ConflictError, IntakeError, OutboxFullError, PermanentError, is_permanent
+from .fold import EventFold, fold_events
 from .notice import default_notice
 from .shell.intake import Intake, Prepare
 from .signal import AbortController, AbortSignal
@@ -54,6 +55,7 @@ __all__ = [
     "DeliveredRoute",
     "Entry",
     "Event",
+    "EventFold",
     "EventLimits",
     "EventLog",
     "Intake",
@@ -80,6 +82,7 @@ __all__ = [
     "Window",
     "create_attend",
     "default_notice",
+    "fold_events",
     "is_permanent",
     "log_source",
     "memory_log",

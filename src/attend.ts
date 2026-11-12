@@ -1,4 +1,5 @@
 import { ConflictError, IntakeError, isPermanent } from './errors.js';
+import { foldEvents, type EventFold } from './fold.js';
 import { sleep, systemClock } from './internal/clock.js';
 import { arrayLength, assertNever, messageOf } from './internal/shared.js';
 import { DEFAULT_POLICY, KINDS, ROUTES } from './types.js';
@@ -502,44 +503,21 @@ export function defaultNotice(decision: Decision, options?: { maxLines?: number;
 
 /** The notice's event lines, each with how many events it stands for. Context entries are left out. */
 function noticeLines(entries: readonly Entry[], fold: boolean): { text: string; events: number }[] {
-  const out: { text: string; events: number }[] = [];
-  let run: Entry[] = [];
-  // A run holds while every event reads the same (`same`), or while every event is a step of one act (`steps`).
-  let same = true;
-  let steps = true;
-  const close = () => {
-    if (run.length > 0) out.push({ text: runLine(run, same), events: run.length });
-    run = [];
-  };
-  for (const entry of entries) {
-    if (entry.kind === 'context') continue;
-    const head = run[0];
-    const reads = head !== undefined && eventLine(entry) === eventLine(head);
-    const step = head !== undefined && entry.kind === 'continuous' && entry.name === head.name;
-    if (fold && head && ((same && reads) || (steps && step))) {
-      same &&= reads;
-      steps &&= step;
-    } else {
-      close();
-      same = true;
-      steps = entry.kind === 'continuous';
-    }
-    run.push(entry);
-  }
-  close();
-  return out;
+  return foldEvents(entries.filter((entry) => entry.kind !== 'context'), {
+    repeats: (first, next) => eventLine(first) === eventLine(next),
+    continues: (first, next) => first.kind === 'continuous' && next.kind === 'continuous' && first.name === next.name,
+    fold,
+  }).map((run) => ({ text: runLine(run), events: run.count }));
 }
 
 const eventLine = (e: Entry): string => e.text ?? `${e.name} ${JSON.stringify(e.data)}`;
 
-function runLine(run: readonly Entry[], same: boolean): string {
-  const first = run[0]!;
-  const last = run[run.length - 1]!;
+function runLine({ first, last, count, mode }: EventFold<Entry>): string {
   const line = eventLine(first);
-  if (run.length === 1) return line;
-  if (same) return `${line} (${run.length} times)`;
+  if (mode === 'single') return line;
+  if (mode === 'repeat') return `${line} (${count} times)`;
   const end = first.text === undefined && last.text === undefined ? JSON.stringify(last.data) : eventLine(last);
-  return `${line} → ${end} (${run.length} steps)`;
+  return `${line} → ${end} (${count} steps)`;
 }
 
 /** A resumable source over an event log, with optional polling and blocking waits. */
