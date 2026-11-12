@@ -502,8 +502,8 @@ export type KnownIds = Map<string, number>;
 
 /**
  * Everything `deadline()` reads, kept O(1). Acts and flushes are never shed or pruned, so their
- * fields only move forward. NaN means none for the `*At` fields; `minFlushAt` and
- * `prefixMinSheddableAt` use Infinity for none. Equal to what a scan of the live entries derives.
+ * time summaries need no removal update. NaN marks absent times; minima start at Infinity and
+ * maxima at -Infinity. Equal to what a scan of the live entries derives.
  */
 export interface TriggerSummary {
   minFlushAt: number;
@@ -522,7 +522,7 @@ export interface TriggerSummary {
   actObserved: boolean;
   /** Index of the first act relative to `start`, or -1. Adjusted on removal, unchanged by compaction. */
   firstActIndex: number;
-  /** Smallest `seenAt` among sheddable entries before the first act: the O(1) prune test. */
+  /** Smallest effective observation time among sheddable entries before the first act: the O(1) prune test. */
   prefixMinSheddableAt: number;
   /** Live consequence and context entries; zero means nothing can be shed. */
   sheddable: number;
