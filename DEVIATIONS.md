@@ -88,6 +88,8 @@ A load under a changed policy forces a snapshot on the next input, even when tha
 
 `defaultNotice` folds a run of events that read the same into one line with its count, and a run of `continuous` events under one name into its first and last step with the count. The frozen shell prints one line per event, which `fold: false` still gives. The line limit counts folded lines, and the older-events count still counts events. The window, the decision and its id are unchanged. `defaultNotice folds…` in `test/attend.test.ts` and the cases in `conformance/fixtures/notice.json` pin the text. No earlier assertion changed, because none repeated a line.
 
+`foldEvents` and Python's `fold_events` expose those groups for hosts that write their own notices. Both take host-supplied repeat and continuation comparisons. The default notice calls this export with its existing comparisons, so its output does not change. `conformance/fixtures/fold.json` pins group endpoints, counts and modes in both runtimes; the existing notice fixtures remain unchanged.
+
 # Python port
 
 `python/` ports the TypeScript package to Python 3.12 or later. The fixtures in `conformance/` pin what the two must agree on. This section lists every place the Python port differs and why.
