@@ -74,3 +74,22 @@ test('close joins a withdrawn callback that later rejects', async () => {
     expect(await engine.inspect('scope')).toBeNull();
   } finally { release.open(); await engine.stop(); await running; }
 });
+
+test('stop refuses to join its own preparation callback', async () => {
+  const clock = fakeClock(), engine = createAttend({ clock, kind: {}, judge: scriptedJudge([]), sink: 'log' });
+  const intake = openIntake(engine, 'scope'), running = engine.run(), started = gate(), rescue = gate();
+  let outcome = 'pending';
+  try {
+    const receipt = intake.submit(async () => {
+      started.open();
+      await Promise.race([
+        engine.stop().then(() => { outcome = 'accepted'; }, (error: unknown) => { outcome = error instanceof Error ? error.message : 'wrong error'; }),
+        rescue.promise,
+      ]);
+      return { events: [] };
+    });
+    await started.promise; await clock.advance(0);
+    expect(outcome).toContain('own callback');
+    await receipt;
+  } finally { rescue.open(); await intake.close(); await engine.stop(); await running; }
+});

@@ -9,7 +9,7 @@ from aqi_attend.signal import AbortError
 from aqi_attend.testing import fake_clock, scripted_judge
 
 
-@pytest.mark.parametrize("via", ["close", "stop", "cancel_runner"])
+@pytest.mark.parametrize("via", ["close", "stop", "cancel_runner", "cancel_runner_twice"])
 async def test_close_joins_cooperative_preparation_cleanup(via: str) -> None:
     clock = fake_clock()
     engine = create_attend(clock=clock, kind={}, judge=scripted_judge([]), sink="log")
@@ -37,10 +37,14 @@ async def test_close_joins_cooperative_preparation_cleanup(via: str) -> None:
         with pytest.raises(IntakeError):
             await receipt
         assert not closing.done() and not ended.is_set()
-        if via == "cancel_runner":
+        if via in ("cancel_runner", "cancel_runner_twice"):
             running.cancel()
             await clock.advance(0)
             assert not closing.done()
+            if via == "cancel_runner_twice":
+                running.cancel()
+                await clock.advance(0)
+                assert not closing.done() and not running.done()
             other = asyncio.create_task(intake.close())
             await clock.advance(0)
             assert not other.done()
