@@ -82,6 +82,7 @@ redis-py runs each concurrent command on a pooled connection of its own, and its
 - `push`, `flush` and `end` return futures that resolve once the input is persisted. They take the input when called, as the TypeScript promises do.
 - Cancelling the task that runs `run()` stops it the way `stop()` does.
 - `default_notice(decision, max_lines=20, fold=True)` takes its options as keyword arguments. [The notice](../docs/sinks.md#the-notice) says what it folds.
+- `fold_events(values, repeats=..., continues=...)` returns a tuple of frozen `EventFold` groups with `first`, `last`, `count` and `mode`. The endpoint values refer to your inputs. [Write your own folded notice](../docs/sinks.md#write-your-own-folded-notice) explains the comparisons and filtering.
 
 [DEVIATIONS.md](../DEVIATIONS.md#python-port) lists every difference.
 
