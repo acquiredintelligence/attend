@@ -10,8 +10,10 @@ export type JsonObject = { [key: string]: JsonValue };
 /** One event as a source hands it in. `id` is unique within the scope and is the dedup key. */
 export interface Event {
   id: string;
-  /** ms since the epoch, as the source reports it. Informational: timers use `Entry.seenAt`. */
+  /** ms since the epoch, as the source reports it. Informational. */
   at: number;
+  /** Source observation time in the engine clock's coordinates. Omit to settle from ingestion. */
+  observedAt?: number;
   name: string;
   data: JsonObject;
   /** One plain line describing the event. The judge never writes text; notices are built from these. */
