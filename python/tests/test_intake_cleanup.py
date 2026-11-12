@@ -154,7 +154,7 @@ async def test_close_consumes_a_withdrawn_callback_that_later_fails() -> None:
         except asyncio.CancelledError:
             cleaning.set()
             await release.wait()
-            raise ValueError("late failure")
+            raise ValueError("late failure") from None
         return {"events": []}
 
     try:
