@@ -1,4 +1,5 @@
 export { createAttend, defaultNotice, logSource, routes, BackpressureError, ConflictError, OutboxFullError, PermanentError } from './attend.js';
+export { foldEvents, type EventFold } from './fold.js';
 export type { Attend, AttendConfig, JudgeContext, RouteHandlers, RunOptions, AdmissionOptions, DeadLetterHandler, DecisionCursorPage, DecisionFilter, DecisionReadOptions } from './attend.js';
 export { memoryLog, memoryStore } from './memory.js';
 export { DEFAULT_POLICY, KINDS, ROUTES } from './types.js';
