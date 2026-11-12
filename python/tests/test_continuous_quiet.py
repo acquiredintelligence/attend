@@ -258,3 +258,20 @@ async def test_revision_two_snapshot_and_mixed_tail_rebuild_end_times() -> None:
     finally:
         await attend.stop()
         await store.close()
+
+
+async def test_explicit_duration_ignores_unused_infinite_default_gap() -> None:
+    clock = fake_clock(100)
+    judge = scripted_judge([{"route": "queue"}])
+    attend = create_attend(clock=clock, kind={"move": "continuous"}, settle={"stream_gap_ms": float("inf")}, judge=judge, sink="log")
+    running = asyncio.create_task(attend.run())
+    try:
+        await attend.push("s", {"id": "a", "name": "move", "quietForMs": 40})
+        record = await attend.inspect("s")
+        assert record is not None and record["dueAt"] == 140
+        await clock.advance(40)
+        assert [call["window"]["settledAt"] for call in judge.calls] == [140]
+    finally:
+        await attend.stop()
+        await running
+        await attend.store.close()

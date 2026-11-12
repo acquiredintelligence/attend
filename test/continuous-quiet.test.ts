@@ -62,7 +62,7 @@ test('other triggers remain independent of continuous durations', () => {
   expect(deadline({ ...DEFAULT_POLICY, maxEvents: 0 }, buffer(move))).toEqual({ at: 100, reason: 'overflow' });
 });
 
-test.each([null, true, '10', NaN, Infinity, -Infinity, -1])('invalid duration %s refuses the whole batch', async (quietForMs) => {
+test.each([null, true, '10', NaN, Infinity, -Infinity, -1, Symbol('duration'), () => 40, { toJSON: () => undefined }])('invalid duration %s refuses the whole batch', async (quietForMs) => {
   const attend = createAttend({ clock: fakeClock(100), kind: { move: 'continuous' }, judge: scriptedJudge([{ route: 'queue' }]), sink: 'log' });
   try {
     // Decoded JavaScript input can violate the declared public type.
@@ -71,6 +71,22 @@ test.each([null, true, '10', NaN, Infinity, -Infinity, -1])('invalid duration %s
     expect(await attend.inspect('s')).toBeNull();
   } finally {
     await attend.stop();
+  }
+});
+
+test('an explicit duration ignores an unused infinite default gap', async () => {
+  const clock = fakeClock(100);
+  const judge = scriptedJudge([{ route: 'queue' }]);
+  const attend = createAttend({ clock, kind: { move: 'continuous' }, settle: { streamGapMs: Infinity }, judge, sink: 'log' });
+  const running = attend.run();
+  try {
+    await attend.push('s', { id: 'a', name: 'move', quietForMs: 40 });
+    expect((await attend.inspect('s'))?.dueAt).toBe(140);
+    await clock.advance(40);
+    expect(judge.calls.map((call) => call.window.settledAt)).toEqual([140]);
+  } finally {
+    await attend.stop();
+    await running;
   }
 });
 
