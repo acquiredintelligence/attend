@@ -31,6 +31,7 @@ class Event(TypedDict):
     id: str
     at: float
     observedAt: NotRequired[float]
+    quietForMs: NotRequired[float]
     name: str
     data: JsonObject
     text: NotRequired[str]
