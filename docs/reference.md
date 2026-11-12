@@ -159,6 +159,33 @@ Wait count, provider failures and the native attempt token are separate. Release
 
 Continuation is saved with the snapshot. A live writer cannot change between modes while a held batch or fresh entries remain. Empty scopes can change mode while retaining recent decisions and outbox work. In particular, an old separate waiting snapshot has no historic failure count to recover; switching it to accumulate is refused. `inspect` reads using the saved policy. See [storage](storage.md) for version coordination.
 
+## Independent event limits
+
+Accumulating continuation can separate the counted settlement threshold from background retention:
+
+```ts
+import { createAttend } from '@acquiredintelligence/attend';
+
+const attend = createAttend({
+  kind: { reading: 'continuous', state: 'context' },
+  judge: async () => ({ route: 'queue' }),
+  sink: 'log',
+  settle: { continuation: 'accumulate', eventLimits: { counted: 3, background: 2 } },
+});
+```
+
+Python uses `event_limits` for the outer key; both members keep the same names. Both are required safe integers: `counted` is positive and `background` is nonnegative. Zero background capacity retains none. The option requires explicit `accumulate` and rejects an explicit `maxEvents` (`max_events` in Python). Omission preserves the scalar limit in both continuation modes.
+
+`closing`, `continuous`, `passive` and `flush` count toward the threshold. `context` and `consequence` share the background capacity. Deduplication runs first. Excess background leaves oldest-admitted first, regardless of observation timestamps; surviving entries keep their order and identity. Counted entries never leave to meet a capacity. Background alone never triggers settlement.
+
+Reaching the counted threshold makes an initial or waiting candidate due and withholds wait, even if quiet supplied the reason. It cannot advance retry before its not-before deadline. Existing age, byte and wait limits remain in force. A forced no-wait state and the failure allowance survive later retries.
+
+Retention covers the whole unresolved held-plus-fresh state during waiting and retry. A live offer stays immutable while fresh input is bounded separately. If it transitions to wait, retry, release or defer, the combined state is bounded before that transition commits. Drop/gap metadata and known identities follow the retained entries, and changed held membership gets its new window ID before the next attempt. Completed decisions and outbox records do not change.
+
+One accepted source batch is still one admission. It can exceed the counted trigger and produce one larger window; it is not split and no counted excess is discarded. Raw-intake capacity counts unfinished operations, not events in an accepted batch. Neither limit is a hard memory-allocation bound.
+
+The pair persists with the snapshot at reducer revision 5. Tails and inspection use the saved policy. Adding, removing or changing the pair is refused before writes or effects while open entries or an unresolved batch remain. Empty scopes may adopt it while retaining recent decisions and outbox work. Old records without the pair keep scalar behavior. Coordinate writer versions: this is not a fence against older code that lacks the check.
+
 ## Guarantees
 
 - **One snapshot and a short tail per scope.** The snapshot holds the open window, the judge slot and the outbox. A write appends the inputs that changed state, and a snapshot replaces the tail once it grows past the snapshot's own size. A source's cursor commits in the same write as the events it covers.
@@ -181,6 +208,7 @@ These are round starting points, not tuned values. Override any of them with `se
 | `waitHorizonMs` | 10000 | How long a waiting window waits for the next window before attend judges it alone |
 | `maxWaits` | 2 | How many times one window may wait |
 | `maxEvents` | 250 | Events one window holds. Past it, attend drops consequence and context events, then settles. |
+| `eventLimits` | omitted | In explicit accumulating mode, an inclusive counted trigger and independent background capacity; replaces the scalar limit. |
 | `maxWindowMs` | 60000 | Age of the first act at which the window settles |
 | `windowShare` (a `createAttend` option) | 0.5 | Share of the judge's context budget a window may fill before it settles with reason `size` |
 | `actThreshold` (a `createAttend` option) | off | Act when p(interrupt) + p(ask) reaches it |

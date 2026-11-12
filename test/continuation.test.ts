@@ -170,7 +170,7 @@ test.each(legacy.cases)('reads revision-3 $name and refuses an unresolved mode s
     await pending;
     const stored = await store.load('scope');
     expect(stored?.snapshot?.policy.continuation).toBe('accumulate');
-    expect(stored?.snapshot?.reducer).toBe(4);
+    expect(stored?.snapshot?.reducer).toBe(5);
     expect((await engine.inspect('scope'))?.recent).toEqual(item.expected.recent);
   } else {
     await expect(pending).rejects.toThrow('continuation');

@@ -254,7 +254,7 @@ async def test_revision_two_snapshot_and_mixed_tail_rebuild_end_times() -> None:
         assert loaded is not None and loaded["dueAt"] == 200
         assert [(event["id"], event.get("quietForMs"), event["seenAt"]) for event in loaded["buffer"]["entries"]] == [("a", None, 100), ("b", 90, 120), ("c", None, 120)]
         stored = await store.load("s")
-        assert stored is not None and stored["snapshot"] is not None and stored["snapshot"]["reducer"] == 4
+        assert stored is not None and stored["snapshot"] is not None and stored["snapshot"]["reducer"] == 5
     finally:
         await attend.stop()
         await store.close()

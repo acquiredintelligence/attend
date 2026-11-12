@@ -38,6 +38,19 @@ export function createAttendInternal(config: AttendConfig, snapshot: 'ratio' | '
   if (policy.continuation !== undefined && policy.continuation !== 'separate' && policy.continuation !== 'accumulate') {
     throw new TypeError('attend: continuation must be separate or accumulate');
   }
+  if (config.settle && Object.hasOwn(config.settle, 'eventLimits')) {
+    const limits = config.settle.eventLimits;
+    if (policy.continuation !== 'accumulate' || Object.hasOwn(config.settle, 'maxEvents')) {
+      throw new TypeError('attend: eventLimits requires accumulate and replaces maxEvents');
+    }
+    if (typeof limits !== 'object' || limits === null || Array.isArray(limits)
+      || Reflect.ownKeys(limits).length !== 2 || !Object.hasOwn(limits, 'counted') || !Object.hasOwn(limits, 'background')
+      || !Number.isSafeInteger(limits.counted) || limits.counted <= 0
+      || !Number.isSafeInteger(limits.background) || limits.background < 0) {
+      throw new TypeError('attend: eventLimits requires positive counted and nonnegative background safe integers');
+    }
+    policy.eventLimits = { counted: limits.counted, background: limits.background };
+  }
   if (config.judge.budget) {
     const bytes = windowBytesFor(config.judge.budget, share);
     if (!Number.isFinite(bytes) || bytes <= 0) throw new RangeError('attend: judge window budget must be positive and finite');

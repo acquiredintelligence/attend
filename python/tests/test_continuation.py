@@ -226,7 +226,7 @@ async def test_revision_three_read_and_mode_boundary(item: dict[str, Any]) -> No
         stored = await store.load("scope")
         assert stored is not None and stored["snapshot"] is not None
         assert stored["snapshot"]["policy"].get("continuation") == "accumulate"
-        assert stored["snapshot"]["reducer"] == 4
+        assert stored["snapshot"]["reducer"] == 5
         record = await engine.inspect("scope")
         assert record is not None and record["recent"] == item["expected"]["recent"]
     else:

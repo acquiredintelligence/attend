@@ -59,10 +59,17 @@ export type DeliveredRoute = Exclude<DecidedRoute, 'skip'>;
 
 export type SettleReason = 'closing' | 'flush' | 'stream_quiet' | 'passive_quiet' | 'overflow' | 'age' | 'forced' | 'size';
 
+/** Independent settlement and FIFO retention limits, selected together. */
+export interface EventLimits {
+  counted: number;
+  background: number;
+}
+
 /** Round starting points, not tuned values. Every number is in ms unless it is a count. */
 export interface SettlePolicy {
   /** Keep one unresolved window through waits and retries. Omitted means separate. */
   continuation?: 'separate' | 'accumulate';
+  eventLimits?: EventLimits;
   closingGraceMs: number;
   streamGapMs: number;
   passiveQuietMs: number;

@@ -81,6 +81,7 @@ redis-py runs each concurrent command on a pooled connection of its own, and its
 - A judge, sink, dead-letter handler, `context` or `capture` is called with `(value, signal)`, where `signal` is an `aqi_attend.AbortSignal`. Honour it with `await signal.race(work)` or by checking `signal.aborted`.
 - `push`, `flush` and `end` return futures that resolve once the input is persisted. They take the input when called, as the TypeScript promises do.
 - `settle={"continuation": "accumulate"}` retains one unresolved window through waits and retries. [Accumulating continuation](../docs/reference.md#accumulating-continuation) defines its bounds, failure allowance and stored-mode boundary.
+- Add `"event_limits": {"counted": 3, "background": 2}` to that setting for an independent counted trigger and background capacity. Both numbers are required; do not also supply `max_events`. [Independent event limits](../docs/reference.md#independent-event-limits) defines retention, atomic input and saved-policy rules.
 - A continuous event can carry `quietForMs` in its wire dictionary. [Continuous quiet duration](../docs/reference.md#continuous-quiet-duration) defines its validation, defaults and recovery.
 - An event's optional `observedAt` keeps its camelCase wire name. It supplies source observation time for deadlines; `seenAt` remains engine ingestion time. The shared [observation-time reference](../docs/reference.md#observation-time) defines validation, ordering and replay.
 - Cancelling the task that runs `run()` stops it the way `stop()` does.

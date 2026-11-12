@@ -47,10 +47,18 @@ class Entry(KindedEvent):
     seenAt: float
 
 
+class EventLimits(TypedDict):
+    """Independent settlement and FIFO retention limits, selected together."""
+
+    counted: int
+    background: int
+
+
 class SettlePolicy(TypedDict):
     """Round starting points, not tuned values. Every number is in ms unless it is a count."""
 
     continuation: NotRequired[Literal["separate", "accumulate"]]
+    eventLimits: NotRequired[EventLimits]
     closingGraceMs: float
     streamGapMs: float
     passiveQuietMs: float

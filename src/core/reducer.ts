@@ -6,10 +6,10 @@ import type {
 import { ROUTES } from './types.js';
 import { fnvHex, fnvStart, foldId } from './ids.js';
 import { seenAdmit, seenRelease, seenTrim } from './seen.js';
-import { estimateRenderedBytes, observationTime, openWindow, shedEntries, windowAppend, windowCompact, windowDeadline, windowEntries, windowPrune, windowShed, windowSize } from './window.js';
+import { estimateRenderedBytes, isBackground, observationTime, openWindow, shedEntries, windowAppend, windowCompact, windowDeadline, windowEntries, windowPrune, windowShed, windowSize } from './window.js';
 
 /** Bumped whenever a release changes a transition. Stored with every snapshot. */
-export const REDUCER_VERSION = 4;
+export const REDUCER_VERSION = 5;
 
 /** An empty output. One output may collect several inputs: `apply` only ever sets `changed`. */
 export function newOutput(): ApplyOutput {
@@ -102,6 +102,7 @@ export function apply(config: ApplyConfig, state: ScopeState, logged: LoggedInpu
     default: input satisfies never;
   }
   if (swept) sweep(ctx, state);
+  if (config.policy.eventLimits && input.kind !== 'events') removed(ctx, state, retainBackground(config.policy, state), 'overflow');
   const due = nextDue(config.policy, state);
   if (!Object.is(state.dueAt, due)) {
     state.dueAt = due;
@@ -132,7 +133,7 @@ function ingest(ctx: Ctx, state: ScopeState, input: EventsInput): void {
   if (state.seen.size > Math.max(0, ctx.config.policy.seenCount)) ctx.out.changed = true;
   seenTrim(state, ctx.config.policy.seenCount);
   prune(ctx, state);
-  removed(ctx, state, windowShed(state.open, ctx.config.policy.maxEvents), 'overflow');
+  removed(ctx, state, retainBackground(ctx.config.policy, state), 'overflow');
   if (windowSize(state.open) === 0) state.open.endedAt = null;
   const source = input.source ?? null;
   if (source !== null && input.cursor !== undefined
@@ -148,15 +149,48 @@ function ingest(ctx: Ctx, state: ScopeState, input: EventsInput): void {
   if (ctx.config.traces) ctx.out.effects.push({ kind: 'trace', trace: { kind: 'ingested', scope: state.scope, count: input.events.length - duplicates, duplicates } });
 }
 
+function retainBackground(policy: SettlePolicy, state: ScopeState): Entry[] | null {
+  const limits = policy.eventLimits, open = state.open;
+  if (!limits) return windowShed(open, policy.maxEvents);
+  const held = state.batch;
+  if (held === null || held.phase.phase === 'judging') {
+    return windowShed(open, windowSize(open) - Math.max(0, open.summary.sheddable - limits.background));
+  }
+  const heldBackground = held.window.events.reduce((count, entry) => count + Number(isBackground(entry)), 0);
+  const excess = heldBackground + open.summary.sheddable - limits.background;
+  if (excess <= 0) return null;
+  const retained = [...held.window.events];
+  const old = shedEntries(retained, Math.max(0, retained.length - excess));
+  if (old !== null) {
+    const hash = fnvStart(state.scope);
+    for (const entry of retained) foldId(hash, entry.id);
+    held.window = { ...held.window, events: retained, id: fnvHex(hash), dropped: held.window.dropped + old.length };
+    held.hash = hash;
+  }
+  const remaining = excess - (old?.length ?? 0);
+  const fresh = remaining > 0 ? windowShed(open, windowSize(open) - remaining) : null;
+  if (windowSize(open) === 0) open.endedAt = null;
+  return [...(old ?? []), ...(fresh ?? [])];
+}
+
+function shedCandidate(policy: SettlePolicy, entries: Entry[]): Entry[] | null {
+  if (!policy.eventLimits) return shedEntries(entries, policy.maxEvents);
+  const background = entries.reduce((count, entry) => count + Number(isBackground(entry)), 0);
+  return shedEntries(entries, entries.length - Math.max(0, background - policy.eventLimits.background));
+}
+
 function continuationEntries(policy: SettlePolicy, state: ScopeState): Entry[] {
   const entries = [...(state.batch?.window.events ?? []), ...windowEntries(state.open)];
-  shedEntries(entries, policy.maxEvents);
+  shedCandidate(policy, entries);
   return entries;
 }
 
 function sizeBound(policy: SettlePolicy, entries: readonly Entry[]): SettleReason | null {
   if (entries.length === 0) return null;
-  if (entries.length > policy.maxEvents) return 'overflow';
+  const full = policy.eventLimits
+    ? entries.reduce((count, entry) => count + Number(!isBackground(entry)), 0) >= policy.eventLimits.counted
+    : entries.length > policy.maxEvents;
+  if (full) return 'overflow';
   if (policy.maxWindowBytes !== undefined && entries.reduce((bytes, entry) => bytes + estimateRenderedBytes(entry), 0) >= policy.maxWindowBytes) return 'size';
   return null;
 }
@@ -268,7 +302,7 @@ function settleBuffer(ctx: Ctx, state: ScopeState, fired: SettleReason, mayWait:
   const gap = open.gap || (held?.window.gap ?? false);
   const waits = held?.window.waits ?? 0;
   forced = forced || held?.window.reason === 'forced';
-  const gone = shedEntries(events, ctx.config.policy.maxEvents);
+  const gone = shedCandidate(ctx.config.policy, events);
   removed(ctx, state, gone, 'overflow');
   dropped += gone?.length ?? 0;
   let hash: FnvState;
