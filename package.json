@@ -1,6 +1,6 @@
 {
   "name": "@acquiredintelligence/attend",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "The attention layer for agents: decide when an event should wake your agent.",
   "license": "MIT",
   "type": "module",
@@ -83,8 +83,9 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "check": "pnpm typecheck && pnpm test && pnpm build && pnpm check:docs && pnpm check:browser",
+    "check": "pnpm typecheck && pnpm test && pnpm build && pnpm check:docs && pnpm check:browser && pnpm check:version",
     "check:browser": "node --experimental-vm-modules scripts/check-browser-root.mjs",
+    "check:version": "node scripts/check-version.mjs",
     "demo": "pnpm build && node --experimental-strip-types examples/demo.ts",
     "check:docs": "node scripts/check-snippets.mjs",
     "test:oracle": "vitest run -c vitest.oracle.config.ts",

@@ -1,0 +1,164 @@
+name: release
+
+# Pushing a tag vX.Y.Z publishes that version to npm and to PyPI. Both registries trust this file by
+# name through OIDC, with the environments `npm` and `pypi`, so the repo stores no token. Renaming the
+# file or an environment breaks that trust until the publisher is set up again on each registry.
+#
+# To release: set the version in the five files scripts/check-version.mjs reads, add a CHANGELOG.md
+# entry, merge to main, then tag that commit vX.Y.Z and push the tag.
+#
+# A pull request runs build and verify on what would be published and never publishes.
+
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      # No dependency cache in this workflow: a release builds from the lockfiles alone.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: false
+      - name: Every version agrees, and the tag names it
+        env:
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: node scripts/check-version.mjs "$TAG"
+      - name: The tagged commit is on main
+        if: github.ref_type == 'tag'
+        run: |
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::$GITHUB_REF_NAME points at a commit that is not on main. Merge first, then tag the commit on main."
+            exit 1
+          fi
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: |
+          mkdir "$RUNNER_TEMP/npm-package"
+          npm pack --pack-destination "$RUNNER_TEMP/npm-package"
+      - run: uv build --out-dir "$RUNNER_TEMP/python-dist"
+        working-directory: python
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-package
+          path: ${{ runner.temp }}/npm-package/*.tgz
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-dist
+          path: |
+            ${{ runner.temp }}/python-dist/*.tar.gz
+            ${{ runner.temp }}/python-dist/*.whl
+          if-no-files-found: error
+
+  # Checks the files the publish jobs will upload, in a job that has no checkout of the repo.
+  verify:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: false
+      - name: The npm tarball holds only the package, installs alone and runs
+        run: |
+          tarball=$(ls "$PWD"/npm-package/*.tgz)
+          extra=$(tar -tzf "$tarball" | grep -v -E '^package/(dist/|skills/|README\.md$|LICENSE$|package\.json$)' || true)
+          if [ -n "$extra" ]; then printf 'Unexpected files in the npm tarball:\n%s\n' "$extra"; exit 1; fi
+          mkdir "$RUNNER_TEMP/app"
+          cd "$RUNNER_TEMP/app"
+          npm init --yes > /dev/null
+          npm install "$tarball"
+          node --input-type=module --eval "
+            import { createAttend, foldEvents } from '@acquiredintelligence/attend';
+            import { openIntake } from '@acquiredintelligence/attend/intake';
+            import { fakeClock } from '@acquiredintelligence/attend/testing';
+            if (![createAttend, foldEvents, openIntake, fakeClock].every((f) => typeof f === 'function')) process.exit(1);
+          "
+          npx --no-install attend --help > /dev/null
+      - name: The Python files pass twine, hold only the package, install alone and import
+        working-directory: python-dist
+        run: |
+          uvx twine check --strict *.tar.gz *.whl
+          extra=$(tar -tzf *.tar.gz | grep -v -E '^aqi_attend-[0-9.]+/(src/aqi_attend/|README\.md$|LICENSE$|PKG-INFO$|pyproject\.toml$|\.gitignore$)' || true)
+          if [ -n "$extra" ]; then printf 'Unexpected files in the sdist:\n%s\n' "$extra"; exit 1; fi
+          extra=$(unzip -Z1 *.whl | grep -v -E '^aqi_attend(-[0-9.]+\.dist-info)?/' || true)
+          if [ -n "$extra" ]; then printf 'Unexpected files in the wheel:\n%s\n' "$extra"; exit 1; fi
+          uv venv --python 3.12 "$RUNNER_TEMP/venv"
+          uv pip install --python "$RUNNER_TEMP/venv/bin/python" *.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/venv/bin/python" -c "
+          import aqi_attend, aqi_attend.judges, aqi_attend.testing, aqi_attend.store.memory, aqi_attend.store.postgres, aqi_attend.store.redis
+          assert callable(aqi_attend.create_attend) and callable(aqi_attend.fold_events)
+          "
+
+  publish-npm:
+    if: github.event_name == 'push' && github.ref_type == 'tag' && github.repository == 'acquiredintelligence/attend'
+    needs: verify
+    runs-on: ubuntu-latest
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/@acquiredintelligence/attend
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-package
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: npm is new enough for trusted publishing
+        run: |
+          node -e "
+            const [major, minor, patch] = process.argv[1].split('.').map(Number);
+            if (major < 11 || (major === 11 && (minor < 5 || (minor === 5 && patch < 1)))) {
+              console.error('npm ' + process.argv[1] + ' is older than 11.5.1, which trusted publishing needs');
+              process.exit(1);
+            }
+          " "$(npm --version)"
+      # No token and no --provenance: npm trades this job's OIDC identity for a short-lived token,
+      # and attaches provenance on its own for a public package built from a public repo.
+      - run: npm publish ./*.tgz --access public
+
+  publish-pypi:
+    if: github.event_name == 'push' && github.ref_type == 'tag' && github.repository == 'acquiredintelligence/attend'
+    needs: verify
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/aqi-attend
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-dist
+          path: dist
+      # No token: the action trades this job's OIDC identity for one, and uploads attestations too.
+      - uses: pypa/gh-action-pypi-publish@release/v1

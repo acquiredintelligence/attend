@@ -55,7 +55,7 @@ npm install @acquiredintelligence/attend
 
 attend needs Node 22.13 or later and ships ESM only. The engine has no runtime dependencies. Before production, replace the function judge with [a real judge](docs/judges.md) and pass `store` [a database store](docs/storage.md); without one, state lives in memory.
 
-A Python port for asyncio, with the same semantics and the same decision ids, lives in [`python/`](python/README.md).
+A Python port for asyncio, with the same semantics and the same decision ids, installs with `pip install aqi-attend`. Its guide is in [`python/`](python/README.md).
 
 ## See it decide
 
@@ -158,7 +158,7 @@ For Codex or Cursor, copy `skills/attend` into your project's `.agents/skills/`.
 
 ## Status
 
-attend is v0, and its API can change before 1.0. MCP Events is a working-group draft, so its wire shapes can change too. `@acquiredintelligence/attend/mcp` follows the current draft.
+attend is v0, and its API can change before 1.0. [The changelog](CHANGELOG.md) says what each release changed. MCP Events is a working-group draft, so its wire shapes can change too. `@acquiredintelligence/attend/mcp` follows the current draft.
 
 ## License
 
