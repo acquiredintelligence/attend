@@ -2,7 +2,7 @@
 
 Decide when an event should wake your agent, in an asyncio process.
 
-This is the Python port of [attend](https://github.com/acquiredintelligence/attend). It has the same design and the same semantics as the TypeScript package, and its decision ids match it byte for byte. Both implementations pass the shared fixtures in [`conformance/`](../conformance), and either one can read and continue a scope the other wrote in a shared Redis or Postgres. [How attend works](../docs/how-it-works.md) and [the reference](../docs/reference.md) apply to both; this page covers what is particular to Python.
+This is the Python port of [attend](https://github.com/acquiredintelligence/attend). It has the same design and the same semantics as the TypeScript package, and its decision ids match it byte for byte. Both implementations pass the shared fixtures in [`conformance/`](https://github.com/acquiredintelligence/attend/tree/main/conformance), and either one can read and continue a scope the other wrote in a shared Redis or Postgres. [How attend works](https://github.com/acquiredintelligence/attend/blob/main/docs/how-it-works.md) and [the reference](https://github.com/acquiredintelligence/attend/blob/main/docs/reference.md) apply to both; this page covers what is particular to Python.
 
 ```python
 import asyncio
@@ -80,19 +80,19 @@ redis-py runs each concurrent command on a pooled connection of its own, and its
 - Keyword arguments and `settle` keys are snake_case, such as `create_attend(settle={"wait_horizon_ms": 5000})`. Every value that crosses a store or a judge (events, windows, decisions, dead letters, records, traces) is a dict with the TypeScript field names, such as `decision["window"]["settledAt"]`, so both runtimes share one persisted layout.
 - A judge, sink, dead-letter handler, `context` or `capture` is called with `(value, signal)`, where `signal` is an `aqi_attend.AbortSignal`. Honour it with `await signal.race(work)` or by checking `signal.aborted`.
 - `push`, `flush` and `end` return futures that resolve once the input is persisted. They take the input when called, as the TypeScript promises do.
-- `settle={"continuation": "accumulate"}` retains one unresolved window through waits and retries. [Accumulating continuation](../docs/reference.md#accumulating-continuation) defines its bounds, failure allowance and stored-mode boundary.
-- Add `"event_limits": {"counted": 3, "background": 2}` to that setting for an independent counted trigger and background capacity. Both numbers are required; do not also supply `max_events`. [Independent event limits](../docs/reference.md#independent-event-limits) defines retention, atomic input and saved-policy rules.
-- A continuous event can carry `quietForMs` in its wire dictionary. [Continuous quiet duration](../docs/reference.md#continuous-quiet-duration) defines its validation, defaults and recovery.
-- An event's optional `observedAt` keeps its camelCase wire name. It supplies source observation time for deadlines; `seenAt` remains engine ingestion time. The shared [observation-time reference](../docs/reference.md#observation-time) defines validation, ordering and replay.
+- `settle={"continuation": "accumulate"}` retains one unresolved window through waits and retries. [Accumulating continuation](https://github.com/acquiredintelligence/attend/blob/main/docs/reference.md#accumulating-continuation) defines its bounds, failure allowance and stored-mode boundary.
+- Add `"event_limits": {"counted": 3, "background": 2}` to that setting for an independent counted trigger and background capacity. Both numbers are required; do not also supply `max_events`. [Independent event limits](https://github.com/acquiredintelligence/attend/blob/main/docs/reference.md#independent-event-limits) defines retention, atomic input and saved-policy rules.
+- A continuous event can carry `quietForMs` in its wire dictionary. [Continuous quiet duration](https://github.com/acquiredintelligence/attend/blob/main/docs/reference.md#continuous-quiet-duration) defines its validation, defaults and recovery.
+- An event's optional `observedAt` keeps its camelCase wire name. It supplies source observation time for deadlines; `seenAt` remains engine ingestion time. The shared [observation-time reference](https://github.com/acquiredintelligence/attend/blob/main/docs/reference.md#observation-time) defines validation, ordering and replay.
 - Cancelling the task that runs `run()` stops it the way `stop()` does.
-- `default_notice(decision, max_lines=20, fold=True)` takes its options as keyword arguments. [The notice](../docs/sinks.md#the-notice) says what it folds.
-- `fold_events(values, repeats=..., continues=...)` returns a tuple of frozen `EventFold` groups with `first`, `last`, `count` and `mode`. The endpoint values refer to your inputs. [Write your own folded notice](../docs/sinks.md#write-your-own-folded-notice) explains the comparisons and filtering.
+- `default_notice(decision, max_lines=20, fold=True)` takes its options as keyword arguments. [The notice](https://github.com/acquiredintelligence/attend/blob/main/docs/sinks.md#the-notice) says what it folds.
+- `fold_events(values, repeats=..., continues=...)` returns a tuple of frozen `EventFold` groups with `first`, `last`, `count` and `mode`. The endpoint values refer to your inputs. [Write your own folded notice](https://github.com/acquiredintelligence/attend/blob/main/docs/sinks.md#write-your-own-folded-notice) explains the comparisons and filtering.
 
-[DEVIATIONS.md](../DEVIATIONS.md#python-port) lists every difference.
+[DEVIATIONS.md](https://github.com/acquiredintelligence/attend/blob/main/DEVIATIONS.md#python-port) lists every difference.
 
 ## Serial intake
 
-`attend.open_intake(scope, capacity=20000)` owns preparation and immediate effects for an untouched scope. The shared [serial-intake contract](../docs/reference.md#serial-intake) defines ordering, admission, cancellation and recovery.
+`attend.open_intake(scope, capacity=20000)` owns preparation and immediate effects for an untouched scope. The shared [serial-intake contract](https://github.com/acquiredintelligence/attend/blob/main/docs/reference.md#serial-intake) defines ordering, admission, cancellation and recovery.
 
 ```python
 from aqi_attend import AbortSignal, SourceBatch, create_attend
@@ -123,7 +123,7 @@ Repeated cancellation of the runner does not skip its cleanup join. `stop()` rej
 
 ## Judges
 
-`aqi_attend.judges` has `jev_judge` (TypeSafe's Jev, with your own key), `decisions_judge` (the OpenAI Decisions API) and `llm_judge`, which wraps any structured-output call you pass as `complete`. They send the same requests as the TypeScript judges, byte for byte. [Choose a judge](../docs/judges.md) explains each one, the window budget and the act threshold.
+`aqi_attend.judges` has `jev_judge` (TypeSafe's Jev, with your own key), `decisions_judge` (the OpenAI Decisions API) and `llm_judge`, which wraps any structured-output call you pass as `complete`. They send the same requests as the TypeScript judges, byte for byte. [Choose a judge](https://github.com/acquiredintelligence/attend/blob/main/docs/judges.md) explains each one, the window budget and the act threshold.
 
 ## Test with a fake clock
 

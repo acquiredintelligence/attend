@@ -13,10 +13,13 @@ classifiers = [
   "Development Status :: 4 - Beta",
   "Framework :: AsyncIO",
   "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
+  "Topic :: Software Development :: Libraries :: Python Modules",
   "Typing :: Typed",
 ]
 
@@ -27,8 +30,10 @@ http = ["httpx>=0.27"]
 
 [project.urls]
 Homepage = "https://github.com/acquiredintelligence/attend"
+Documentation = "https://github.com/acquiredintelligence/attend/blob/main/python/README.md"
 Repository = "https://github.com/acquiredintelligence/attend"
 Issues = "https://github.com/acquiredintelligence/attend/issues"
+Changelog = "https://github.com/acquiredintelligence/attend/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = [
@@ -48,6 +53,10 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/aqi_attend"]
+
+# The tests read fixtures and TypeScript sources from the repo around this directory, so they stay out of the sdist.
+[tool.hatch.build.targets.sdist]
+only-include = ["src/aqi_attend"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
