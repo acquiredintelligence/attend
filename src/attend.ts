@@ -1,4 +1,4 @@
-import { ConflictError, isPermanent } from './errors.js';
+import { ConflictError, IntakeError, isPermanent } from './errors.js';
 import { foldEvents, type EventFold } from './fold.js';
 import { sleep, systemClock } from './internal/clock.js';
 import { arrayLength, assertNever, messageOf } from './internal/shared.js';
@@ -13,6 +13,7 @@ import { windowBytesFor } from './shell/budget.js';
 import { readRecord } from './shell/read.js';
 import { readDecisions } from './shell/decisions.js';
 import { thresholdRoute } from './core/threshold.js';
+import { IntakeQueue, registerIntakes } from './shell/intake.js';
 
 /** Errors raised by intake and effect handlers. */
 export { BackpressureError, ConflictError, OutboxFullError, PermanentError } from './errors.js';
@@ -48,7 +49,9 @@ export function createAttendInternal(config: AttendConfig, snapshot: 'ratio' | '
   const fill = { id: () => globalThis.crypto.randomUUID(), at: () => clock.now() };
   const modes = { decisions: sink === 'log' ? 'log' : 'lane', deadLetters: deadLetter === 'log' ? 'log' : 'lane' } as const;
   const sources = new Set<AbortController>();
-  const attached = new Set<string>();
+  const attached = new Map<string, Set<string>>();
+  const intakes = new Map<string, IntakeQueue>();
+  const intakeIdentity = {};
   const sizedEvents = new WeakMap<Event, number>();
   const calls = new Map<Promise<void>, number>();
   const releases = new Set<Promise<void>>();
@@ -91,17 +94,20 @@ export function createAttendInternal(config: AttendConfig, snapshot: 'ratio' | '
   }
 
   function tick(scope: string): void {
+    const intake = intakes.get(scope);
+    if (intake) { intake.wake(); return; }
     void background(scope, 'tick', () => submit(scope, { kind: 'tick' }));
   }
 
   function background(scope: string, input: Input['kind'], work: () => Promise<void>): Promise<void> {
-    return work().catch((error: unknown) => {
+    const intake = intakes.get(scope);
+    return (intake ? intake.track(work) : work()).catch((error: unknown) => {
       if (!(error instanceof ConflictError)) observe({ kind: 'failed', scope, input, message: messageOf(error) });
     });
   }
 
   function call(scope: string, result: Input['kind'], leaseUntil: number, work: () => Promise<void>, release: ReleasedInput): void {
-    if (!running) {
+    if (!running || intakes.get(scope)?.closed) {
       const released = background(scope, release.kind, () => submit(scope, release)).finally(() => releases.delete(released));
       releases.add(released);
       return;
@@ -127,7 +133,7 @@ export function createAttendInternal(config: AttendConfig, snapshot: 'ratio' | '
         observe(effect.trace);
         return;
       case 'judge':
-        if (running && judges >= (config.judgeConcurrency ?? Infinity)) {
+        if (running && !intakes.get(scope)?.closed && judges >= (config.judgeConcurrency ?? Infinity)) {
           void background(scope, 'judgeDeferred', () => submit(scope, { kind: 'judgeDeferred', batchId: effect.batchId, attempt: effect.attempt, until: clock.now() + 100 }));
           return;
         }
@@ -145,13 +151,37 @@ export function createAttendInternal(config: AttendConfig, snapshot: 'ratio' | '
     }
   }
 
+  function effectController(scope: string, at: number, message: string) {
+    const controller = new AbortController();
+    const cancelTimer = clock.at(at, () => controller.abort(new Error(message)));
+    const signal = intakes.get(scope)?.completionSignal;
+    const abort = () => controller.abort(signal?.reason);
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
+    return { controller, cancel() { cancelTimer(); signal?.removeEventListener('abort', abort); } };
+  }
+
+  function submitCompletion(scope: string, result: Extract<Input, { kind: 'judged' | 'judgeFailed' | 'delivered' | 'deliveryFailed' }>): Promise<void> {
+    const intake = intakes.get(scope);
+    if (!intake) return submit(scope, result);
+    const release: ReleasedInput = result.kind === 'judged' || result.kind === 'judgeFailed'
+      ? { kind: 'judgeReleased', batchId: result.batchId, attempt: result.attempt }
+      : { kind: 'deliveryReleased', deliveryId: result.deliveryId, attempt: result.attempt };
+    if (intake.closed) return submit(scope, release);
+    const signal = intake.completionSignal;
+    return submit(scope, result, false, signal).catch((error: unknown) => {
+      if (signal.aborted && error === signal.reason) return submit(scope, release);
+      throw error;
+    });
+  }
+
   async function runJudge(scope: string, effect: JudgeEffect): Promise<void> {
     judges += 1;
-    const controller = new AbortController();
-    const cancel = clock.at(clock.now() + policy.judgeTimeoutMs, () => controller.abort(new Error('attend: judge timed out')));
+    const { controller, cancel } = effectController(scope, clock.now() + policy.judgeTimeoutMs, 'attend: judge timed out');
     const { batchId, attempt } = effect;
-    let result: Input;
+    let result: Extract<Input, { kind: 'judged' | 'judgeFailed' }>;
     try {
+      if (intakes.has(scope)) controller.signal.throwIfAborted();
       const live = config.context ? await config.context(scope, controller.signal) : {};
       const window = copyWindowSliced(effect.window);
       const input: JudgeInput = {
@@ -167,9 +197,12 @@ export function createAttendInternal(config: AttendConfig, snapshot: 'ratio' | '
         now: clock.now(),
       };
       if (config.guidance !== undefined) input.guidance = config.guidance;
+      if (intakes.has(scope)) controller.signal.throwIfAborted();
       const images = config.capture ? await capture(config.capture, scope, batchId, controller.signal) : [];
       if (images.length > 0) input.images = images;
+      if (intakes.has(scope)) controller.signal.throwIfAborted();
       const judgment: unknown = await config.judge(input, controller.signal);
+      if (intakes.has(scope)) controller.signal.throwIfAborted();
       if (isJudgment(judgment)) {
         const threshold = config.actThreshold === undefined ? null : thresholdRoute(judgment, effect.offered, config.actThreshold);
         if (threshold) observe({ kind: 'routeThresholded', scope, batchId, from: judgment.route, to: threshold.route, act: threshold.act });
@@ -181,7 +214,7 @@ export function createAttendInternal(config: AttendConfig, snapshot: 'ratio' | '
       cancel();
     }
     judges -= 1;
-    await submit(scope, result);
+    await submitCompletion(scope, result);
   }
 
   async function capture(fn: NonNullable<AttendConfig['capture']>, scope: string, batchId: string, judgeSignal: AbortSignal): Promise<JudgeImage[]> {
@@ -206,16 +239,20 @@ export function createAttendInternal(config: AttendConfig, snapshot: 'ratio' | '
 
   async function runDeliver(scope: string, effect: DeliverEffect): Promise<void> {
     const { item, phase } = effect.delivery;
-    const controller = new AbortController();
-    const cancel = clock.at(phase.leaseUntil, () => controller.abort(new Error('attend: delivery timed out')));
-    let result: Input;
+    const { controller, cancel } = effectController(scope, phase.leaseUntil, 'attend: delivery timed out');
+    let result: Extract<Input, { kind: 'delivered' | 'deliveryFailed' }>;
     try {
+      if (intakes.has(scope)) controller.signal.throwIfAborted();
       if (item.kind === 'decision' && sink !== 'log') {
         const decision = copyDecision(item.decision);
-        await sink.deliver(decision instanceof Promise ? await decision : decision, controller.signal);
+        const copied = decision instanceof Promise ? await decision : decision;
+        if (intakes.has(scope)) controller.signal.throwIfAborted();
+        await sink.deliver(copied, controller.signal);
       } else if (item.kind === 'deadLetter' && deadLetter !== 'log') {
         const letter = copyLetter(item.letter);
-        await deadLetter(letter instanceof Promise ? await letter : letter, controller.signal);
+        const copied = letter instanceof Promise ? await letter : letter;
+        if (intakes.has(scope)) controller.signal.throwIfAborted();
+        await deadLetter(copied, controller.signal);
       }
       result = { kind: 'delivered', deliveryId: item.id, attempt: phase.attempt };
     } catch (error) {
@@ -223,7 +260,7 @@ export function createAttendInternal(config: AttendConfig, snapshot: 'ratio' | '
     } finally {
       cancel();
     }
-    await submit(scope, result);
+    await submitCompletion(scope, result);
   }
 
   async function sweep(now: number, limit: number, warm: boolean): Promise<void> {
@@ -242,20 +279,25 @@ export function createAttendInternal(config: AttendConfig, snapshot: 'ratio' | '
     } catch (error) { observe({ kind: 'failed', scope: '*', input: 'tick', message: messageOf(error) }); }
   }
 
-  return {
+  const attend: Attend = {
     push(scope, events) {
-      try { return submit(scope, { kind: 'events', events: classify(events) }, true); }
+      try {
+        if (intakes.has(scope)) throw new IntakeError('attend: scope has exclusive intake');
+        return submit(scope, { kind: 'events', events: classify(events) }, true);
+      }
       catch (error) { return Promise.reject(error); }
     },
-    flush: (scope) => submit(scope, { kind: 'flush' }, true),
-    end: (scope) => submit(scope, { kind: 'end' }, true),
+    flush: (scope) => intakes.has(scope) ? Promise.reject(new IntakeError('attend: scope has exclusive intake')) : submit(scope, { kind: 'flush' }, true),
+    end: (scope) => intakes.has(scope) ? Promise.reject(new IntakeError('attend: scope has exclusive intake')) : submit(scope, { kind: 'end' }, true),
     inspect: (scope) => readRecord(store, scope, modes),
     decisions: (filter, options) => readDecisions(store.log, clock, filter, options),
 
     async attach(scope, source, options) {
-      const slot = `${scope}\n${source.key}`;
-      if (attached.has(slot)) throw new Error(`attend: source "${source.key}" is already attached to scope "${scope}"`);
-      attached.add(slot);
+      if (intakes.has(scope)) throw new IntakeError('attend: scope has exclusive intake');
+      const keys = attached.get(scope) ?? new Set<string>();
+      if (keys.has(source.key)) throw new Error(`attend: source "${source.key}" is already attached to scope "${scope}"`);
+      keys.add(source.key);
+      attached.set(scope, keys);
       const controller = new AbortController();
       const abort = () => controller.abort();
       options?.signal?.addEventListener('abort', abort, { once: true });
@@ -304,7 +346,8 @@ export function createAttendInternal(config: AttendConfig, snapshot: 'ratio' | '
           }
         }
       } finally {
-        attached.delete(slot);
+        keys.delete(source.key);
+        if (keys.size === 0) attached.delete(scope);
         sources.delete(controller);
         options?.signal?.removeEventListener('abort', abort);
       }
@@ -325,9 +368,22 @@ export function createAttendInternal(config: AttendConfig, snapshot: 'ratio' | '
     },
   };
 
+  registerIntakes(attend, (scope, options, context) => {
+    const capacity = options?.capacity ?? 20000;
+    if (!Number.isSafeInteger(capacity) || capacity <= 0) throw new RangeError('attend: intake capacity must be a positive safe integer');
+    if (intakes.has(scope) || scopes.has(scope) || attached.has(scope)) throw new IntakeError('attend: scope already active');
+    const intake = new IntakeQueue(scope, { identity: intakeIdentity, scopes, clock, classify, running: () => running !== null, observe }, context, capacity);
+    intakes.set(scope, intake);
+    return intake;
+  });
+  return attend;
+
   async function runLoop(signal: AbortSignal, sweepMs: number, sweepLimit: number): Promise<void> {
     running = { signal };
-    const onAbort = () => { running = null; scheduler.stop(); for (const source of sources) source.abort(); };
+    const onAbort = () => {
+      for (const intake of intakes.values()) void intake.fence();
+      running = null; scheduler.stop(); for (const source of sources) source.abort();
+    };
     signal.addEventListener('abort', onAbort, { once: true });
     try {
       if (signal.aborted) return;
@@ -345,6 +401,7 @@ export function createAttendInternal(config: AttendConfig, snapshot: 'ratio' | '
       await Promise.all([...calls].map(([done, leaseUntil]) => settledOrExpired(done, leaseUntil)));
       await writes;
       while (releases.size > 0) await Promise.all(releases);
+      await Promise.allSettled([...intakes.values()].map((intake) => intake.fence()));
     }
   }
 }

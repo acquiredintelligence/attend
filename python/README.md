@@ -88,6 +88,33 @@ redis-py runs each concurrent command on a pooled connection of its own, and its
 
 [DEVIATIONS.md](../DEVIATIONS.md#python-port) lists every difference.
 
+## Serial intake
+
+`attend.open_intake(scope, capacity=20000)` owns preparation and immediate effects for an untouched scope. The shared [serial-intake contract](../docs/reference.md#serial-intake) defines ordering, admission, cancellation and recovery.
+
+```python
+from aqi_attend import AbortSignal, SourceBatch, create_attend
+
+
+async def prepare(signal: AbortSignal) -> SourceBatch:
+    signal.throw_if_aborted()
+    return {"events": [{"id": "a", "name": "message", "at": 0, "data": {}}], "cursor": "1"}
+
+
+async def accept():
+    attend = create_attend(kind={"message": "flush"}, judge=judge, sink="log")
+    intake = attend.open_intake("channel", capacity=100)
+    running = asyncio.create_task(attend.run())
+    try:
+        await intake.submit(prepare, source="feed")
+    finally:
+        await intake.close()
+        await attend.stop()
+        await running
+```
+
+`submit` registers when called, before returning its future. Cancelling that future only detaches its observer; pass an `AbortSignal` to withdraw work. `close()` also fences when called, before its returned coroutine is awaited. Cancelling one close waiter does not cancel shared cleanup. Python uses `ContextVar` to reject same-scope reentrant calls. The TypeScript counterpart uses its Node-only `/intake` entry.
+
 ## Judges
 
 `aqi_attend.judges` has `jev_judge` (TypeSafe's Jev, with your own key), `decisions_judge` (the OpenAI Decisions API) and `llm_judge`, which wraps any structured-output call you pass as `complete`. They send the same requests as the TypeScript judges, byte for byte. [Choose a judge](../docs/judges.md) explains each one, the window budget and the act threshold.

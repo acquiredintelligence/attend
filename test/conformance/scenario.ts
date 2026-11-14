@@ -7,10 +7,12 @@
  */
 import { createAttend, PermanentError } from '../../src/attend.js';
 import { memoryStore } from '../../src/memory.js';
+import { openIntake } from '../../src/intake.js';
+import { sleep } from '../../src/internal/clock.js';
 import { drain, fakeClock } from '../../src/testing.js';
 import type {
   DeadLetter, Decision, DecisionRow, DeliveredRoute, JsonObject, JsonValue, Judge, JudgeBudget, JudgeImage, JudgeInput, Judgment, Kind, Route, ScopeRecord,
-  SettlePolicy, Trace,
+  SettlePolicy, SourceBatch, Trace,
 } from '../../src/types.js';
 
 /** What a scripted judge does on one call. */
@@ -60,6 +62,8 @@ export interface EventSpec {
 
 export type Step =
   | { push: string; events: EventSpec[] }
+  | { submit: string; events: EventSpec[]; prepareMs?: number; source?: string; cursor?: string | null; prepareFail?: string }
+  | { closeIntake: string }
   | { advance: number }
   | { flush: string }
   | { end: string }
@@ -68,6 +72,7 @@ export type Step =
 
 export interface Scenario {
   name: string;
+  intakes?: string[];
   /** The TypeScript test this scenario mirrors, when there is one. */
   from?: string;
   /** The fake clock's start. Default 1000. */
@@ -254,9 +259,11 @@ export async function runScenario(scenario: Scenario): Promise<Observed> {
     ...(scenario.settle ? { settle: scenario.settle } : {}),
   });
 
+  const intakes = new Map((scenario.intakes ?? []).map((scope) => [scope, openIntake(attend, scope)]));
+  const receipts: Promise<void>[] = [];
   const controller = new AbortController();
   const running = attend.run({ signal: controller.signal, sweepMs: scenario.sweepMs ?? 1000 });
-  const scopes = new Set<string>();
+  const scopes = new Set<string>(scenario.intakes ?? []);
   const result = async (step: number, work: () => Promise<void>) => {
     try {
       await work();
@@ -267,10 +274,25 @@ export async function runScenario(scenario: Scenario): Promise<Observed> {
   };
 
   for (const [index, step] of scenario.steps.entries()) {
-    if ('push' in step) {
-      scopes.add(step.push);
+    if ('push' in step || 'submit' in step) {
+      const scope = 'push' in step ? step.push : step.submit;
+      scopes.add(scope);
       const events = step.events.map((e) => ({ id: e.id, at: e.at ?? 0, name: e.name, data: e.data ?? {}, ...(e.text === undefined ? {} : { text: e.text }), ...(e.observedAt === undefined ? {} : { observedAt: e.observedAt }), ...(e.quietForMs === undefined ? {} : { quietForMs: e.quietForMs }) }));
-      await result(index, () => attend.push(step.push, events));
+      if ('push' in step) await result(index, () => attend.push(scope, events));
+      else {
+        const intake = intakes.get(scope);
+        if (!intake) throw new Error('scenario intake is not open');
+        const batch: SourceBatch = { events, ...(step.cursor === undefined ? {} : { cursor: step.cursor }) };
+        receipts.push(result(index, () => intake.submit(async (signal) => {
+          if (step.prepareMs) await sleep(clock, step.prepareMs, signal);
+          if (step.prepareFail !== undefined) throw new Error(step.prepareFail);
+          return batch;
+        }, step.source === undefined ? undefined : { source: step.source })));
+      }
+    } else if ('closeIntake' in step) {
+      const intake = intakes.get(step.closeIntake);
+      if (!intake) throw new Error('scenario intake is not open');
+      receipts.push(result(index, () => intake.close()));
     } else if ('advance' in step) {
       await clock.advance(step.advance);
     } else if ('flush' in step) {
@@ -293,6 +315,7 @@ export async function runScenario(scenario: Scenario): Promise<Observed> {
   }
   controller.abort();
   await running;
+  await Promise.all(receipts);
   for (const scope of [...scopes].sort()) observed.records[scope] = json(await attend.inspect(scope));
   observed.log = json((await store.log.read({ after: null, limit: 10_000 })).rows);
   return observed;

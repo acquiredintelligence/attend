@@ -44,6 +44,7 @@ class RawInput:
     done: asyncio.Future[None]
     count: int = 1
     conflicts: int = 0
+    catch_up: bool = True
 
     def resolve(self) -> None:
         if not self.done.done():
@@ -146,6 +147,7 @@ class Scopes:
         self._staged: dict[ScopeSlot, None] = {}
         self._pending: set[asyncio.Future[None]] = set()
         self._queued = 0
+        self._reserved = 0
         self._committing = False
         self._scheduled = False
         self._tasks: set[asyncio.Task[None]] = set()
@@ -277,9 +279,13 @@ class Scopes:
         state = slot.state
         assert state is not None
         slot.last_touch = self._clock.now()
+        if raw.signal is not None and raw.signal.aborted:
+            reason = raw.signal.reason
+            assert reason is not None
+            self._reject(raw, reason)
+            self._request_flush()
+            return
         try:
-            if raw.signal is not None:
-                raw.signal.throw_if_aborted()
             input = raw.input
             policy = self._config.policy
             if input["kind"] == "events" and input["events"]:
@@ -288,7 +294,7 @@ class Scopes:
                 if len(state.dead_letters) >= policy["maxDeadLetters"]:
                     raise OutboxFullError(slot.scope, "deadLetters", len(state.dead_letters))
             now = self._clock.now()
-            if self._running() and input["kind"] in ("events", "flush", "end") and state.due_at is not None and state.due_at < now:
+            if raw.catch_up and self._running() and input["kind"] in ("events", "flush", "end") and state.due_at is not None and state.due_at < now:
                 self._transition(slot, state, {"kind": "tick"}, now)
             current = self._transition(slot, state, input, now)
             if current is not None:
@@ -315,6 +321,35 @@ class Scopes:
             self._queued -= raw.count
             self._apply_raw(slot, raw)
 
+    def _admission_error(self) -> BackpressureError | None:
+        lag = self._scheduler.lag_ms()
+        queued = self._queued + self._reserved
+        over_queue = queued >= self._max_queued
+        over_lag = self._max_lag_ms is not None and lag > self._max_lag_ms
+        if not over_queue and not over_lag:
+            return None
+        self._observe({"kind": "backpressure", "queued": queued, "lagMs": lag})
+        return BackpressureError(math.ceil(lag) if over_lag else 100, queued)
+
+    def reserve_input(self) -> Callable[[], None]:
+        """Hold one engine-wide pending slot until preparation transfers it or aborts."""
+        error = self._admission_error()
+        if error is not None:
+            raise error
+        self._reserved += 1
+        released = False
+
+        def release() -> None:
+            nonlocal released
+            if not released:
+                released = True
+                self._reserved -= 1
+
+        return release
+
+    def has(self, scope: str) -> bool:
+        return scope in self._slots
+
     def submit(
         self,
         scope: str,
@@ -322,15 +357,13 @@ class Scopes:
         external: bool = False,
         signal: AbortSignal | None = None,
         reject_hook: Callable[[BaseException], None] | None = None,
+        *,
+        catch_up: bool = True,
     ) -> asyncio.Future[None]:
         loop = asyncio.get_running_loop()
         if external:
-            lag = self._scheduler.lag_ms()
-            over_queue = self._queued >= self._max_queued
-            over_lag = self._max_lag_ms is not None and lag > self._max_lag_ms
-            if over_queue or over_lag:
-                error = BackpressureError(math.ceil(lag) if over_lag else 100, self._queued)
-                self._observe({"kind": "backpressure", "queued": self._queued, "lagMs": lag})
+            error = self._admission_error()
+            if error is not None:
                 if reject_hook is not None:
                     reject_hook(error)
                 failed: asyncio.Future[None] = loop.create_future()
@@ -339,7 +372,14 @@ class Scopes:
                 return failed
         slot = self._slot_for(scope)
         last = slot.queued[-1] if slot.queued else None
-        if last is not None and input["kind"] == "events" and last.input["kind"] == "events" and last.input.get("source") == input.get("source") and last.signal is signal:
+        if (
+            last is not None
+            and input["kind"] == "events"
+            and last.input["kind"] == "events"
+            and last.input.get("source") == input.get("source")
+            and last.signal is signal
+            and last.catch_up == catch_up
+        ):
             merged: EventsInput = last.input
             merged["events"].extend(input["events"])
             if "cursor" in input:
@@ -353,7 +393,7 @@ class Scopes:
             return _follow(last.done)
         done: asyncio.Future[None] = loop.create_future()
         done.add_done_callback(_consume)
-        raw = RawInput(input, signal, reject_hook, done)
+        raw = RawInput(input, signal, reject_hook, done, catch_up=catch_up)
         self._pending.add(done)
         done.add_done_callback(self._pending.discard)
         slot.queued.append(raw)

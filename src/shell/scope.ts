@@ -30,6 +30,7 @@ export function createScopes(options: Options) {
   const staged = new Set<Slot>();
   const pending = new Set<Promise<void>>();
   let queued = 0;
+  let reserved = 0;
   let committing = false;
   let scheduled = false;
 
@@ -148,7 +149,7 @@ export function createScopes(options: Options) {
         if (state.outbox.deadLetters.length >= config.policy.maxDeadLetters) throw new OutboxFullError(slot.scope, 'deadLetters', state.outbox.deadLetters.length);
       }
       const now = clock.now();
-      if (options.running() && (input.kind === 'events' || input.kind === 'flush' || input.kind === 'end') && state.dueAt !== null && state.dueAt < now) {
+      if (raw.catchUp && options.running() && (input.kind === 'events' || input.kind === 'flush' || input.kind === 'end') && state.dueAt !== null && state.dueAt < now) {
         transition(slot, state, { kind: 'tick' }, now);
       }
       const current = transition(slot, state, input, now);
@@ -176,21 +177,35 @@ export function createScopes(options: Options) {
     }
   }
 
-  function submit(scope: string, input: Input, external = false, signal?: AbortSignal, rejectHook?: (error: unknown) => void): Promise<void> {
+  function admissionError(): BackpressureError | null {
+    const lagMs = scheduler.lagMs();
+    const count = queued + reserved;
+    const overQueue = count >= (options.admission?.maxQueuedInputs ?? 20000);
+    const overLag = options.admission?.maxLagMs !== undefined && lagMs > options.admission.maxLagMs;
+    if (!overQueue && !overLag) return null;
+    options.observe({ kind: 'backpressure', queued: count, lagMs });
+    return new BackpressureError(overLag ? Math.ceil(lagMs) : 100, count);
+  }
+
+  function reserveInput(): () => void {
+    const error = admissionError();
+    if (error) throw error;
+    reserved += 1;
+    let released = false;
+    return () => { if (!released) { released = true; reserved -= 1; } };
+  }
+
+  function submit(scope: string, input: Input, external = false, signal?: AbortSignal, rejectHook?: (error: unknown) => void, catchUp = true): Promise<void> {
     if (external) {
-      const lagMs = scheduler.lagMs();
-      const overQueue = queued >= (options.admission?.maxQueuedInputs ?? 20000);
-      const overLag = options.admission?.maxLagMs !== undefined && lagMs > options.admission.maxLagMs;
-      if (overQueue || overLag) {
-        const error = new BackpressureError(overLag ? Math.ceil(lagMs) : 100, queued);
-        options.observe({ kind: 'backpressure', queued, lagMs });
+      const error = admissionError();
+      if (error) {
         rejectHook?.(error);
         return Promise.reject(error);
       }
     }
     const slot = slotFor(scope);
     const last = slot.queued.at(-1);
-    if (last && input.kind === 'events' && last.input.kind === 'events' && last.input.source === input.source && last.signal === signal) {
+    if (last && input.kind === 'events' && last.input.kind === 'events' && last.input.source === input.source && last.signal === signal && last.catchUp === catchUp) {
       last.input.events.push(...input.events);
       if (input.cursor !== undefined) last.input.cursor = input.cursor;
       if (input.truncated) last.input.truncated = true;
@@ -202,7 +217,7 @@ export function createScopes(options: Options) {
     let resolve!: () => void;
     let fail!: (error: unknown) => void;
     const done = new Promise<void>((yes, no) => { resolve = yes; fail = no; });
-    const raw: Raw = { input, signal, rejectHook, done, resolve, reject: fail, count: 1, conflicts: 0 };
+    const raw: Raw = { input, signal, rejectHook, done, resolve, reject: fail, count: 1, conflicts: 0, catchUp };
     pending.add(done);
     void done.then(() => pending.delete(done), () => pending.delete(done));
     slot.queued.push(raw);
@@ -302,6 +317,8 @@ export function createScopes(options: Options) {
 
   return {
     submit,
+    reserveInput,
+    has(scope: string): boolean { return slots.has(scope); },
     async touch(scope: string): Promise<number | null> {
       const slot = slotFor(scope);
       if (!slot.state) await load(slot);

@@ -1,5 +1,10 @@
 import type { OutboxLane } from './types.js';
 
+/** An operation conflicts with an intake's local ownership or lifecycle. */
+export class IntakeError extends Error {
+  constructor(message: string) { super(message); this.name = 'IntakeError'; }
+}
+
 /** Throw from a judge, a sink or a source to skip retries: the judge or sink dead-letters at once, and `attach` stops. */
 export class PermanentError extends Error {
   readonly permanent = true as const;

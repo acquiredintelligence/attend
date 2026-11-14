@@ -73,13 +73,18 @@
       "types": "./dist/testing.d.ts",
       "default": "./dist/testing.js"
     },
+    "./intake": {
+      "types": "./dist/intake.d.ts",
+      "default": "./dist/intake.js"
+    },
     "./package.json": "./package.json"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "check": "pnpm typecheck && pnpm test && pnpm build && pnpm check:docs",
+    "check": "pnpm typecheck && pnpm test && pnpm build && pnpm check:docs && pnpm check:browser",
+    "check:browser": "node --experimental-vm-modules scripts/check-browser-root.mjs",
     "demo": "pnpm build && node --experimental-strip-types examples/demo.ts",
     "check:docs": "node scripts/check-snippets.mjs",
     "test:oracle": "vitest run -c vitest.oracle.config.ts",

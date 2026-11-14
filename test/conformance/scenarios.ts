@@ -15,6 +15,52 @@ const T = 'test/attend.test.ts';
 
 export const SCENARIOS: Scenario[] = [
   {
+    name: 'serial intake keeps registered backlog ahead of a timer during preparation',
+    intakes: ['s'], start: 0, kinds: KINDS,
+    judge: { '*': { answers: [{ route: 'queue' }] } },
+    steps: [
+      { submit: 's', events: [ev('a', 'drag', { observedAt: 0, quietForMs: 100 })] },
+      advance(90), { submit: 's', events: [], prepareMs: 200, source: 'feed', cursor: '1' },
+      advance(5), { submit: 's', events: [ev('b', 'drag', { observedAt: 95, quietForMs: 300 })] },
+      advance(195), { inspect: 's' }, advance(105),
+    ],
+  },
+  {
+    name: 'serial intake waits for a judgment and its delivery before the next preparation',
+    intakes: ['s'], start: 0, kinds: KINDS,
+    judge: { '*': { answers: [{ hold: 'judge' }, { route: 'queue' }] } },
+    sink: { '*': { attempts: [{ hold: 'sink' }, 'ok'] } },
+    steps: [
+      { submit: 's', events: [ev('a', 'drag', { quietForMs: 100 })] }, advance(100),
+      advance(50), { submit: 's', events: [ev('b', 'drag', { observedAt: 150, quietForMs: 100 })] },
+      advance(10), { submit: 's', events: [ev('c', 'drag', { observedAt: 160, quietForMs: 100 })] },
+      advance(340), { release: 'judge', answer: { route: 'queue' } }, { inspect: 's' },
+      advance(200), { release: 'sink' }, { inspect: 's' },
+    ],
+  },
+  {
+    name: 'closing serial intake cancels preparation without advancing its cursor',
+    intakes: ['s'], start: 0, kinds: KINDS,
+    judge: { '*': { answers: [{ route: 'queue' }] } },
+    steps: [{ submit: 's', events: [ev('a', 'drag')], prepareMs: 100, source: 'feed', cursor: '1' }, advance(20), { closeIntake: 's' }, advance(100)],
+  },
+  {
+    name: 'owned scopes reject ordinary ingress without affecting serial submissions',
+    intakes: ['s'], start: 0, kinds: KINDS,
+    judge: { '*': { answers: [{ route: 'note' }] } },
+    steps: [push('s', ev('other', 'drag')), { flush: 's' }, { end: 's' }, { submit: 's', events: [ev('a', 'drag', { quietForMs: 0 })] }, advance(0)],
+  },
+  {
+    name: 'serial intake permits fresh input while a resolved wait is pending',
+    intakes: ['s'], start: 0, kinds: KINDS,
+    settle: { waitHorizonMs: 1000 },
+    judge: { '*': { answers: [{ route: 'wait' }, { route: 'note' }] } },
+    steps: [
+      { submit: 's', events: [ev('a', 'drag', { quietForMs: 100 })] }, advance(100), { inspect: 's' },
+      advance(10), { submit: 's', events: [ev('b', 'drag', { observedAt: 110, quietForMs: 20 })] }, advance(20),
+    ],
+  },
+  {
     name: 'different continuous durations settle after the latest event end',
     start: 100,
     kinds: KINDS,

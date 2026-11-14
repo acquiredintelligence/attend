@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from aqi_attend import AbortController, JudgeInput, Judgment, Kind, create_attend, window_id
+from aqi_attend import AbortController, JudgeInput, Judgment, Kind, SourceBatch, create_attend, window_id
 from aqi_attend.signal import AbortSignal
 from aqi_attend.testing import fake_clock
 
@@ -25,7 +25,7 @@ from .stores import POSTGRES_URL, REDIS_URL, make_postgres, make_redis
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = Path(__file__).with_name("interop") / "attend-ts.mjs"
 ENABLED = os.environ.get("ATTEND_INTEROP") == "1" and (ROOT / "dist" / "index.js").exists() and shutil.which("node") is not None
-KINDS: dict[str, Kind] = {"close": "closing", "say": "flush", "look": "passive", "out": "consequence"}
+KINDS: dict[str, Kind] = {"close": "closing", "say": "flush", "look": "passive", "out": "consequence", "move": "continuous"}
 
 BACKENDS = [name for name, url in (("redis", REDIS_URL), ("postgres", POSTGRES_URL)) if url]
 
@@ -48,10 +48,26 @@ async def python(store: Any, mode: str, scope: str) -> dict[str, Any]:
     clock = fake_clock(10_000)
     delivered: list[str] = []
     attend = create_attend(store=store, clock=clock, kind=KINDS, judge=judge, sink=lambda d, s: delivered.append(d["id"]), settle={"closing_grace_ms": 100})
+    intake = attend.open_intake(scope) if mode == "intake-write" else None
     controller = AbortController()
     running = asyncio.ensure_future(attend.run(signal=controller.signal, sweep_ms=60_000))
     await asyncio.sleep(0)
-    if mode == "write":
+    if intake is not None:
+
+        async def first(signal: AbortSignal) -> SourceBatch:
+            return {"events": [{"id": "raw-a", "name": "move", "at": 10_000, "data": {}, "text": "x" * 2000}], "cursor": "1"}
+
+        async def filtered(signal: AbortSignal) -> SourceBatch:
+            return {"events": [], "cursor": "2"}
+
+        async def second(signal: AbortSignal) -> SourceBatch:
+            return {"events": [{"id": "raw-b", "name": "move", "at": 10_000, "data": {}}], "cursor": "3"}
+
+        await intake.submit(first, source="feed")
+        await intake.submit(filtered, source="feed")
+        await intake.submit(second, source="feed")
+        await intake.close()
+    elif mode == "write":
         await attend.push(scope, [{"id": "a", "name": "close", "text": "close a"}, {"id": "b", "name": "out", "data": {"n": 1.5, "s": "ünï 🌍"}}])
         await clock.advance(100)
         for _ in range(500):
@@ -122,5 +138,31 @@ async def test_python_and_typescript_share_one_store(kind: str) -> None:
         picked = await python(owned, "pickup", "due")
         assert picked["delivered"] == [window_id("due", ["p"])]
         assert picked["record"]["dueAt"] is None
+    finally:
+        await owned.close()
+
+
+@pytest.mark.skipif(not ENABLED or not BACKENDS, reason="needs ATTEND_INTEROP=1, a built dist/, node, and Redis or Postgres")
+@pytest.mark.parametrize("kind", BACKENDS)
+async def test_intake_snapshot_and_tail_continue_without_intake_in_other_runtime(kind: str) -> None:
+    owned = await (make_redis() if kind == "redis" else make_postgres())
+    inner: Any = owned.inner
+    prefix = str(inner._prefix if kind == "redis" else inner.prefix)
+    try:
+        for writer in ("python", "typescript"):
+            scope = "intake-" + writer
+            written = await (python(owned, "intake-write", scope) if writer == "python" else typescript(kind, prefix, "intake-write", scope))
+            assert written["delivered"] == []
+            assert written["record"]["cursors"] == {"feed": "3"}
+            stored = await owned.load(scope)
+            assert stored is not None and stored["snapshot"] is not None
+            assert stored["snapshot"]["reducer"] == 3 and stored["tail"]
+            encoded = json.dumps(stored)
+            assert all(field not in encoded for field in ('"catchUp"', '"catch_up"', '"prepare"', '"owner"'))
+            read = await (typescript(kind, prefix, "read", scope) if writer == "python" else python(owned, "read", scope))
+            assert read == written
+            continued = await (typescript(kind, prefix, "continue", scope) if writer == "python" else python(owned, "continue", scope))
+            assert continued["delivered"] == [window_id(scope, ["raw-a", "raw-b", "e"])]
+            assert continued["record"]["cursors"] == {"feed": "3"}
     finally:
         await owned.close()

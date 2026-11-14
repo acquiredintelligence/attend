@@ -25,12 +25,14 @@ from .core.types import (
     ScopeRecord,
     SettlePolicy,
     SettleReason,
+    SourceBatch,
     Trace,
     Window,
 )
-from .errors import BackpressureError, ConflictError, OutboxFullError, PermanentError, is_permanent
+from .errors import BackpressureError, ConflictError, IntakeError, OutboxFullError, PermanentError, is_permanent
 from .fold import EventFold, fold_events
 from .notice import default_notice
+from .shell.intake import Intake, Prepare
 from .signal import AbortController, AbortSignal
 from .sources import EventLog, log_source, memory_log
 from .store.memory import memory_store
@@ -54,6 +56,8 @@ __all__ = [
     "Event",
     "EventFold",
     "EventLog",
+    "Intake",
+    "IntakeError",
     "Judge",
     "JudgeBudget",
     "JudgeContext",
@@ -63,6 +67,7 @@ __all__ = [
     "Kind",
     "OutboxFullError",
     "PermanentError",
+    "Prepare",
     "Route",
     "ScopeRecord",
     "ScopeStore",
@@ -70,6 +75,7 @@ __all__ = [
     "SettleReason",
     "Sink",
     "Source",
+    "SourceBatch",
     "Trace",
     "Window",
     "create_attend",
