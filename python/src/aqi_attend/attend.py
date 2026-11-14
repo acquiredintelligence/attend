@@ -52,7 +52,7 @@ from .core.types import (
 )
 from .errors import ConflictError, IntakeError, is_permanent, message_of
 from .shell.budget import window_bytes_for
-from .shell.copy import copy_decision, copy_event, copy_letter, copy_window
+from .shell.copy import copy_decision, copy_event, copy_judgment, copy_letter, copy_window
 from .shell.decisions import DecisionCursorPage, read_decisions
 from .shell.intake import Intake, owns_callback
 from .shell.read import read_record
@@ -514,7 +514,7 @@ class Attend:
                 if threshold is not None:
                     self._observe({"kind": "routeThresholded", "scope": scope, "batchId": batch_id, "from": judgment["route"], "to": threshold["route"], "act": threshold["act"]})
                 chosen = cast(Judgment, {**judgment, "route": threshold["route"]}) if threshold is not None else judgment
-                result = {"kind": "judged", "batchId": batch_id, "attempt": attempt, "judgment": cast(Judgment, clone(chosen))}
+                result = {"kind": "judged", "batchId": batch_id, "attempt": attempt, "judgment": copy_judgment(chosen)}
             else:
                 result = {"kind": "judgeFailed", "batchId": batch_id, "attempt": attempt, "message": "malformed judgment", "permanent": False}
         except asyncio.CancelledError:

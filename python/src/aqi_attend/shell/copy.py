@@ -9,13 +9,13 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any, cast
 
 from .._json import clone, utf8_length
-from ..core.types import DeadLetter, Decision, Entry, Event, JsonValue, Window
+from ..core.types import DeadLetter, Decision, Entry, Event, JsonValue, Judgment, Window
 
 _MAX_DEPTH = 1000
 SLICE = 64
 
 
-def _to_json(value: object, depth: int) -> JsonValue:
+def _to_json(value: object, depth: int, subject: str = "event") -> JsonValue:
     if value is None or isinstance(value, (str, bool)):
         return value
     if isinstance(value, int):
@@ -24,19 +24,27 @@ def _to_json(value: object, depth: int) -> JsonValue:
         # JSON writes NaN and the infinities as null, and -0 as 0.
         return value + 0.0 if math.isfinite(value) else None
     if depth >= _MAX_DEPTH:
-        raise TypeError(f"attend: event data holds a cycle or nests deeper than {_MAX_DEPTH}")
+        raise TypeError(f"attend: {subject} data holds a cycle or nests deeper than {_MAX_DEPTH}")
     if isinstance(value, Mapping):
         mapping = cast(Mapping[object, object], value)
         out: dict[str, JsonValue] = {}
         for key, item in mapping.items():
             if not isinstance(key, str):
-                raise TypeError("attend: event data keys must be strings")
-            out[key] = _to_json(item, depth + 1)
+                raise TypeError(f"attend: {subject} data keys must be strings")
+            out[key] = _to_json(item, depth + 1, subject)
         return out
     if isinstance(value, (list, tuple)):
         items = cast(Sequence[object], value)
-        return [_to_json(item, depth + 1) for item in items]
-    raise TypeError(f"attend: event data must be JSON, got {type(value).__name__}")
+        return [_to_json(item, depth + 1, subject) for item in items]
+    raise TypeError(f"attend: {subject} data must be JSON, got {type(value).__name__}")
+
+
+def copy_judgment(judgment: Judgment) -> Judgment:
+    """Capture the result and normalize its optional data at the JSON boundary."""
+    copy = dict(judgment)
+    if "data" in judgment:
+        copy["data"] = _to_json(judgment["data"], 0, "judgment")
+    return cast(Judgment, clone(copy))
 
 
 def copy_event(event: Mapping[str, object], fill: tuple[Callable[[], str], Callable[[], float]] | None = None) -> Event:
@@ -85,6 +93,8 @@ async def copy_window(window: Window) -> Window:
 
 async def copy_decision(decision: Decision) -> Decision:
     copy = cast(Decision, {**decision, "probabilities": dict(decision["probabilities"]), "predicates": dict(decision["predicates"])})
+    if "data" in decision:
+        copy["data"] = cast(JsonValue, clone(decision["data"]))
     copy["window"] = await copy_window(decision["window"])
     return copy
 

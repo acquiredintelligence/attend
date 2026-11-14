@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import math
-from typing import TypedDict, cast
+from typing import NotRequired, TypedDict, cast
 
+from .._json import clone
 from .ids import fnv_hex, fnv_start, fold_id
 from .seen import seen_admit, seen_release, seen_trim
 from .types import (
@@ -22,6 +23,7 @@ from .types import (
     HeldBatch,
     InFlightDelivery,
     InputKind,
+    JsonValue,
     JudgedInput,
     JudgingPhase,
     Judgment,
@@ -47,7 +49,7 @@ from .window import (
     window_shed,
 )
 
-REDUCER_VERSION = 5
+REDUCER_VERSION = 6
 """Bumped whenever a release changes a transition. Stored with every snapshot."""
 
 _LANES: tuple[OutboxLane, OutboxLane] = ("decisions", "deadLetters")
@@ -60,6 +62,7 @@ class Validated(TypedDict):
     probabilities: dict[str, float]
     predicates: dict[str, float]
     confidence: float | None
+    data: NotRequired[JsonValue]
 
 
 def same(a: object, b: object) -> bool:
@@ -517,6 +520,8 @@ def _on_judged(ctx: _Ctx, state: ScopeState, input: JudgedInput) -> None:
         return
     decided: DecidedRoute = route
     verdict_row: Verdict = {"id": window["id"], "route": decided, "at": ctx.now}
+    if "data" in verdict:
+        verdict_row["data"] = verdict["data"]
     recent = [*state.recent, verdict_row]
     count = ctx.config.policy["recentCount"]
     state.recent = [] if count <= 0 else recent[-count:]
@@ -533,6 +538,8 @@ def _on_judged(ctx: _Ctx, state: ScopeState, input: JudgedInput) -> None:
             "window": window,
             "at": ctx.now,
         }
+        if "data" in verdict:
+            decision["data"] = verdict["data"]
         ctx.out.appends.append({"kind": "decision", "id": decision["id"], "scope": state.scope, "at": decision["at"], "route": delivered, "body": decision})
         if ctx.config.decisions == "lane":
             state.decisions.append(
@@ -592,6 +599,8 @@ def validate(judgment: Judgment, offered: list[Route]) -> Validated | None:
             if p is not None:
                 predicates[name] = p
     result: Validated = {"route": route, "probabilities": probabilities, "predicates": predicates, "confidence": _unit(judgment.get("confidence"))}
+    if "data" in judgment:
+        result["data"] = cast(JsonValue, clone(judgment["data"]))
     return result
 
 

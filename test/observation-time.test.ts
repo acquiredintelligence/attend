@@ -207,7 +207,7 @@ test('a prior reducer snapshot and tail retain ingestion-time deadlines on upgra
     const loaded = await attend.inspect('s');
     expect(loaded?.dueAt).toBe(2100);
     expect(loaded?.buffer.entries.map((event) => [event.id, event.seenAt, event.observedAt])).toEqual([['a', 1000, undefined], ['b', 1100, undefined]]);
-    expect((await store.load('s'))?.snapshot?.reducer).toBe(5);
+    expect((await store.load('s'))?.snapshot?.reducer).toBe(6);
   } finally {
     await attend.stop();
   }

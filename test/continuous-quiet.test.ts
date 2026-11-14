@@ -204,7 +204,7 @@ test('a revision-two snapshot and mixed tail rebuild continuous end times', asyn
     const loaded = await attend.inspect('s');
     expect(loaded?.dueAt).toBe(200);
     expect(loaded?.buffer.entries.map((event) => [event.id, event.quietForMs, event.seenAt])).toEqual([['a', undefined, 100], ['b', 90, 120], ['c', undefined, 120]]);
-    expect((await store.load('s'))?.snapshot?.reducer).toBe(5);
+    expect((await store.load('s'))?.snapshot?.reducer).toBe(6);
   } finally {
     await attend.stop();
   }

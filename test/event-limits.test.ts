@@ -177,7 +177,7 @@ test.each(legacy.cases)('revision-four $name snapshot and tail retain their save
   if (item.name === 'complete') {
     await write;
     const stored = await store.load('s');
-    expect(stored?.snapshot?.reducer).toBe(5);
+    expect(stored?.snapshot?.reducer).toBe(6);
     expect(stored?.snapshot?.policy.eventLimits).toEqual({ counted: 3, background: 2 });
     expect((await engine.inspect('s'))?.recent).toEqual(item.expected.recent);
   } else {

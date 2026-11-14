@@ -125,6 +125,8 @@ Repeated cancellation of the runner does not skip its cleanup join. `stop()` rej
 
 `aqi_attend.judges` has `jev_judge` (TypeSafe's Jev, with your own key), `decisions_judge` (the OpenAI Decisions API) and `llm_judge`, which wraps any structured-output call you pass as `complete`. They send the same requests as the TypeScript judges, byte for byte. [Choose a judge](https://github.com/acquiredintelligence/attend/blob/main/docs/judges.md) explains each one, the window budget and the act threshold.
 
+Custom judges can return optional JSON `data`. It reaches `decision["data"]` and subsequent `input["recent"]` verdicts through delivery retries and recovery. Omission keeps the field absent. See [the result contract](../docs/judges.md#carry-a-result-to-the-sink) and [storage compatibility](../docs/storage.md).
+
 ## Test with a fake clock
 
 ```python

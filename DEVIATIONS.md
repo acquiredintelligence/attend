@@ -1,5 +1,9 @@
 # Shell changes from the frozen shell
 
+## Decision data
+
+Custom judges may return optional JSON `data`. Reducer revision 6 keeps it with final decisions and recent verdicts, including skipped verdicts; waits keep no data. Both runtimes detach outgoing copies and normalize data before committing a judgment. Omission preserves the existing record and decision shapes. The shared decision-data scenario and native retry/restart tests cover delivery and recent context without adding a host-owned pending-result store.
+
 ## Independent event limits
 
 The optional `settle.eventLimits` pair separates an inclusive counted trigger from FIFO background retention. It requires accumulating continuation and replaces the scalar total limit. Omission preserves the existing scalar path. Retention applies across unresolved held and fresh entries, including transitions from a live offer; it never mutates that offer or drops counted entries. Reducer revision 5 stores the opt-in policy. [Independent event limits](docs/reference.md#independent-event-limits) defines the contract and writer-change boundary.

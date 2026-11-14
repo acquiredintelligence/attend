@@ -379,7 +379,7 @@ test('assertInvariants identifies corrupt counts, rings, summaries, sizes, hashe
   lane.outbox.decisions.push(lane.outbox.decisions[0]!);
   lane.dueAt = nextDue(policy, lane);
   assert.throws(() => assertInvariants(lane, policy), /^Error: outbox: more than one in flight/);
-  assert.equal(REDUCER_VERSION, 5);
+  assert.equal(REDUCER_VERSION, 6);
 });
 
 test('fromRecord accepts frozen oracle snapshots without changing them', () => {
