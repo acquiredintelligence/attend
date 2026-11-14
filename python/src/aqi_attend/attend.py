@@ -27,6 +27,7 @@ from .core.types import (
     DeliveryReleasedInput,
     Effect,
     Event,
+    EventLimits,
     EventsInput,
     Input,
     InputKind,
@@ -104,6 +105,7 @@ class Source(Protocol):
 
 
 _SETTLE_KEYS: dict[str, str] = {
+    "event_limits": "eventLimits",
     "continuation": "continuation",
     "closing_grace_ms": "closingGraceMs",
     "stream_gap_ms": "streamGapMs",
@@ -124,8 +126,23 @@ _SETTLE_KEYS: dict[str, str] = {
 }
 
 
+def _event_limits(value: object) -> EventLimits:
+    message = "attend: eventLimits requires positive counted and nonnegative background safe integers"
+    if not isinstance(value, Mapping):
+        raise ValueError(message)
+    fields = cast(Mapping[object, object], value)
+    if set(fields) != {"counted", "background"}:
+        raise ValueError(message)
+    counted, background = fields["counted"], fields["background"]
+    if type(counted) is not int or type(background) is not int or not 0 < counted <= 9007199254740991 or not 0 <= background <= 9007199254740991:
+        raise ValueError(message)
+    return {"counted": counted, "background": background}
+
+
 def settle_policy(settle: Mapping[str, Any] | None = None) -> SettlePolicy:
     """The defaults with ``settle`` (snake_case names, as ``create_attend`` takes them) applied."""
+    if settle is not None and "event_limits" in settle and (settle.get("continuation") != "accumulate" or "max_events" in settle):
+        raise ValueError("attend: eventLimits requires accumulate and replaces maxEvents")
     policy = cast(dict[str, Any], dict(DEFAULT_POLICY))
     policy["retryBackoffMs"] = list(DEFAULT_POLICY["retryBackoffMs"])
     for name, value in (settle or {}).items():
@@ -134,7 +151,7 @@ def settle_policy(settle: Mapping[str, Any] | None = None) -> SettlePolicy:
             raise TypeError(f"attend: unknown settle option {name!r}")
         if name == "continuation" and (not isinstance(value, str) or value not in ("separate", "accumulate")):
             raise ValueError("attend: continuation must be separate or accumulate")
-        policy[key] = list(value) if name == "retry_backoff_ms" else value
+        policy[key] = list(value) if name == "retry_backoff_ms" else _event_limits(value) if name == "event_limits" else value
     return cast(SettlePolicy, policy)
 
 

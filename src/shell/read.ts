@@ -8,7 +8,7 @@ export function replay(scope: string, stored: StoredScope, modes: Pick<ApplyConf
   const policy = stored.snapshot?.policy ?? DEFAULT_POLICY;
   const state = stored.snapshot ? fromRecord(stored.snapshot.record, policy) : initialState(scope, policy);
   for (const logged of stored.tail) {
-    apply({ policy, ...modes, traces: false }, state, logged, newOutput());
+    apply({ policy, decisions: modes.decisions, deadLetters: modes.deadLetters, traces: false }, state, logged, newOutput());
     state.version += 1;
   }
   if (state.version !== stored.version) throw new Error(`attend: invalid stored version for scope "${scope}"`);

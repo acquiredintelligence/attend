@@ -6,7 +6,7 @@ export function isAct(entry: { kind: Kind }): boolean {
   return entry.kind === 'closing' || entry.kind === 'continuous' || entry.kind === 'passive';
 }
 
-function isSheddable(entry: { kind: Kind }): boolean {
+export function isBackground(entry: { kind: Kind }): boolean {
   return entry.kind === 'consequence' || entry.kind === 'context';
 }
 
@@ -56,7 +56,7 @@ function summarizeEntry(summary: TriggerSummary, entry: Entry, index: number): v
     summary.actObserved ||= explicit;
     if (summary.actObserved) summary.firstActAt = summary.minActAt;
   }
-  if (isSheddable(entry)) {
+  if (isBackground(entry)) {
     summary.sheddable += 1;
     if (summary.firstActIndex === -1) summary.prefixMinSheddableAt = Math.min(summary.prefixMinSheddableAt, observedAt);
   }
@@ -133,7 +133,7 @@ function prefixMinimum(open: OpenWindow): number {
   let min = Infinity;
   for (let i = 0; i < end; i += 1) {
     const entry = open.entries[open.start + i]!;
-    if (isSheddable(entry)) {
+    if (isBackground(entry)) {
       if (open.monotone) return observationTime(entry);
       min = Math.min(min, observationTime(entry));
     }
@@ -189,7 +189,7 @@ export function windowPrune(open: OpenWindow, maxWindowMs: number, now: number):
     const entry = entries[start + read]!;
     const stale = observationTime(entry) + maxWindowMs <= now;
     if (!stale && open.monotone) break;
-    if (stale && isSheddable(entry)) {
+    if (stale && isBackground(entry)) {
       if (gone === null) gone = [entry];
       else gone.push(entry);
       bytes += sizes[start + read]!;
@@ -222,7 +222,7 @@ function shed(entries: Entry[], maxEvents: number, open: OpenWindow | null): Ent
   let read = 0;
   for (; read < length && (gone === null || gone.length < excess); read += 1) {
     const entry = entries[start + read]!;
-    if (isSheddable(entry)) {
+    if (isBackground(entry)) {
       if (gone === null) gone = [entry];
       else gone.push(entry);
       if (sizes !== null) bytes += sizes[start + read]!;
@@ -266,7 +266,8 @@ export function windowDeadline(policy: SettlePolicy, open: OpenWindow): { at: nu
     at = open.endedAt;
     reason = 'closing';
   }
-  if (size > 0 && size > policy.maxEvents && (reason === null || s.lastSeenAt < at)) {
+  const full = policy.eventLimits ? size - s.sheddable >= policy.eventLimits.counted : size > policy.maxEvents;
+  if (size > 0 && full && (reason === null || s.lastSeenAt < at)) {
     at = s.lastSeenAt;
     reason = 'overflow';
   }

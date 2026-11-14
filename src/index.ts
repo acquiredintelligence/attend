@@ -12,6 +12,7 @@ export type {
   Delivery,
   Entry,
   Event,
+  EventLimits,
   EventLog,
   Judge,
   JudgeImage,

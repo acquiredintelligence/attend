@@ -259,7 +259,7 @@ async def test_prior_reducer_snapshot_and_tail_keep_ingestion_deadlines() -> Non
         assert loaded is not None and loaded["dueAt"] == 2100
         assert [(event["id"], event["seenAt"], event.get("observedAt")) for event in loaded["buffer"]["entries"]] == [("a", 1000, None), ("b", 1100, None)]
         stored = await store.load("s")
-        assert stored is not None and stored["snapshot"] is not None and stored["snapshot"]["reducer"] == 4
+        assert stored is not None and stored["snapshot"] is not None and stored["snapshot"]["reducer"] == 5
     finally:
         await attend.stop()
         await store.close()

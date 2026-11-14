@@ -1,0 +1,1419 @@
+{
+  "writerCommit": "b107204c15aa935150ff977b4ad2102a6d0a57c0",
+  "reducer": 4,
+  "cases": [
+    {
+      "name": "background",
+      "mode": "accumulate",
+      "now": 15,
+      "writes": [
+        [
+          {
+            "scope": "s",
+            "expectedVersion": 0,
+            "inputs": [
+              {
+                "input": {
+                  "kind": "events",
+                  "events": [
+                    {
+                      "id": "a",
+                      "name": "meta",
+                      "at": 0,
+                      "text": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+                      "data": {},
+                      "kind": "context"
+                    }
+                  ]
+                },
+                "now": 0
+              }
+            ],
+            "snapshot": {
+              "version": 1,
+              "record": {
+                "version": 1,
+                "scope": "s",
+                "cursors": {},
+                "seen": [
+                  "a"
+                ],
+                "buffer": {
+                  "entries": [
+                    {
+                      "id": "a",
+                      "name": "meta",
+                      "at": 0,
+                      "text": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+                      "data": {},
+                      "kind": "context",
+                      "seenAt": 0
+                    }
+                  ],
+                  "dropped": 0,
+                  "gap": false,
+                  "forcedAt": null
+                },
+                "batch": null,
+                "outbox": {
+                  "decisions": [],
+                  "deadLetters": []
+                },
+                "recent": [],
+                "dueAt": null
+              },
+              "policy": {
+                "closingGraceMs": 500,
+                "streamGapMs": 10,
+                "passiveQuietMs": 4000,
+                "waitHorizonMs": 20,
+                "maxWaits": 2,
+                "maxEvents": 250,
+                "maxWindowMs": 60000,
+                "retryBackoffMs": [
+                  30,
+                  60
+                ],
+                "judgeTimeoutMs": 15000,
+                "deliveryTimeoutMs": 10000,
+                "recentCount": 8,
+                "seenCount": 500,
+                "maxOutbox": 1000,
+                "maxDeadLetters": 1000,
+                "deadLetterBackoffMaxMs": 60000,
+                "continuation": "accumulate"
+              },
+              "reducer": 4
+            },
+            "appends": [],
+            "due": null
+          }
+        ],
+        [
+          {
+            "scope": "s",
+            "expectedVersion": 1,
+            "inputs": [
+              {
+                "input": {
+                  "kind": "events",
+                  "events": [
+                    {
+                      "id": "b",
+                      "name": "meta",
+                      "at": 15,
+                      "data": {},
+                      "kind": "context"
+                    }
+                  ]
+                },
+                "now": 15
+              }
+            ],
+            "snapshot": null,
+            "appends": []
+          }
+        ]
+      ],
+      "stored": {
+        "version": 2,
+        "snapshot": {
+          "version": 1,
+          "record": {
+            "version": 1,
+            "scope": "s",
+            "cursors": {},
+            "seen": [
+              "a"
+            ],
+            "buffer": {
+              "entries": [
+                {
+                  "id": "a",
+                  "name": "meta",
+                  "at": 0,
+                  "text": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+                  "data": {},
+                  "kind": "context",
+                  "seenAt": 0
+                }
+              ],
+              "dropped": 0,
+              "gap": false,
+              "forcedAt": null
+            },
+            "batch": null,
+            "outbox": {
+              "decisions": [],
+              "deadLetters": []
+            },
+            "recent": [],
+            "dueAt": null
+          },
+          "policy": {
+            "closingGraceMs": 500,
+            "streamGapMs": 10,
+            "passiveQuietMs": 4000,
+            "waitHorizonMs": 20,
+            "maxWaits": 2,
+            "maxEvents": 250,
+            "maxWindowMs": 60000,
+            "retryBackoffMs": [
+              30,
+              60
+            ],
+            "judgeTimeoutMs": 15000,
+            "deliveryTimeoutMs": 10000,
+            "recentCount": 8,
+            "seenCount": 500,
+            "maxOutbox": 1000,
+            "maxDeadLetters": 1000,
+            "deadLetterBackoffMaxMs": 60000,
+            "continuation": "accumulate"
+          },
+          "reducer": 4
+        },
+        "tail": [
+          {
+            "input": {
+              "kind": "events",
+              "events": [
+                {
+                  "id": "b",
+                  "name": "meta",
+                  "at": 15,
+                  "data": {},
+                  "kind": "context"
+                }
+              ]
+            },
+            "now": 15
+          }
+        ]
+      },
+      "expected": {
+        "version": 2,
+        "scope": "s",
+        "cursors": {},
+        "seen": [
+          "a",
+          "b"
+        ],
+        "buffer": {
+          "entries": [
+            {
+              "id": "a",
+              "name": "meta",
+              "at": 0,
+              "text": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+              "data": {},
+              "kind": "context",
+              "seenAt": 0
+            },
+            {
+              "id": "b",
+              "name": "meta",
+              "at": 15,
+              "data": {},
+              "kind": "context",
+              "seenAt": 15
+            }
+          ],
+          "dropped": 0,
+          "gap": false,
+          "forcedAt": null
+        },
+        "batch": null,
+        "outbox": {
+          "decisions": [],
+          "deadLetters": []
+        },
+        "recent": [],
+        "dueAt": null
+      }
+    },
+    {
+      "name": "waiting",
+      "mode": "accumulate",
+      "now": 15,
+      "writes": [
+        [
+          {
+            "scope": "s",
+            "expectedVersion": 0,
+            "inputs": [
+              {
+                "input": {
+                  "kind": "events",
+                  "events": [
+                    {
+                      "id": "a",
+                      "name": "reading",
+                      "at": 0,
+                      "text": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+                      "data": {},
+                      "kind": "continuous"
+                    }
+                  ]
+                },
+                "now": 0
+              }
+            ],
+            "snapshot": {
+              "version": 1,
+              "record": {
+                "version": 1,
+                "scope": "s",
+                "cursors": {},
+                "seen": [
+                  "a"
+                ],
+                "buffer": {
+                  "entries": [
+                    {
+                      "id": "a",
+                      "name": "reading",
+                      "at": 0,
+                      "text": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+                      "data": {},
+                      "kind": "continuous",
+                      "seenAt": 0
+                    }
+                  ],
+                  "dropped": 0,
+                  "gap": false,
+                  "forcedAt": null
+                },
+                "batch": null,
+                "outbox": {
+                  "decisions": [],
+                  "deadLetters": []
+                },
+                "recent": [],
+                "dueAt": 10
+              },
+              "policy": {
+                "closingGraceMs": 500,
+                "streamGapMs": 10,
+                "passiveQuietMs": 4000,
+                "waitHorizonMs": 20,
+                "maxWaits": 2,
+                "maxEvents": 250,
+                "maxWindowMs": 60000,
+                "retryBackoffMs": [
+                  30,
+                  60
+                ],
+                "judgeTimeoutMs": 15000,
+                "deliveryTimeoutMs": 10000,
+                "recentCount": 8,
+                "seenCount": 500,
+                "maxOutbox": 1000,
+                "maxDeadLetters": 1000,
+                "deadLetterBackoffMaxMs": 60000,
+                "continuation": "accumulate"
+              },
+              "reducer": 4
+            },
+            "appends": [],
+            "due": 1000
+          }
+        ],
+        [
+          {
+            "scope": "s",
+            "expectedVersion": 1,
+            "inputs": [
+              {
+                "input": {
+                  "kind": "tick"
+                },
+                "now": 10
+              }
+            ],
+            "snapshot": null,
+            "appends": [],
+            "due": 31000
+          }
+        ],
+        [
+          {
+            "scope": "s",
+            "expectedVersion": 2,
+            "inputs": [
+              {
+                "input": {
+                  "kind": "judged",
+                  "batchId": "3ecbd4f2ef91c78f",
+                  "attempt": 1,
+                  "judgment": {
+                    "route": "wait"
+                  }
+                },
+                "now": 10
+              }
+            ],
+            "snapshot": null,
+            "appends": [],
+            "due": 1000
+          }
+        ],
+        [
+          {
+            "scope": "s",
+            "expectedVersion": 3,
+            "inputs": [
+              {
+                "input": {
+                  "kind": "events",
+                  "events": [
+                    {
+                      "id": "b",
+                      "name": "meta",
+                      "at": 15,
+                      "data": {},
+                      "kind": "context"
+                    }
+                  ]
+                },
+                "now": 15
+              }
+            ],
+            "snapshot": null,
+            "appends": []
+          }
+        ]
+      ],
+      "stored": {
+        "version": 4,
+        "snapshot": {
+          "version": 1,
+          "record": {
+            "version": 1,
+            "scope": "s",
+            "cursors": {},
+            "seen": [
+              "a"
+            ],
+            "buffer": {
+              "entries": [
+                {
+                  "id": "a",
+                  "name": "reading",
+                  "at": 0,
+                  "text": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+                  "data": {},
+                  "kind": "continuous",
+                  "seenAt": 0
+                }
+              ],
+              "dropped": 0,
+              "gap": false,
+              "forcedAt": null
+            },
+            "batch": null,
+            "outbox": {
+              "decisions": [],
+              "deadLetters": []
+            },
+            "recent": [],
+            "dueAt": 10
+          },
+          "policy": {
+            "closingGraceMs": 500,
+            "streamGapMs": 10,
+            "passiveQuietMs": 4000,
+            "waitHorizonMs": 20,
+            "maxWaits": 2,
+            "maxEvents": 250,
+            "maxWindowMs": 60000,
+            "retryBackoffMs": [
+              30,
+              60
+            ],
+            "judgeTimeoutMs": 15000,
+            "deliveryTimeoutMs": 10000,
+            "recentCount": 8,
+            "seenCount": 500,
+            "maxOutbox": 1000,
+            "maxDeadLetters": 1000,
+            "deadLetterBackoffMaxMs": 60000,
+            "continuation": "accumulate"
+          },
+          "reducer": 4
+        },
+        "tail": [
+          {
+            "input": {
+              "kind": "tick"
+            },
+            "now": 10
+          },
+          {
+            "input": {
+              "kind": "judged",
+              "batchId": "3ecbd4f2ef91c78f",
+              "attempt": 1,
+              "judgment": {
+                "route": "wait"
+              }
+            },
+            "now": 10
+          },
+          {
+            "input": {
+              "kind": "events",
+              "events": [
+                {
+                  "id": "b",
+                  "name": "meta",
+                  "at": 15,
+                  "data": {},
+                  "kind": "context"
+                }
+              ]
+            },
+            "now": 15
+          }
+        ]
+      },
+      "expected": {
+        "version": 4,
+        "scope": "s",
+        "cursors": {},
+        "seen": [
+          "a",
+          "b"
+        ],
+        "buffer": {
+          "entries": [
+            {
+              "id": "b",
+              "name": "meta",
+              "at": 15,
+              "data": {},
+              "kind": "context",
+              "seenAt": 15
+            }
+          ],
+          "dropped": 0,
+          "gap": false,
+          "forcedAt": null
+        },
+        "batch": {
+          "window": {
+            "id": "3ecbd4f2ef91c78f",
+            "events": [
+              {
+                "id": "a",
+                "name": "reading",
+                "at": 0,
+                "text": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+                "data": {},
+                "kind": "continuous",
+                "seenAt": 0
+              }
+            ],
+            "reason": "stream_quiet",
+            "waits": 1,
+            "dropped": 0,
+            "gap": false,
+            "settledAt": 10
+          },
+          "phase": {
+            "phase": "waiting",
+            "attempt": 1,
+            "until": 30,
+            "failures": 0
+          }
+        },
+        "outbox": {
+          "decisions": [],
+          "deadLetters": []
+        },
+        "recent": [],
+        "dueAt": 30
+      }
+    },
+    {
+      "name": "retrying",
+      "mode": "accumulate",
+      "now": 15,
+      "writes": [
+        [
+          {
+            "scope": "s",
+            "expectedVersion": 0,
+            "inputs": [
+              {
+                "input": {
+                  "kind": "events",
+                  "events": [
+                    {
+                      "id": "a",
+                      "name": "reading",
+                      "at": 0,
+                      "text": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+                      "data": {},
+                      "kind": "continuous"
+                    }
+                  ]
+                },
+                "now": 0
+              }
+            ],
+            "snapshot": {
+              "version": 1,
+              "record": {
+                "version": 1,
+                "scope": "s",
+                "cursors": {},
+                "seen": [
+                  "a"
+                ],
+                "buffer": {
+                  "entries": [
+                    {
+                      "id": "a",
+                      "name": "reading",
+                      "at": 0,
+                      "text": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+                      "data": {},
+                      "kind": "continuous",
+                      "seenAt": 0
+                    }
+                  ],
+                  "dropped": 0,
+                  "gap": false,
+                  "forcedAt": null
+                },
+                "batch": null,
+                "outbox": {
+                  "decisions": [],
+                  "deadLetters": []
+                },
+                "recent": [],
+                "dueAt": 10
+              },
+              "policy": {
+                "closingGraceMs": 500,
+                "streamGapMs": 10,
+                "passiveQuietMs": 4000,
+                "waitHorizonMs": 20,
+                "maxWaits": 2,
+                "maxEvents": 250,
+                "maxWindowMs": 60000,
+                "retryBackoffMs": [
+                  30,
+                  60
+                ],
+                "judgeTimeoutMs": 15000,
+                "deliveryTimeoutMs": 10000,
+                "recentCount": 8,
+                "seenCount": 500,
+                "maxOutbox": 1000,
+                "maxDeadLetters": 1000,
+                "deadLetterBackoffMaxMs": 60000,
+                "continuation": "accumulate"
+              },
+              "reducer": 4
+            },
+            "appends": [],
+            "due": 1000
+          }
+        ],
+        [
+          {
+            "scope": "s",
+            "expectedVersion": 1,
+            "inputs": [
+              {
+                "input": {
+                  "kind": "tick"
+                },
+                "now": 10
+              }
+            ],
+            "snapshot": null,
+            "appends": [],
+            "due": 31000
+          }
+        ],
+        [
+          {
+            "scope": "s",
+            "expectedVersion": 2,
+            "inputs": [
+              {
+                "input": {
+                  "kind": "judgeFailed",
+                  "batchId": "3ecbd4f2ef91c78f",
+                  "attempt": 1,
+                  "message": "controlled",
+                  "permanent": false
+                },
+                "now": 10
+              }
+            ],
+            "snapshot": null,
+            "appends": [],
+            "due": 1000
+          }
+        ],
+        [
+          {
+            "scope": "s",
+            "expectedVersion": 3,
+            "inputs": [
+              {
+                "input": {
+                  "kind": "events",
+                  "events": [
+                    {
+                      "id": "b",
+                      "name": "meta",
+                      "at": 15,
+                      "data": {},
+                      "kind": "context"
+                    }
+                  ]
+                },
+                "now": 15
+              }
+            ],
+            "snapshot": null,
+            "appends": []
+          }
+        ]
+      ],
+      "stored": {
+        "version": 4,
+        "snapshot": {
+          "version": 1,
+          "record": {
+            "version": 1,
+            "scope": "s",
+            "cursors": {},
+            "seen": [
+              "a"
+            ],
+            "buffer": {
+              "entries": [
+                {
+                  "id": "a",
+                  "name": "reading",
+                  "at": 0,
+                  "text": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+                  "data": {},
+                  "kind": "continuous",
+                  "seenAt": 0
+                }
+              ],
+              "dropped": 0,
+              "gap": false,
+              "forcedAt": null
+            },
+            "batch": null,
+            "outbox": {
+              "decisions": [],
+              "deadLetters": []
+            },
+            "recent": [],
+            "dueAt": 10
+          },
+          "policy": {
+            "closingGraceMs": 500,
+            "streamGapMs": 10,
+            "passiveQuietMs": 4000,
+            "waitHorizonMs": 20,
+            "maxWaits": 2,
+            "maxEvents": 250,
+            "maxWindowMs": 60000,
+            "retryBackoffMs": [
+              30,
+              60
+            ],
+            "judgeTimeoutMs": 15000,
+            "deliveryTimeoutMs": 10000,
+            "recentCount": 8,
+            "seenCount": 500,
+            "maxOutbox": 1000,
+            "maxDeadLetters": 1000,
+            "deadLetterBackoffMaxMs": 60000,
+            "continuation": "accumulate"
+          },
+          "reducer": 4
+        },
+        "tail": [
+          {
+            "input": {
+              "kind": "tick"
+            },
+            "now": 10
+          },
+          {
+            "input": {
+              "kind": "judgeFailed",
+              "batchId": "3ecbd4f2ef91c78f",
+              "attempt": 1,
+              "message": "controlled",
+              "permanent": false
+            },
+            "now": 10
+          },
+          {
+            "input": {
+              "kind": "events",
+              "events": [
+                {
+                  "id": "b",
+                  "name": "meta",
+                  "at": 15,
+                  "data": {},
+                  "kind": "context"
+                }
+              ]
+            },
+            "now": 15
+          }
+        ]
+      },
+      "expected": {
+        "version": 4,
+        "scope": "s",
+        "cursors": {},
+        "seen": [
+          "a",
+          "b"
+        ],
+        "buffer": {
+          "entries": [
+            {
+              "id": "b",
+              "name": "meta",
+              "at": 15,
+              "data": {},
+              "kind": "context",
+              "seenAt": 15
+            }
+          ],
+          "dropped": 0,
+          "gap": false,
+          "forcedAt": null
+        },
+        "batch": {
+          "window": {
+            "id": "3ecbd4f2ef91c78f",
+            "events": [
+              {
+                "id": "a",
+                "name": "reading",
+                "at": 0,
+                "text": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+                "data": {},
+                "kind": "continuous",
+                "seenAt": 0
+              }
+            ],
+            "reason": "stream_quiet",
+            "waits": 0,
+            "dropped": 0,
+            "gap": false,
+            "settledAt": 10
+          },
+          "phase": {
+            "phase": "retrying",
+            "attempt": 1,
+            "failures": 1,
+            "at": 40,
+            "offerWait": true
+          }
+        },
+        "outbox": {
+          "decisions": [],
+          "deadLetters": []
+        },
+        "recent": [],
+        "dueAt": 40
+      }
+    },
+    {
+      "name": "separate",
+      "mode": "separate",
+      "now": 15,
+      "writes": [
+        [
+          {
+            "scope": "s",
+            "expectedVersion": 0,
+            "inputs": [
+              {
+                "input": {
+                  "kind": "events",
+                  "events": [
+                    {
+                      "id": "a",
+                      "name": "reading",
+                      "at": 0,
+                      "text": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+                      "data": {},
+                      "kind": "continuous"
+                    }
+                  ]
+                },
+                "now": 0
+              }
+            ],
+            "snapshot": {
+              "version": 1,
+              "record": {
+                "version": 1,
+                "scope": "s",
+                "cursors": {},
+                "seen": [
+                  "a"
+                ],
+                "buffer": {
+                  "entries": [
+                    {
+                      "id": "a",
+                      "name": "reading",
+                      "at": 0,
+                      "text": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+                      "data": {},
+                      "kind": "continuous",
+                      "seenAt": 0
+                    }
+                  ],
+                  "dropped": 0,
+                  "gap": false,
+                  "forcedAt": null
+                },
+                "batch": null,
+                "outbox": {
+                  "decisions": [],
+                  "deadLetters": []
+                },
+                "recent": [],
+                "dueAt": 10
+              },
+              "policy": {
+                "closingGraceMs": 500,
+                "streamGapMs": 10,
+                "passiveQuietMs": 4000,
+                "waitHorizonMs": 20,
+                "maxWaits": 2,
+                "maxEvents": 250,
+                "maxWindowMs": 60000,
+                "retryBackoffMs": [
+                  30,
+                  60
+                ],
+                "judgeTimeoutMs": 15000,
+                "deliveryTimeoutMs": 10000,
+                "recentCount": 8,
+                "seenCount": 500,
+                "maxOutbox": 1000,
+                "maxDeadLetters": 1000,
+                "deadLetterBackoffMaxMs": 60000,
+                "continuation": "separate"
+              },
+              "reducer": 4
+            },
+            "appends": [],
+            "due": 1000
+          }
+        ],
+        [
+          {
+            "scope": "s",
+            "expectedVersion": 1,
+            "inputs": [
+              {
+                "input": {
+                  "kind": "tick"
+                },
+                "now": 10
+              }
+            ],
+            "snapshot": null,
+            "appends": [],
+            "due": 31000
+          }
+        ],
+        [
+          {
+            "scope": "s",
+            "expectedVersion": 2,
+            "inputs": [
+              {
+                "input": {
+                  "kind": "judged",
+                  "batchId": "3ecbd4f2ef91c78f",
+                  "attempt": 1,
+                  "judgment": {
+                    "route": "wait"
+                  }
+                },
+                "now": 10
+              }
+            ],
+            "snapshot": null,
+            "appends": [],
+            "due": 1000
+          }
+        ],
+        [
+          {
+            "scope": "s",
+            "expectedVersion": 3,
+            "inputs": [
+              {
+                "input": {
+                  "kind": "events",
+                  "events": [
+                    {
+                      "id": "b",
+                      "name": "meta",
+                      "at": 15,
+                      "data": {},
+                      "kind": "context"
+                    }
+                  ]
+                },
+                "now": 15
+              }
+            ],
+            "snapshot": null,
+            "appends": []
+          }
+        ]
+      ],
+      "stored": {
+        "version": 4,
+        "snapshot": {
+          "version": 1,
+          "record": {
+            "version": 1,
+            "scope": "s",
+            "cursors": {},
+            "seen": [
+              "a"
+            ],
+            "buffer": {
+              "entries": [
+                {
+                  "id": "a",
+                  "name": "reading",
+                  "at": 0,
+                  "text": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+                  "data": {},
+                  "kind": "continuous",
+                  "seenAt": 0
+                }
+              ],
+              "dropped": 0,
+              "gap": false,
+              "forcedAt": null
+            },
+            "batch": null,
+            "outbox": {
+              "decisions": [],
+              "deadLetters": []
+            },
+            "recent": [],
+            "dueAt": 10
+          },
+          "policy": {
+            "closingGraceMs": 500,
+            "streamGapMs": 10,
+            "passiveQuietMs": 4000,
+            "waitHorizonMs": 20,
+            "maxWaits": 2,
+            "maxEvents": 250,
+            "maxWindowMs": 60000,
+            "retryBackoffMs": [
+              30,
+              60
+            ],
+            "judgeTimeoutMs": 15000,
+            "deliveryTimeoutMs": 10000,
+            "recentCount": 8,
+            "seenCount": 500,
+            "maxOutbox": 1000,
+            "maxDeadLetters": 1000,
+            "deadLetterBackoffMaxMs": 60000,
+            "continuation": "separate"
+          },
+          "reducer": 4
+        },
+        "tail": [
+          {
+            "input": {
+              "kind": "tick"
+            },
+            "now": 10
+          },
+          {
+            "input": {
+              "kind": "judged",
+              "batchId": "3ecbd4f2ef91c78f",
+              "attempt": 1,
+              "judgment": {
+                "route": "wait"
+              }
+            },
+            "now": 10
+          },
+          {
+            "input": {
+              "kind": "events",
+              "events": [
+                {
+                  "id": "b",
+                  "name": "meta",
+                  "at": 15,
+                  "data": {},
+                  "kind": "context"
+                }
+              ]
+            },
+            "now": 15
+          }
+        ]
+      },
+      "expected": {
+        "version": 4,
+        "scope": "s",
+        "cursors": {},
+        "seen": [
+          "a",
+          "b"
+        ],
+        "buffer": {
+          "entries": [
+            {
+              "id": "b",
+              "name": "meta",
+              "at": 15,
+              "data": {},
+              "kind": "context",
+              "seenAt": 15
+            }
+          ],
+          "dropped": 0,
+          "gap": false,
+          "forcedAt": null
+        },
+        "batch": {
+          "window": {
+            "id": "3ecbd4f2ef91c78f",
+            "events": [
+              {
+                "id": "a",
+                "name": "reading",
+                "at": 0,
+                "text": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+                "data": {},
+                "kind": "continuous",
+                "seenAt": 0
+              }
+            ],
+            "reason": "stream_quiet",
+            "waits": 1,
+            "dropped": 0,
+            "gap": false,
+            "settledAt": 10
+          },
+          "phase": {
+            "phase": "waiting",
+            "attempt": 1,
+            "until": 30
+          }
+        },
+        "outbox": {
+          "decisions": [],
+          "deadLetters": []
+        },
+        "recent": [],
+        "dueAt": 30
+      }
+    },
+    {
+      "name": "complete",
+      "mode": "accumulate",
+      "now": 10,
+      "writes": [
+        [
+          {
+            "scope": "s",
+            "expectedVersion": 0,
+            "inputs": [
+              {
+                "input": {
+                  "kind": "events",
+                  "events": [
+                    {
+                      "id": "a",
+                      "name": "reading",
+                      "at": 0,
+                      "text": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+                      "data": {},
+                      "kind": "continuous"
+                    }
+                  ]
+                },
+                "now": 0
+              }
+            ],
+            "snapshot": {
+              "version": 1,
+              "record": {
+                "version": 1,
+                "scope": "s",
+                "cursors": {},
+                "seen": [
+                  "a"
+                ],
+                "buffer": {
+                  "entries": [
+                    {
+                      "id": "a",
+                      "name": "reading",
+                      "at": 0,
+                      "text": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+                      "data": {},
+                      "kind": "continuous",
+                      "seenAt": 0
+                    }
+                  ],
+                  "dropped": 0,
+                  "gap": false,
+                  "forcedAt": null
+                },
+                "batch": null,
+                "outbox": {
+                  "decisions": [],
+                  "deadLetters": []
+                },
+                "recent": [],
+                "dueAt": 10
+              },
+              "policy": {
+                "closingGraceMs": 500,
+                "streamGapMs": 10,
+                "passiveQuietMs": 4000,
+                "waitHorizonMs": 20,
+                "maxWaits": 2,
+                "maxEvents": 250,
+                "maxWindowMs": 60000,
+                "retryBackoffMs": [
+                  30,
+                  60
+                ],
+                "judgeTimeoutMs": 15000,
+                "deliveryTimeoutMs": 10000,
+                "recentCount": 8,
+                "seenCount": 500,
+                "maxOutbox": 1000,
+                "maxDeadLetters": 1000,
+                "deadLetterBackoffMaxMs": 60000,
+                "continuation": "accumulate"
+              },
+              "reducer": 4
+            },
+            "appends": [],
+            "due": 1000
+          }
+        ],
+        [
+          {
+            "scope": "s",
+            "expectedVersion": 1,
+            "inputs": [
+              {
+                "input": {
+                  "kind": "tick"
+                },
+                "now": 10
+              }
+            ],
+            "snapshot": null,
+            "appends": [],
+            "due": 31000
+          }
+        ],
+        [
+          {
+            "scope": "s",
+            "expectedVersion": 2,
+            "inputs": [
+              {
+                "input": {
+                  "kind": "judged",
+                  "batchId": "3ecbd4f2ef91c78f",
+                  "attempt": 1,
+                  "judgment": {
+                    "route": "queue"
+                  }
+                },
+                "now": 10
+              }
+            ],
+            "snapshot": null,
+            "appends": [
+              {
+                "kind": "decision",
+                "id": "3ecbd4f2ef91c78f",
+                "scope": "s",
+                "at": 10,
+                "route": "queue",
+                "body": {
+                  "id": "3ecbd4f2ef91c78f",
+                  "scope": "s",
+                  "route": "queue",
+                  "probabilities": {
+                    "interrupt": 0,
+                    "queue": 1,
+                    "note": 0,
+                    "ask": 0,
+                    "skip": 0,
+                    "wait": 0
+                  },
+                  "predicates": {},
+                  "confidence": null,
+                  "window": {
+                    "id": "3ecbd4f2ef91c78f",
+                    "events": [
+                      {
+                        "id": "a",
+                        "name": "reading",
+                        "at": 0,
+                        "text": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+                        "data": {},
+                        "kind": "continuous",
+                        "seenAt": 0
+                      }
+                    ],
+                    "reason": "stream_quiet",
+                    "waits": 0,
+                    "dropped": 0,
+                    "gap": false,
+                    "settledAt": 10
+                  },
+                  "at": 10
+                }
+              }
+            ],
+            "due": null
+          }
+        ]
+      ],
+      "stored": {
+        "version": 3,
+        "snapshot": {
+          "version": 1,
+          "record": {
+            "version": 1,
+            "scope": "s",
+            "cursors": {},
+            "seen": [
+              "a"
+            ],
+            "buffer": {
+              "entries": [
+                {
+                  "id": "a",
+                  "name": "reading",
+                  "at": 0,
+                  "text": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+                  "data": {},
+                  "kind": "continuous",
+                  "seenAt": 0
+                }
+              ],
+              "dropped": 0,
+              "gap": false,
+              "forcedAt": null
+            },
+            "batch": null,
+            "outbox": {
+              "decisions": [],
+              "deadLetters": []
+            },
+            "recent": [],
+            "dueAt": 10
+          },
+          "policy": {
+            "closingGraceMs": 500,
+            "streamGapMs": 10,
+            "passiveQuietMs": 4000,
+            "waitHorizonMs": 20,
+            "maxWaits": 2,
+            "maxEvents": 250,
+            "maxWindowMs": 60000,
+            "retryBackoffMs": [
+              30,
+              60
+            ],
+            "judgeTimeoutMs": 15000,
+            "deliveryTimeoutMs": 10000,
+            "recentCount": 8,
+            "seenCount": 500,
+            "maxOutbox": 1000,
+            "maxDeadLetters": 1000,
+            "deadLetterBackoffMaxMs": 60000,
+            "continuation": "accumulate"
+          },
+          "reducer": 4
+        },
+        "tail": [
+          {
+            "input": {
+              "kind": "tick"
+            },
+            "now": 10
+          },
+          {
+            "input": {
+              "kind": "judged",
+              "batchId": "3ecbd4f2ef91c78f",
+              "attempt": 1,
+              "judgment": {
+                "route": "queue"
+              }
+            },
+            "now": 10
+          }
+        ]
+      },
+      "expected": {
+        "version": 3,
+        "scope": "s",
+        "cursors": {},
+        "seen": [
+          "a"
+        ],
+        "buffer": {
+          "entries": [],
+          "dropped": 0,
+          "gap": false,
+          "forcedAt": null
+        },
+        "batch": null,
+        "outbox": {
+          "decisions": [],
+          "deadLetters": []
+        },
+        "recent": [
+          {
+            "id": "3ecbd4f2ef91c78f",
+            "route": "queue",
+            "at": 10
+          }
+        ],
+        "dueAt": null
+      }
+    }
+  ]
+}

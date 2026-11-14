@@ -31,6 +31,7 @@ def event_spec(spec: Mapping[str, Any]) -> Event:
 
 
 _SETTLE = {
+    "eventLimits": "event_limits",
     "continuation": "continuation",
     "closingGraceMs": "closing_grace_ms",
     "streamGapMs": "stream_gap_ms",

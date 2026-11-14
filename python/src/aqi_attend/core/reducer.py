@@ -37,6 +37,7 @@ from .types import (
 )
 from .window import (
     estimate_rendered_bytes,
+    is_background,
     observation_time,
     open_window,
     shed_entries,
@@ -46,7 +47,7 @@ from .window import (
     window_shed,
 )
 
-REDUCER_VERSION = 4
+REDUCER_VERSION = 5
 """Bumped whenever a release changes a transition. Stored with every snapshot."""
 
 _LANES: tuple[OutboxLane, OutboxLane] = ("decisions", "deadLetters")
@@ -188,6 +189,8 @@ def apply(config: ApplyConfig, state: ScopeState, logged: LoggedInput, out: Appl
         raise ValueError(f"attend: unknown input kind {kind!r}")
     if swept:
         _sweep(ctx, state)
+    if config.policy.get("eventLimits") is not None and kind != "events":
+        _removed(ctx, state, _retain_background(config.policy, state), "overflow")
     due = next_due(config.policy, state)
     if not same(state.due_at, due):
         state.due_at = due
@@ -223,7 +226,7 @@ def _ingest(ctx: _Ctx, state: ScopeState, input: EventsInput) -> None:
         ctx.out.changed = True
     seen_trim(state, policy["seenCount"])
     _prune(ctx, state)
-    _removed(ctx, state, window_shed(state.open, policy["maxEvents"]), "overflow")
+    _removed(ctx, state, _retain_background(policy, state), "overflow")
     if not state.open.entries:
         state.open.ended_at = None
     source = input.get("source")
@@ -240,16 +243,53 @@ def _ingest(ctx: _Ctx, state: ScopeState, input: EventsInput) -> None:
     ctx.trace({"kind": "ingested", "scope": state.scope, "count": len(input["events"]) - duplicates, "duplicates": duplicates})
 
 
+def _retain_background(policy: SettlePolicy, state: ScopeState) -> list[Entry] | None:
+    limits = policy.get("eventLimits")
+    open = state.open
+    if limits is None:
+        return window_shed(open, policy["maxEvents"])
+    held = state.batch
+    if held is None or held.phase["phase"] == "judging":
+        return window_shed(open, len(open.entries) - max(0, open.summary.sheddable - limits["background"]))
+    background = sum(is_background(entry["kind"]) for entry in held.window["events"])
+    excess = background + open.summary.sheddable - limits["background"]
+    if excess <= 0:
+        return None
+    retained = list(held.window["events"])
+    old = shed_entries(retained, max(0, len(retained) - excess))
+    if old is not None:
+        hash = fnv_start(state.scope)
+        for entry in retained:
+            fold_id(hash, entry["id"])
+        held.window = {**held.window, "events": retained, "id": fnv_hex(hash), "dropped": held.window["dropped"] + len(old)}
+        held.hash = hash
+    remaining = excess - (len(old) if old is not None else 0)
+    fresh = window_shed(open, len(open.entries) - remaining) if remaining > 0 else None
+    if not open.entries:
+        open.ended_at = None
+    return [*(old or []), *(fresh or [])]
+
+
+def _shed_candidate(policy: SettlePolicy, entries: list[Entry]) -> list[Entry] | None:
+    limits = policy.get("eventLimits")
+    if limits is None:
+        return shed_entries(entries, policy["maxEvents"])
+    background = sum(is_background(entry["kind"]) for entry in entries)
+    return shed_entries(entries, len(entries) - max(0, background - limits["background"]))
+
+
 def _continuation_entries(policy: SettlePolicy, state: ScopeState) -> list[Entry]:
     entries = [*(state.batch.window["events"] if state.batch is not None else []), *state.open.entries]
-    shed_entries(entries, policy["maxEvents"])
+    _shed_candidate(policy, entries)
     return entries
 
 
 def _size_bound(policy: SettlePolicy, entries: list[Entry]) -> SettleReason | None:
     if not entries:
         return None
-    if len(entries) > policy["maxEvents"]:
+    limits = policy.get("eventLimits")
+    full = sum(not is_background(entry["kind"]) for entry in entries) >= limits["counted"] if limits is not None else len(entries) > policy["maxEvents"]
+    if full:
         return "overflow"
     limit = policy.get("maxWindowBytes")
     if limit is not None and sum(estimate_rendered_bytes(entry) for entry in entries) >= limit:
@@ -379,7 +419,7 @@ def _settle_buffer(ctx: _Ctx, state: ScopeState, fired: SettleReason, may_wait: 
     gap = open.gap or (held.window["gap"] if held is not None else False)
     waits = held.window["waits"] if held is not None else 0
     forced = forced or (held is not None and held.window["reason"] == "forced")
-    gone = shed_entries(events, ctx.config.policy["maxEvents"])
+    gone = _shed_candidate(ctx.config.policy, events)
     _removed(ctx, state, gone, "overflow")
     dropped += len(gone) if gone is not None else 0
     if held is None and gone is None and open.hash_valid:

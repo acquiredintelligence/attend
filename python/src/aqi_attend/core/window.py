@@ -14,7 +14,7 @@ def is_act(kind: Kind) -> bool:
     return kind == "closing" or kind == "continuous" or kind == "passive"
 
 
-def _sheddable(kind: Kind) -> bool:
+def is_background(kind: Kind) -> bool:
     return kind == "consequence" or kind == "context"
 
 
@@ -55,7 +55,7 @@ def _summarize_entry(summary: TriggerSummary, entry: Entry, index: int) -> None:
         summary.act_observed |= explicit
         if summary.act_observed:
             summary.first_act_at = summary.min_act_at
-    if _sheddable(kind):
+    if is_background(kind):
         summary.sheddable += 1
         if summary.first_act_index == -1:
             summary.prefix_min_sheddable_at = _min(summary.prefix_min_sheddable_at, observed_at)
@@ -136,7 +136,7 @@ def _prefix_minimum(open: OpenWindow) -> float:
     least = math.inf
     for i in range(end):
         entry = entries[i]
-        if _sheddable(entry["kind"]):
+        if is_background(entry["kind"]):
             if open.monotone:
                 return observation_time(entry)
             least = _min(least, observation_time(entry))
@@ -174,7 +174,7 @@ def window_prune(open: OpenWindow, max_window_ms: float, now: float) -> list[Ent
         stale = observation_time(entry) + max_window_ms <= now
         if not stale and open.monotone:
             break
-        if stale and _sheddable(entry["kind"]):
+        if stale and is_background(entry["kind"]):
             if gone is None:
                 gone = [entry]
             else:
@@ -210,7 +210,7 @@ def _shed(entries: list[Entry], max_events: int, open: OpenWindow | None) -> lis
     read = 0
     while read < length and (gone is None or len(gone) < excess):
         entry = entries[read]
-        if _sheddable(entry["kind"]):
+        if is_background(entry["kind"]):
             if gone is None:
                 gone = [entry]
             else:
@@ -261,7 +261,9 @@ def window_deadline(policy: SettlePolicy, open: OpenWindow) -> tuple[float, Sett
     if open.ended_at is not None and (reason is None or open.ended_at < at):
         at = open.ended_at
         reason = "closing"
-    if size > 0 and size > policy["maxEvents"] and (reason is None or s.last_seen_at < at):
+    limits = policy.get("eventLimits")
+    full = size - s.sheddable >= limits["counted"] if limits is not None else size > policy["maxEvents"]
+    if size > 0 and full and (reason is None or s.last_seen_at < at):
         at = s.last_seen_at
         reason = "overflow"
     if s.min_flush_at != math.inf and (reason is None or s.min_flush_at < at):

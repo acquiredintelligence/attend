@@ -64,6 +64,11 @@ export function createScopes(options: Options) {
           && (slot.state.batch !== null || windowSize(slot.state.open) > 0)) {
           throw new Error('attend: cannot change continuation while a window is unresolved');
         }
+        const priorLimits = stored?.snapshot?.policy.eventLimits, limits = config.policy.eventLimits;
+        if (stored !== null && (priorLimits?.counted !== limits?.counted || priorLimits?.background !== limits?.background)
+          && (slot.state.batch !== null || windowSize(slot.state.open) > 0)) {
+          throw new Error('attend: cannot change event limits while a window is unresolved');
+        }
         slot.tailCount = stored?.tail.length ?? 0;
         slot.tailBytes = stored?.tail.reduce((sum, logged) => sum + inputBytes(logged), 0) ?? 0;
         slot.snapshotBytes = stored?.snapshot ? bytes(stored.snapshot.record) : 0;

@@ -1,5 +1,11 @@
 # Shell changes from the frozen shell
 
+## Independent event limits
+
+The optional `settle.eventLimits` pair separates an inclusive counted trigger from FIFO background retention. It requires accumulating continuation and replaces the scalar total limit. Omission preserves the existing scalar path. Retention applies across unresolved held and fresh entries, including transitions from a live offer; it never mutates that offer or drops counted entries. Reducer revision 5 stores the opt-in policy. [Independent event limits](docs/reference.md#independent-event-limits) defines the contract and writer-change boundary.
+
+TypeScript writer startup now replays stored tails with the saved policy, even when its runtime options contain a different policy. Spreading that options object previously replaced the saved policy and could resurrect already completed input. `test/policy-replay.test.ts` pins the correction; frozen ordinary-policy cases remain unchanged.
+
 ## Accumulating continuation
 
 The optional `settle.continuation = 'accumulate'` reoffers waits within their allowance, retains provider failures across waits and absorbs admitted input at a strict retry not-before time. Whole-window count, rendered bytes and age constrain wait eligibility, including ties. Ordinary continuation keeps the frozen behavior. The existing reducer and delivery machinery remain in use; no host timer or alternate scheduler is introduced.
