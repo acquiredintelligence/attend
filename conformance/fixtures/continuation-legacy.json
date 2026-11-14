@@ -1,0 +1,1515 @@
+{
+ "source": "f111566c1fa28d7dd7a124502eca4943dbbe15d6",
+ "cases": [
+  {
+   "name": "waiting-tail",
+   "through": 40,
+   "writes": [
+    [
+     {
+      "scope": "scope",
+      "expectedVersion": 0,
+      "inputs": [
+       {
+        "input": {
+         "kind": "events",
+         "events": [
+          {
+           "id": "a",
+           "at": 0,
+           "observedAt": 0,
+           "name": "reading",
+           "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+           "data": {},
+           "kind": "continuous"
+          }
+         ]
+        },
+        "now": 0
+       }
+      ],
+      "snapshot": {
+       "version": 1,
+       "record": {
+        "version": 1,
+        "scope": "scope",
+        "cursors": {},
+        "seen": [
+         "a"
+        ],
+        "buffer": {
+         "entries": [
+          {
+           "id": "a",
+           "at": 0,
+           "observedAt": 0,
+           "name": "reading",
+           "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+           "data": {},
+           "kind": "continuous",
+           "seenAt": 0
+          }
+         ],
+         "dropped": 0,
+         "gap": false,
+         "forcedAt": null
+        },
+        "batch": null,
+        "outbox": {
+         "decisions": [],
+         "deadLetters": []
+        },
+        "recent": [],
+        "dueAt": 10
+       },
+       "policy": {
+        "closingGraceMs": 500,
+        "streamGapMs": 10,
+        "passiveQuietMs": 4000,
+        "waitHorizonMs": 20,
+        "maxWaits": 2,
+        "maxEvents": 250,
+        "maxWindowMs": 60000,
+        "retryBackoffMs": [
+         30,
+         60
+        ],
+        "judgeTimeoutMs": 15000,
+        "deliveryTimeoutMs": 10000,
+        "recentCount": 8,
+        "seenCount": 500,
+        "maxOutbox": 1000,
+        "maxDeadLetters": 1000,
+        "deadLetterBackoffMaxMs": 60000
+       },
+       "reducer": 3
+      },
+      "appends": [],
+      "due": 1000
+     }
+    ],
+    [
+     {
+      "scope": "scope",
+      "expectedVersion": 1,
+      "inputs": [
+       {
+        "input": {
+         "kind": "tick"
+        },
+        "now": 10
+       }
+      ],
+      "snapshot": null,
+      "appends": [],
+      "due": 31000
+     }
+    ],
+    [
+     {
+      "scope": "scope",
+      "expectedVersion": 2,
+      "inputs": [
+       {
+        "input": {
+         "kind": "judgeFailed",
+         "batchId": "cf8923dfae84f930",
+         "attempt": 1,
+         "message": "controlled outage",
+         "permanent": false
+        },
+        "now": 10
+       }
+      ],
+      "snapshot": null,
+      "appends": [],
+      "due": 1000
+     }
+    ],
+    [
+     {
+      "scope": "scope",
+      "expectedVersion": 3,
+      "inputs": [
+       {
+        "input": {
+         "kind": "tick"
+        },
+        "now": 40
+       }
+      ],
+      "snapshot": null,
+      "appends": [],
+      "due": 31000
+     }
+    ],
+    [
+     {
+      "scope": "scope",
+      "expectedVersion": 4,
+      "inputs": [
+       {
+        "input": {
+         "kind": "judged",
+         "batchId": "cf8923dfae84f930",
+         "attempt": 2,
+         "judgment": {
+          "route": "wait"
+         }
+        },
+        "now": 40
+       }
+      ],
+      "snapshot": null,
+      "appends": [],
+      "due": 1000
+     }
+    ]
+   ],
+   "stored": {
+    "version": 5,
+    "snapshot": {
+     "version": 1,
+     "record": {
+      "version": 1,
+      "scope": "scope",
+      "cursors": {},
+      "seen": [
+       "a"
+      ],
+      "buffer": {
+       "entries": [
+        {
+         "id": "a",
+         "at": 0,
+         "observedAt": 0,
+         "name": "reading",
+         "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "data": {},
+         "kind": "continuous",
+         "seenAt": 0
+        }
+       ],
+       "dropped": 0,
+       "gap": false,
+       "forcedAt": null
+      },
+      "batch": null,
+      "outbox": {
+       "decisions": [],
+       "deadLetters": []
+      },
+      "recent": [],
+      "dueAt": 10
+     },
+     "policy": {
+      "closingGraceMs": 500,
+      "streamGapMs": 10,
+      "passiveQuietMs": 4000,
+      "waitHorizonMs": 20,
+      "maxWaits": 2,
+      "maxEvents": 250,
+      "maxWindowMs": 60000,
+      "retryBackoffMs": [
+       30,
+       60
+      ],
+      "judgeTimeoutMs": 15000,
+      "deliveryTimeoutMs": 10000,
+      "recentCount": 8,
+      "seenCount": 500,
+      "maxOutbox": 1000,
+      "maxDeadLetters": 1000,
+      "deadLetterBackoffMaxMs": 60000
+     },
+     "reducer": 3
+    },
+    "tail": [
+     {
+      "input": {
+       "kind": "tick"
+      },
+      "now": 10
+     },
+     {
+      "input": {
+       "kind": "judgeFailed",
+       "batchId": "cf8923dfae84f930",
+       "attempt": 1,
+       "message": "controlled outage",
+       "permanent": false
+      },
+      "now": 10
+     },
+     {
+      "input": {
+       "kind": "tick"
+      },
+      "now": 40
+     },
+     {
+      "input": {
+       "kind": "judged",
+       "batchId": "cf8923dfae84f930",
+       "attempt": 2,
+       "judgment": {
+        "route": "wait"
+       }
+      },
+      "now": 40
+     }
+    ]
+   },
+   "expected": {
+    "version": 5,
+    "scope": "scope",
+    "cursors": {},
+    "seen": [
+     "a"
+    ],
+    "buffer": {
+     "entries": [],
+     "dropped": 0,
+     "gap": false,
+     "forcedAt": null
+    },
+    "batch": {
+     "window": {
+      "id": "cf8923dfae84f930",
+      "events": [
+       {
+        "id": "a",
+        "at": 0,
+        "observedAt": 0,
+        "name": "reading",
+        "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "data": {},
+        "kind": "continuous",
+        "seenAt": 0
+       }
+      ],
+      "reason": "stream_quiet",
+      "waits": 1,
+      "dropped": 0,
+      "gap": false,
+      "settledAt": 10
+     },
+     "phase": {
+      "phase": "waiting",
+      "attempt": 2,
+      "until": 60
+     }
+    },
+    "outbox": {
+     "decisions": [],
+     "deadLetters": []
+    },
+    "recent": [],
+    "dueAt": 60
+   }
+  },
+  {
+   "name": "waiting-snapshot",
+   "through": 40,
+   "writes": [
+    [
+     {
+      "scope": "scope",
+      "expectedVersion": 0,
+      "inputs": [
+       {
+        "input": {
+         "kind": "events",
+         "events": [
+          {
+           "id": "a",
+           "at": 0,
+           "observedAt": 0,
+           "name": "reading",
+           "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+           "data": {},
+           "kind": "continuous"
+          }
+         ]
+        },
+        "now": 0
+       }
+      ],
+      "snapshot": {
+       "version": 1,
+       "record": {
+        "version": 1,
+        "scope": "scope",
+        "cursors": {},
+        "seen": [
+         "a"
+        ],
+        "buffer": {
+         "entries": [
+          {
+           "id": "a",
+           "at": 0,
+           "observedAt": 0,
+           "name": "reading",
+           "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+           "data": {},
+           "kind": "continuous",
+           "seenAt": 0
+          }
+         ],
+         "dropped": 0,
+         "gap": false,
+         "forcedAt": null
+        },
+        "batch": null,
+        "outbox": {
+         "decisions": [],
+         "deadLetters": []
+        },
+        "recent": [],
+        "dueAt": 10
+       },
+       "policy": {
+        "closingGraceMs": 500,
+        "streamGapMs": 10,
+        "passiveQuietMs": 4000,
+        "waitHorizonMs": 20,
+        "maxWaits": 2,
+        "maxEvents": 250,
+        "maxWindowMs": 60000,
+        "retryBackoffMs": [
+         30,
+         60
+        ],
+        "judgeTimeoutMs": 15000,
+        "deliveryTimeoutMs": 10000,
+        "recentCount": 8,
+        "seenCount": 500,
+        "maxOutbox": 1000,
+        "maxDeadLetters": 1000,
+        "deadLetterBackoffMaxMs": 60000
+       },
+       "reducer": 3
+      },
+      "appends": [],
+      "due": 1000
+     }
+    ],
+    [
+     {
+      "scope": "scope",
+      "expectedVersion": 1,
+      "inputs": [
+       {
+        "input": {
+         "kind": "tick"
+        },
+        "now": 10
+       }
+      ],
+      "snapshot": {
+       "version": 2,
+       "record": {
+        "version": 2,
+        "scope": "scope",
+        "cursors": {},
+        "seen": [
+         "a"
+        ],
+        "buffer": {
+         "entries": [],
+         "dropped": 0,
+         "gap": false,
+         "forcedAt": null
+        },
+        "batch": {
+         "window": {
+          "id": "cf8923dfae84f930",
+          "events": [
+           {
+            "id": "a",
+            "at": 0,
+            "observedAt": 0,
+            "name": "reading",
+            "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "data": {},
+            "kind": "continuous",
+            "seenAt": 0
+           }
+          ],
+          "reason": "stream_quiet",
+          "waits": 0,
+          "dropped": 0,
+          "gap": false,
+          "settledAt": 10
+         },
+         "phase": {
+          "phase": "judging",
+          "attempt": 1,
+          "failures": 0,
+          "leaseUntil": 30010,
+          "offerWait": true
+         }
+        },
+        "outbox": {
+         "decisions": [],
+         "deadLetters": []
+        },
+        "recent": [],
+        "dueAt": 30010
+       },
+       "policy": {
+        "closingGraceMs": 500,
+        "streamGapMs": 10,
+        "passiveQuietMs": 4000,
+        "waitHorizonMs": 20,
+        "maxWaits": 2,
+        "maxEvents": 250,
+        "maxWindowMs": 60000,
+        "retryBackoffMs": [
+         30,
+         60
+        ],
+        "judgeTimeoutMs": 15000,
+        "deliveryTimeoutMs": 10000,
+        "recentCount": 8,
+        "seenCount": 500,
+        "maxOutbox": 1000,
+        "maxDeadLetters": 1000,
+        "deadLetterBackoffMaxMs": 60000
+       },
+       "reducer": 3
+      },
+      "appends": [],
+      "due": 31000
+     }
+    ],
+    [
+     {
+      "scope": "scope",
+      "expectedVersion": 2,
+      "inputs": [
+       {
+        "input": {
+         "kind": "judgeFailed",
+         "batchId": "cf8923dfae84f930",
+         "attempt": 1,
+         "message": "controlled outage",
+         "permanent": false
+        },
+        "now": 10
+       }
+      ],
+      "snapshot": {
+       "version": 3,
+       "record": {
+        "version": 3,
+        "scope": "scope",
+        "cursors": {},
+        "seen": [
+         "a"
+        ],
+        "buffer": {
+         "entries": [],
+         "dropped": 0,
+         "gap": false,
+         "forcedAt": null
+        },
+        "batch": {
+         "window": {
+          "id": "cf8923dfae84f930",
+          "events": [
+           {
+            "id": "a",
+            "at": 0,
+            "observedAt": 0,
+            "name": "reading",
+            "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "data": {},
+            "kind": "continuous",
+            "seenAt": 0
+           }
+          ],
+          "reason": "stream_quiet",
+          "waits": 0,
+          "dropped": 0,
+          "gap": false,
+          "settledAt": 10
+         },
+         "phase": {
+          "phase": "retrying",
+          "attempt": 1,
+          "failures": 1,
+          "at": 40,
+          "offerWait": true
+         }
+        },
+        "outbox": {
+         "decisions": [],
+         "deadLetters": []
+        },
+        "recent": [],
+        "dueAt": 40
+       },
+       "policy": {
+        "closingGraceMs": 500,
+        "streamGapMs": 10,
+        "passiveQuietMs": 4000,
+        "waitHorizonMs": 20,
+        "maxWaits": 2,
+        "maxEvents": 250,
+        "maxWindowMs": 60000,
+        "retryBackoffMs": [
+         30,
+         60
+        ],
+        "judgeTimeoutMs": 15000,
+        "deliveryTimeoutMs": 10000,
+        "recentCount": 8,
+        "seenCount": 500,
+        "maxOutbox": 1000,
+        "maxDeadLetters": 1000,
+        "deadLetterBackoffMaxMs": 60000
+       },
+       "reducer": 3
+      },
+      "appends": [],
+      "due": 1000
+     }
+    ],
+    [
+     {
+      "scope": "scope",
+      "expectedVersion": 3,
+      "inputs": [
+       {
+        "input": {
+         "kind": "tick"
+        },
+        "now": 40
+       }
+      ],
+      "snapshot": {
+       "version": 4,
+       "record": {
+        "version": 4,
+        "scope": "scope",
+        "cursors": {},
+        "seen": [
+         "a"
+        ],
+        "buffer": {
+         "entries": [],
+         "dropped": 0,
+         "gap": false,
+         "forcedAt": null
+        },
+        "batch": {
+         "window": {
+          "id": "cf8923dfae84f930",
+          "events": [
+           {
+            "id": "a",
+            "at": 0,
+            "observedAt": 0,
+            "name": "reading",
+            "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "data": {},
+            "kind": "continuous",
+            "seenAt": 0
+           }
+          ],
+          "reason": "stream_quiet",
+          "waits": 0,
+          "dropped": 0,
+          "gap": false,
+          "settledAt": 10
+         },
+         "phase": {
+          "phase": "judging",
+          "attempt": 2,
+          "failures": 1,
+          "leaseUntil": 30040,
+          "offerWait": true
+         }
+        },
+        "outbox": {
+         "decisions": [],
+         "deadLetters": []
+        },
+        "recent": [],
+        "dueAt": 30040
+       },
+       "policy": {
+        "closingGraceMs": 500,
+        "streamGapMs": 10,
+        "passiveQuietMs": 4000,
+        "waitHorizonMs": 20,
+        "maxWaits": 2,
+        "maxEvents": 250,
+        "maxWindowMs": 60000,
+        "retryBackoffMs": [
+         30,
+         60
+        ],
+        "judgeTimeoutMs": 15000,
+        "deliveryTimeoutMs": 10000,
+        "recentCount": 8,
+        "seenCount": 500,
+        "maxOutbox": 1000,
+        "maxDeadLetters": 1000,
+        "deadLetterBackoffMaxMs": 60000
+       },
+       "reducer": 3
+      },
+      "appends": [],
+      "due": 31000
+     }
+    ],
+    [
+     {
+      "scope": "scope",
+      "expectedVersion": 4,
+      "inputs": [
+       {
+        "input": {
+         "kind": "judged",
+         "batchId": "cf8923dfae84f930",
+         "attempt": 2,
+         "judgment": {
+          "route": "wait"
+         }
+        },
+        "now": 40
+       }
+      ],
+      "snapshot": {
+       "version": 5,
+       "record": {
+        "version": 5,
+        "scope": "scope",
+        "cursors": {},
+        "seen": [
+         "a"
+        ],
+        "buffer": {
+         "entries": [],
+         "dropped": 0,
+         "gap": false,
+         "forcedAt": null
+        },
+        "batch": {
+         "window": {
+          "id": "cf8923dfae84f930",
+          "events": [
+           {
+            "id": "a",
+            "at": 0,
+            "observedAt": 0,
+            "name": "reading",
+            "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "data": {},
+            "kind": "continuous",
+            "seenAt": 0
+           }
+          ],
+          "reason": "stream_quiet",
+          "waits": 1,
+          "dropped": 0,
+          "gap": false,
+          "settledAt": 10
+         },
+         "phase": {
+          "phase": "waiting",
+          "attempt": 2,
+          "until": 60
+         }
+        },
+        "outbox": {
+         "decisions": [],
+         "deadLetters": []
+        },
+        "recent": [],
+        "dueAt": 60
+       },
+       "policy": {
+        "closingGraceMs": 500,
+        "streamGapMs": 10,
+        "passiveQuietMs": 4000,
+        "waitHorizonMs": 20,
+        "maxWaits": 2,
+        "maxEvents": 250,
+        "maxWindowMs": 60000,
+        "retryBackoffMs": [
+         30,
+         60
+        ],
+        "judgeTimeoutMs": 15000,
+        "deliveryTimeoutMs": 10000,
+        "recentCount": 8,
+        "seenCount": 500,
+        "maxOutbox": 1000,
+        "maxDeadLetters": 1000,
+        "deadLetterBackoffMaxMs": 60000
+       },
+       "reducer": 3
+      },
+      "appends": [],
+      "due": 1000
+     }
+    ]
+   ],
+   "stored": {
+    "version": 5,
+    "snapshot": {
+     "version": 5,
+     "record": {
+      "version": 5,
+      "scope": "scope",
+      "cursors": {},
+      "seen": [
+       "a"
+      ],
+      "buffer": {
+       "entries": [],
+       "dropped": 0,
+       "gap": false,
+       "forcedAt": null
+      },
+      "batch": {
+       "window": {
+        "id": "cf8923dfae84f930",
+        "events": [
+         {
+          "id": "a",
+          "at": 0,
+          "observedAt": 0,
+          "name": "reading",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "data": {},
+          "kind": "continuous",
+          "seenAt": 0
+         }
+        ],
+        "reason": "stream_quiet",
+        "waits": 1,
+        "dropped": 0,
+        "gap": false,
+        "settledAt": 10
+       },
+       "phase": {
+        "phase": "waiting",
+        "attempt": 2,
+        "until": 60
+       }
+      },
+      "outbox": {
+       "decisions": [],
+       "deadLetters": []
+      },
+      "recent": [],
+      "dueAt": 60
+     },
+     "policy": {
+      "closingGraceMs": 500,
+      "streamGapMs": 10,
+      "passiveQuietMs": 4000,
+      "waitHorizonMs": 20,
+      "maxWaits": 2,
+      "maxEvents": 250,
+      "maxWindowMs": 60000,
+      "retryBackoffMs": [
+       30,
+       60
+      ],
+      "judgeTimeoutMs": 15000,
+      "deliveryTimeoutMs": 10000,
+      "recentCount": 8,
+      "seenCount": 500,
+      "maxOutbox": 1000,
+      "maxDeadLetters": 1000,
+      "deadLetterBackoffMaxMs": 60000
+     },
+     "reducer": 3
+    },
+    "tail": []
+   },
+   "expected": {
+    "version": 5,
+    "scope": "scope",
+    "cursors": {},
+    "seen": [
+     "a"
+    ],
+    "buffer": {
+     "entries": [],
+     "dropped": 0,
+     "gap": false,
+     "forcedAt": null
+    },
+    "batch": {
+     "window": {
+      "id": "cf8923dfae84f930",
+      "events": [
+       {
+        "id": "a",
+        "at": 0,
+        "observedAt": 0,
+        "name": "reading",
+        "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "data": {},
+        "kind": "continuous",
+        "seenAt": 0
+       }
+      ],
+      "reason": "stream_quiet",
+      "waits": 1,
+      "dropped": 0,
+      "gap": false,
+      "settledAt": 10
+     },
+     "phase": {
+      "phase": "waiting",
+      "attempt": 2,
+      "until": 60
+     }
+    },
+    "outbox": {
+     "decisions": [],
+     "deadLetters": []
+    },
+    "recent": [],
+    "dueAt": 60
+   }
+  },
+  {
+   "name": "retrying-tail",
+   "through": 10,
+   "writes": [
+    [
+     {
+      "scope": "scope",
+      "expectedVersion": 0,
+      "inputs": [
+       {
+        "input": {
+         "kind": "events",
+         "events": [
+          {
+           "id": "a",
+           "at": 0,
+           "observedAt": 0,
+           "name": "reading",
+           "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+           "data": {},
+           "kind": "continuous"
+          }
+         ]
+        },
+        "now": 0
+       }
+      ],
+      "snapshot": {
+       "version": 1,
+       "record": {
+        "version": 1,
+        "scope": "scope",
+        "cursors": {},
+        "seen": [
+         "a"
+        ],
+        "buffer": {
+         "entries": [
+          {
+           "id": "a",
+           "at": 0,
+           "observedAt": 0,
+           "name": "reading",
+           "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+           "data": {},
+           "kind": "continuous",
+           "seenAt": 0
+          }
+         ],
+         "dropped": 0,
+         "gap": false,
+         "forcedAt": null
+        },
+        "batch": null,
+        "outbox": {
+         "decisions": [],
+         "deadLetters": []
+        },
+        "recent": [],
+        "dueAt": 10
+       },
+       "policy": {
+        "closingGraceMs": 500,
+        "streamGapMs": 10,
+        "passiveQuietMs": 4000,
+        "waitHorizonMs": 20,
+        "maxWaits": 2,
+        "maxEvents": 250,
+        "maxWindowMs": 60000,
+        "retryBackoffMs": [
+         30,
+         60
+        ],
+        "judgeTimeoutMs": 15000,
+        "deliveryTimeoutMs": 10000,
+        "recentCount": 8,
+        "seenCount": 500,
+        "maxOutbox": 1000,
+        "maxDeadLetters": 1000,
+        "deadLetterBackoffMaxMs": 60000
+       },
+       "reducer": 3
+      },
+      "appends": [],
+      "due": 1000
+     }
+    ],
+    [
+     {
+      "scope": "scope",
+      "expectedVersion": 1,
+      "inputs": [
+       {
+        "input": {
+         "kind": "tick"
+        },
+        "now": 10
+       }
+      ],
+      "snapshot": null,
+      "appends": [],
+      "due": 31000
+     }
+    ],
+    [
+     {
+      "scope": "scope",
+      "expectedVersion": 2,
+      "inputs": [
+       {
+        "input": {
+         "kind": "judgeFailed",
+         "batchId": "cf8923dfae84f930",
+         "attempt": 1,
+         "message": "controlled outage",
+         "permanent": false
+        },
+        "now": 10
+       }
+      ],
+      "snapshot": null,
+      "appends": [],
+      "due": 1000
+     }
+    ]
+   ],
+   "stored": {
+    "version": 3,
+    "snapshot": {
+     "version": 1,
+     "record": {
+      "version": 1,
+      "scope": "scope",
+      "cursors": {},
+      "seen": [
+       "a"
+      ],
+      "buffer": {
+       "entries": [
+        {
+         "id": "a",
+         "at": 0,
+         "observedAt": 0,
+         "name": "reading",
+         "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+         "data": {},
+         "kind": "continuous",
+         "seenAt": 0
+        }
+       ],
+       "dropped": 0,
+       "gap": false,
+       "forcedAt": null
+      },
+      "batch": null,
+      "outbox": {
+       "decisions": [],
+       "deadLetters": []
+      },
+      "recent": [],
+      "dueAt": 10
+     },
+     "policy": {
+      "closingGraceMs": 500,
+      "streamGapMs": 10,
+      "passiveQuietMs": 4000,
+      "waitHorizonMs": 20,
+      "maxWaits": 2,
+      "maxEvents": 250,
+      "maxWindowMs": 60000,
+      "retryBackoffMs": [
+       30,
+       60
+      ],
+      "judgeTimeoutMs": 15000,
+      "deliveryTimeoutMs": 10000,
+      "recentCount": 8,
+      "seenCount": 500,
+      "maxOutbox": 1000,
+      "maxDeadLetters": 1000,
+      "deadLetterBackoffMaxMs": 60000
+     },
+     "reducer": 3
+    },
+    "tail": [
+     {
+      "input": {
+       "kind": "tick"
+      },
+      "now": 10
+     },
+     {
+      "input": {
+       "kind": "judgeFailed",
+       "batchId": "cf8923dfae84f930",
+       "attempt": 1,
+       "message": "controlled outage",
+       "permanent": false
+      },
+      "now": 10
+     }
+    ]
+   },
+   "expected": {
+    "version": 3,
+    "scope": "scope",
+    "cursors": {},
+    "seen": [
+     "a"
+    ],
+    "buffer": {
+     "entries": [],
+     "dropped": 0,
+     "gap": false,
+     "forcedAt": null
+    },
+    "batch": {
+     "window": {
+      "id": "cf8923dfae84f930",
+      "events": [
+       {
+        "id": "a",
+        "at": 0,
+        "observedAt": 0,
+        "name": "reading",
+        "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "data": {},
+        "kind": "continuous",
+        "seenAt": 0
+       }
+      ],
+      "reason": "stream_quiet",
+      "waits": 0,
+      "dropped": 0,
+      "gap": false,
+      "settledAt": 10
+     },
+     "phase": {
+      "phase": "retrying",
+      "attempt": 1,
+      "failures": 1,
+      "at": 40,
+      "offerWait": true
+     }
+    },
+    "outbox": {
+     "decisions": [],
+     "deadLetters": []
+    },
+    "recent": [],
+    "dueAt": 40
+   }
+  },
+  {
+   "name": "complete",
+   "through": 10,
+   "writes": [
+    [
+     {
+      "scope": "scope",
+      "expectedVersion": 0,
+      "inputs": [
+       {
+        "input": {
+         "kind": "events",
+         "events": [
+          {
+           "id": "a",
+           "at": 0,
+           "observedAt": 0,
+           "name": "reading",
+           "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+           "data": {},
+           "kind": "continuous"
+          }
+         ]
+        },
+        "now": 0
+       }
+      ],
+      "snapshot": {
+       "version": 1,
+       "record": {
+        "version": 1,
+        "scope": "scope",
+        "cursors": {},
+        "seen": [
+         "a"
+        ],
+        "buffer": {
+         "entries": [
+          {
+           "id": "a",
+           "at": 0,
+           "observedAt": 0,
+           "name": "reading",
+           "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+           "data": {},
+           "kind": "continuous",
+           "seenAt": 0
+          }
+         ],
+         "dropped": 0,
+         "gap": false,
+         "forcedAt": null
+        },
+        "batch": null,
+        "outbox": {
+         "decisions": [],
+         "deadLetters": []
+        },
+        "recent": [],
+        "dueAt": 10
+       },
+       "policy": {
+        "closingGraceMs": 500,
+        "streamGapMs": 10,
+        "passiveQuietMs": 4000,
+        "waitHorizonMs": 20,
+        "maxWaits": 2,
+        "maxEvents": 250,
+        "maxWindowMs": 60000,
+        "retryBackoffMs": [
+         30,
+         60
+        ],
+        "judgeTimeoutMs": 15000,
+        "deliveryTimeoutMs": 10000,
+        "recentCount": 8,
+        "seenCount": 500,
+        "maxOutbox": 1000,
+        "maxDeadLetters": 1000,
+        "deadLetterBackoffMaxMs": 60000
+       },
+       "reducer": 3
+      },
+      "appends": [],
+      "due": 1000
+     }
+    ],
+    [
+     {
+      "scope": "scope",
+      "expectedVersion": 1,
+      "inputs": [
+       {
+        "input": {
+         "kind": "tick"
+        },
+        "now": 10
+       }
+      ],
+      "snapshot": {
+       "version": 2,
+       "record": {
+        "version": 2,
+        "scope": "scope",
+        "cursors": {},
+        "seen": [
+         "a"
+        ],
+        "buffer": {
+         "entries": [],
+         "dropped": 0,
+         "gap": false,
+         "forcedAt": null
+        },
+        "batch": {
+         "window": {
+          "id": "cf8923dfae84f930",
+          "events": [
+           {
+            "id": "a",
+            "at": 0,
+            "observedAt": 0,
+            "name": "reading",
+            "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "data": {},
+            "kind": "continuous",
+            "seenAt": 0
+           }
+          ],
+          "reason": "stream_quiet",
+          "waits": 0,
+          "dropped": 0,
+          "gap": false,
+          "settledAt": 10
+         },
+         "phase": {
+          "phase": "judging",
+          "attempt": 1,
+          "failures": 0,
+          "leaseUntil": 30010,
+          "offerWait": true
+         }
+        },
+        "outbox": {
+         "decisions": [],
+         "deadLetters": []
+        },
+        "recent": [],
+        "dueAt": 30010
+       },
+       "policy": {
+        "closingGraceMs": 500,
+        "streamGapMs": 10,
+        "passiveQuietMs": 4000,
+        "waitHorizonMs": 20,
+        "maxWaits": 2,
+        "maxEvents": 250,
+        "maxWindowMs": 60000,
+        "retryBackoffMs": [
+         30,
+         60
+        ],
+        "judgeTimeoutMs": 15000,
+        "deliveryTimeoutMs": 10000,
+        "recentCount": 8,
+        "seenCount": 500,
+        "maxOutbox": 1000,
+        "maxDeadLetters": 1000,
+        "deadLetterBackoffMaxMs": 60000
+       },
+       "reducer": 3
+      },
+      "appends": [],
+      "due": 31000
+     }
+    ],
+    [
+     {
+      "scope": "scope",
+      "expectedVersion": 2,
+      "inputs": [
+       {
+        "input": {
+         "kind": "judged",
+         "batchId": "cf8923dfae84f930",
+         "attempt": 1,
+         "judgment": {
+          "route": "queue"
+         }
+        },
+        "now": 10
+       }
+      ],
+      "snapshot": {
+       "version": 3,
+       "record": {
+        "version": 3,
+        "scope": "scope",
+        "cursors": {},
+        "seen": [
+         "a"
+        ],
+        "buffer": {
+         "entries": [],
+         "dropped": 0,
+         "gap": false,
+         "forcedAt": null
+        },
+        "batch": null,
+        "outbox": {
+         "decisions": [],
+         "deadLetters": []
+        },
+        "recent": [
+         {
+          "id": "cf8923dfae84f930",
+          "route": "queue",
+          "at": 10
+         }
+        ],
+        "dueAt": null
+       },
+       "policy": {
+        "closingGraceMs": 500,
+        "streamGapMs": 10,
+        "passiveQuietMs": 4000,
+        "waitHorizonMs": 20,
+        "maxWaits": 2,
+        "maxEvents": 250,
+        "maxWindowMs": 60000,
+        "retryBackoffMs": [
+         30,
+         60
+        ],
+        "judgeTimeoutMs": 15000,
+        "deliveryTimeoutMs": 10000,
+        "recentCount": 8,
+        "seenCount": 500,
+        "maxOutbox": 1000,
+        "maxDeadLetters": 1000,
+        "deadLetterBackoffMaxMs": 60000
+       },
+       "reducer": 3
+      },
+      "appends": [
+       {
+        "kind": "decision",
+        "id": "cf8923dfae84f930",
+        "scope": "scope",
+        "at": 10,
+        "route": "queue",
+        "body": {
+         "id": "cf8923dfae84f930",
+         "scope": "scope",
+         "route": "queue",
+         "probabilities": {
+          "interrupt": 0,
+          "queue": 1,
+          "note": 0,
+          "ask": 0,
+          "skip": 0,
+          "wait": 0
+         },
+         "predicates": {},
+         "confidence": null,
+         "window": {
+          "id": "cf8923dfae84f930",
+          "events": [
+           {
+            "id": "a",
+            "at": 0,
+            "observedAt": 0,
+            "name": "reading",
+            "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "data": {},
+            "kind": "continuous",
+            "seenAt": 0
+           }
+          ],
+          "reason": "stream_quiet",
+          "waits": 0,
+          "dropped": 0,
+          "gap": false,
+          "settledAt": 10
+         },
+         "at": 10
+        }
+       }
+      ],
+      "due": null
+     }
+    ]
+   ],
+   "stored": {
+    "version": 3,
+    "snapshot": {
+     "version": 3,
+     "record": {
+      "version": 3,
+      "scope": "scope",
+      "cursors": {},
+      "seen": [
+       "a"
+      ],
+      "buffer": {
+       "entries": [],
+       "dropped": 0,
+       "gap": false,
+       "forcedAt": null
+      },
+      "batch": null,
+      "outbox": {
+       "decisions": [],
+       "deadLetters": []
+      },
+      "recent": [
+       {
+        "id": "cf8923dfae84f930",
+        "route": "queue",
+        "at": 10
+       }
+      ],
+      "dueAt": null
+     },
+     "policy": {
+      "closingGraceMs": 500,
+      "streamGapMs": 10,
+      "passiveQuietMs": 4000,
+      "waitHorizonMs": 20,
+      "maxWaits": 2,
+      "maxEvents": 250,
+      "maxWindowMs": 60000,
+      "retryBackoffMs": [
+       30,
+       60
+      ],
+      "judgeTimeoutMs": 15000,
+      "deliveryTimeoutMs": 10000,
+      "recentCount": 8,
+      "seenCount": 500,
+      "maxOutbox": 1000,
+      "maxDeadLetters": 1000,
+      "deadLetterBackoffMaxMs": 60000
+     },
+     "reducer": 3
+    },
+    "tail": []
+   },
+   "expected": {
+    "version": 3,
+    "scope": "scope",
+    "cursors": {},
+    "seen": [
+     "a"
+    ],
+    "buffer": {
+     "entries": [],
+     "dropped": 0,
+     "gap": false,
+     "forcedAt": null
+    },
+    "batch": null,
+    "outbox": {
+     "decisions": [],
+     "deadLetters": []
+    },
+    "recent": [
+     {
+      "id": "cf8923dfae84f930",
+      "route": "queue",
+      "at": 10
+     }
+    ],
+    "dueAt": null
+   }
+  }
+ ]
+}

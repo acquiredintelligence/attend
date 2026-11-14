@@ -14,6 +14,78 @@ const advance = (ms: number) => ({ advance: ms });
 const T = 'test/attend.test.ts';
 
 export const SCENARIOS: Scenario[] = [
+  ...['gap', 'dropped'].map((metadata): Scenario => ({
+    name: `accumulating retry attributes empty ${metadata} metadata to held input`,
+    start: 0, intakes: ['s'], kinds: KINDS,
+    settle: { continuation: 'accumulate', maxWindowMs: 100, retryBackoffMs: [30] },
+    judge: { '*': { answers: [{ fail: 'outage' }, { route: 'queue' }, { route: 'queue' }] } },
+    steps: [{ submit: 's', events: [ev('a', 'drag', { quietForMs: 10 })] }, advance(15),
+      metadata === 'gap' ? { submit: 's', events: [], source: 'feed', cursor: '2', truncated: true }
+        : { submit: 's', events: [ev('old', 'out', { observedAt: -100 })], source: 'feed', cursor: '2' },
+      advance(25), { inspect: 's' }, { submit: 's', events: [ev('next', 'drag', { quietForMs: 10 })] }, advance(10)],
+  })),
+  {
+    name: 'accumulating horizon folds empty gap metadata without removing wait',
+    start: 0, intakes: ['s'], kinds: KINDS, settle: { continuation: 'accumulate', waitHorizonMs: 20 },
+    judge: { '*': { answers: [{ route: 'wait' }, { route: 'queue' }] } },
+    steps: [{ submit: 's', events: [ev('a', 'drag', { quietForMs: 10 })] }, advance(15),
+      { submit: 's', events: [], truncated: true }, advance(15), { inspect: 's' }],
+  },
+  {
+    name: 'accumulating horizons include fresh entries and keep wait allowance',
+    start: 0, intakes: ['s'], kinds: KINDS,
+    settle: { continuation: 'accumulate', waitHorizonMs: 20, maxWaits: 2 },
+    judge: { '*': { answers: [{ route: 'wait' }, { route: 'wait' }, { route: 'queue' }] } },
+    steps: [{ submit: 's', events: [ev('a', 'drag', { quietForMs: 10 })] }, advance(25),
+      { submit: 's', events: [ev('b', 'drag', { quietForMs: 100 })] }, advance(25)],
+  },
+  ...[10, 100].map((quiet): Scenario => ({
+    name: `accumulating retry absorbs fresh quiet duration ${quiet} at not-before`,
+    start: 0, intakes: ['s'], kinds: KINDS,
+    settle: { continuation: 'accumulate', retryBackoffMs: [30, 60] },
+    judge: { '*': { answers: [{ fail: 'outage' }, { route: 'queue' }] } },
+    steps: [{ submit: 's', events: [ev('a', 'drag', { quietForMs: 10 })] }, advance(15),
+      { submit: 's', events: [ev('b', 'drag', { quietForMs: quiet })] }, advance(24), { inspect: 's' }, advance(1)],
+  })),
+  {
+    name: 'accumulating wait does not refund a provider failure',
+    start: 0, intakes: ['s'], kinds: KINDS,
+    settle: { continuation: 'accumulate', waitHorizonMs: 20, retryBackoffMs: [30, 60] },
+    judge: { '*': { answers: [{ fail: 'outage' }, { route: 'wait' }, { fail: 'outage' }, { route: 'queue' }] } },
+    steps: [{ submit: 's', events: [ev('a', 'drag', { quietForMs: 10 })] }, advance(40), { inspect: 's' }, advance(80)],
+  },
+  {
+    name: 'accumulating age eligibility applies at an initial quiet tie',
+    start: 0, kinds: KINDS, settle: { continuation: 'accumulate', maxWindowMs: 10 },
+    judge: { '*': { answers: [{ route: 'queue' }] } },
+    steps: [push('s', ev('a', 'drag', { quietForMs: 10 })), advance(10)],
+  },
+  ...['wait', 'retry'].map((phase): Scenario => ({
+    name: `accumulating ${phase} checks combined rendered bytes`,
+    start: 0, intakes: ['s'], kinds: KINDS,
+    settle: { continuation: 'accumulate', maxWindowBytes: 100, retryBackoffMs: [30, 60] },
+    judge: { '*': { answers: [phase === 'wait' ? { route: 'wait' } : { fail: 'outage' }, { route: 'queue' }] } },
+    steps: [{ submit: 's', events: [ev('a', 'drag', { quietForMs: 10, text: 'q'.repeat(20) })] }, advance(15),
+      { submit: 's', events: [ev('b', 'drag', { quietForMs: 100, text: 'q'.repeat(20) })] }, advance(25)],
+  })),
+  {
+    name: 'accumulating retry checks the count after absorbing fresh acts',
+    start: 0, intakes: ['s'], kinds: KINDS,
+    settle: { continuation: 'accumulate', maxEvents: 2, retryBackoffMs: [30, 60] },
+    judge: { '*': { answers: [{ fail: 'outage' }, { route: 'queue' }] } },
+    steps: [{ submit: 's', events: [ev('a', 'drag', { quietForMs: 10 })] }, advance(15),
+      { submit: 's', events: [ev('b', 'drag', { quietForMs: 100 }), ev('c', 'drag', { quietForMs: 100 })] }, advance(25)],
+  },
+  {
+    name: 'accumulating retry absorbs raw backlog after delayed failure completion',
+    start: 0, intakes: ['s'], kinds: KINDS,
+    settle: { continuation: 'accumulate', retryBackoffMs: [30, 60] },
+    judge: { '*': { answers: [{ hold: 'call' }, { route: 'queue' }] } },
+    steps: [{ submit: 's', events: [ev('a', 'drag', { quietForMs: 10 })] }, advance(15),
+      { submit: 's', events: [ev('b', 'drag', { observedAt: 15, quietForMs: 100 })] }, advance(1),
+      { submit: 's', events: [ev('c', 'drag', { observedAt: 16, quietForMs: 100 })] }, advance(19),
+      { release: 'call', fail: 'outage' }, { inspect: 's' }, advance(30)],
+  },
   {
     name: 'serial intake keeps registered backlog ahead of a timer during preparation',
     intakes: ['s'], start: 0, kinds: KINDS,

@@ -6,10 +6,10 @@ import type {
 import { ROUTES } from './types.js';
 import { fnvHex, fnvStart, foldId } from './ids.js';
 import { seenAdmit, seenRelease, seenTrim } from './seen.js';
-import { estimateRenderedBytes, openWindow, shedEntries, windowAppend, windowCompact, windowDeadline, windowPrune, windowShed, windowSize } from './window.js';
+import { estimateRenderedBytes, observationTime, openWindow, shedEntries, windowAppend, windowCompact, windowDeadline, windowEntries, windowPrune, windowShed, windowSize } from './window.js';
 
 /** Bumped whenever a release changes a transition. Stored with every snapshot. */
-export const REDUCER_VERSION = 3;
+export const REDUCER_VERSION = 4;
 
 /** An empty output. One output may collect several inputs: `apply` only ever sets `changed`. */
 export function newOutput(): ApplyOutput {
@@ -148,14 +148,51 @@ function ingest(ctx: Ctx, state: ScopeState, input: EventsInput): void {
   if (ctx.config.traces) ctx.out.effects.push({ kind: 'trace', trace: { kind: 'ingested', scope: state.scope, count: input.events.length - duplicates, duplicates } });
 }
 
-/** The instant the state next wants a tick: the batch's time, the open window's deadline unless judging, and each lane head's time. */
+function continuationEntries(policy: SettlePolicy, state: ScopeState): Entry[] {
+  const entries = [...(state.batch?.window.events ?? []), ...windowEntries(state.open)];
+  shedEntries(entries, policy.maxEvents);
+  return entries;
+}
+
+function sizeBound(policy: SettlePolicy, entries: readonly Entry[]): SettleReason | null {
+  if (entries.length === 0) return null;
+  if (entries.length > policy.maxEvents) return 'overflow';
+  if (policy.maxWindowBytes !== undefined && entries.reduce((bytes, entry) => bytes + estimateRenderedBytes(entry), 0) >= policy.maxWindowBytes) return 'size';
+  return null;
+}
+
+function ageDeadline(policy: SettlePolicy, entries: readonly Entry[]): number | null {
+  let first: number | null = null;
+  for (const entry of entries) if (entry.kind !== 'context' && entry.kind !== 'consequence') {
+    const at = observationTime(entry);
+    first = first === null ? at : Math.min(first, at);
+  }
+  return first === null ? null : first + policy.maxWindowMs;
+}
+
+function windowBound(policy: SettlePolicy, entries: readonly Entry[], now: number): SettleReason | null {
+  const size = sizeBound(policy, entries);
+  if (size !== null) return size;
+  const age = ageDeadline(policy, entries);
+  return age !== null && age <= now ? 'age' : null;
+}
+
+/** The batch, eligible open/combined window, or delivery deadline that next needs a tick. */
 export function nextDue(policy: SettlePolicy, state: ScopeState): number | null {
   let at: number | null = null;
   const phase = state.batch?.phase;
   if (phase) at = phase.phase === 'judging' ? phase.leaseUntil : phase.phase === 'waiting' ? phase.until : phase.at;
-  if (phase?.phase !== 'judging') {
+  const accumulating = policy.continuation === 'accumulate';
+  if (phase?.phase !== 'judging' && !(accumulating && phase?.phase === 'retrying')) {
     const due = windowDeadline(policy, state.open);
     if (due) at = at === null ? due.at : Math.min(at, due.at);
+  }
+  if (accumulating && phase?.phase === 'waiting') {
+    const entries = continuationEntries(policy, state);
+    const age = ageDeadline(policy, entries);
+    if (age !== null) at = at === null ? age : Math.min(at, age);
+    const last = entries.at(-1);
+    if (last && sizeBound(policy, entries) !== null) at = at === null ? last.seenAt : Math.min(at, last.seenAt);
   }
   for (const lane of LANES) {
     const head = state.outbox[lane][0]?.phase;
@@ -172,6 +209,20 @@ function sweep(ctx: Ctx, state: ScopeState): void {
   if (b && b.phase.phase === 'judging' && b.phase.leaseUntil <= ctx.now) failJudge(ctx, state, { ...b, phase: b.phase }, 'judge lease expired', false);
   for (const lane of LANES) pumpLane(ctx, state, lane);
   prune(ctx, state);
+  const pending = state.batch;
+  if (ctx.config.policy.continuation === 'accumulate' && pending) {
+    if (pending.phase.phase === 'retrying') {
+      if (pending.phase.at <= ctx.now) {
+        const reason = state.open.endedAt !== null ? 'closing' : pending.window.reason;
+        settleBuffer(ctx, state, reason, pending.phase.offerWait);
+      }
+      return;
+    }
+    if (pending.phase.phase === 'waiting') {
+      const bound = windowBound(ctx.config.policy, continuationEntries(ctx.config.policy, state), ctx.now);
+      if (bound !== null) { settleBuffer(ctx, state, bound, false); return; }
+    }
+  }
   if (state.batch?.phase.phase !== 'judging') {
     const due = windowDeadline(ctx.config.policy, state.open);
     if (due && !(due.at > ctx.now)) settleBuffer(ctx, state, due.reason, true);
@@ -180,8 +231,9 @@ function sweep(ctx: Ctx, state: ScopeState): void {
   if (!held) return;
   if (held.phase.phase === 'retrying' && held.phase.at <= ctx.now) beginJudging(ctx, state, held.window, held.phase, held.phase.offerWait, held.hash);
   else if (held.phase.phase === 'waiting' && held.phase.until <= ctx.now) {
-    if (windowSize(state.open) === 0) beginJudging(ctx, state, held.window, held.phase, false, held.hash);
-    else settleBuffer(ctx, state, held.window.reason, false);
+    const offerWait = ctx.config.policy.continuation === 'accumulate' && held.window.waits < ctx.config.policy.maxWaits;
+    if (windowSize(state.open) === 0 && ctx.config.policy.continuation !== 'accumulate') beginJudging(ctx, state, held.window, held.phase, offerWait, held.hash);
+    else settleBuffer(ctx, state, held.window.reason, offerWait);
   }
 }
 
@@ -197,7 +249,18 @@ function settleBuffer(ctx: Ctx, state: ScopeState, fired: SettleReason, mayWait:
   let forced = open.forcedAt !== null;
   if (entries.length === 0) {
     if (open.forcedAt !== null) { open.forcedAt = null; ctx.out.changed = true; }
-    if (held) beginJudging(ctx, state, { ...held.window, reason: settleReason(held.window.events, forced, held.window.reason) }, held.phase, false, held.hash);
+    if (held) {
+      const accumulating = ctx.config.policy.continuation === 'accumulate';
+      const reason = accumulating ? fired : held.window.reason;
+      const window = { ...held.window, reason: settleReason(held.window.events, forced, reason) };
+      if (accumulating) {
+        window.gap = held.window.gap || open.gap;
+        window.dropped = held.window.dropped + open.dropped;
+        state.open = openWindow(state.scope);
+      }
+      const offer = accumulating && mayWait && window.reason !== 'flush' && window.reason !== 'forced' && window.waits < ctx.config.policy.maxWaits;
+      beginJudging(ctx, state, window, held.phase, offer, held.hash);
+    }
     return;
   }
   const events = held ? [...held.window.events, ...entries] : entries;
@@ -226,6 +289,9 @@ function settleBuffer(ctx: Ctx, state: ScopeState, fired: SettleReason, mayWait:
 }
 
 function beginJudging(ctx: Ctx, state: ScopeState, window: Window, prior: Counters, offerWait: boolean, hash: FnvState | null): void {
+  if (ctx.config.policy.continuation === 'accumulate') {
+    offerWait = offerWait && windowBound(ctx.config.policy, window.events, ctx.now) === null && !['age', 'overflow', 'size'].includes(window.reason);
+  }
   const attempt = prior.attempt + 1;
   const leaseUntil = ctx.now + ctx.config.policy.judgeTimeoutMs * 2;
   state.batch = { window, phase: { phase: 'judging', attempt, failures: prior.failures ?? 0, leaseUntil, offerWait }, hash };
@@ -263,6 +329,7 @@ function onJudged(ctx: Ctx, state: ScopeState, input: Extract<Input, { kind: 'ju
     const until = ctx.now + ctx.config.policy.waitHorizonMs;
     const waits = window.waits + 1;
     state.batch = { window: { ...window, waits }, phase: { phase: 'waiting', attempt: b.phase.attempt, until }, hash: b.hash };
+    if (ctx.config.policy.continuation === 'accumulate') state.batch.phase.failures = b.phase.failures;
     if (ctx.config.traces) ctx.out.effects.push({ kind: 'trace', trace: { kind: 'waiting', scope: state.scope, batchId: window.id, waits, until } });
     return;
   }

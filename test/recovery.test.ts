@@ -69,7 +69,7 @@ test('recovers every committed write under all snapshot cadences and policy chan
         let tailInputs = 0;
         let snapshotBytes = JSON.stringify(latest.record).length;
         const replay = (snapshot: Snapshot, through: number, expected: ScopeRecord): void => {
-          assert.equal(snapshot.reducerVersion, 3);
+          assert.equal(snapshot.reducerVersion, 4);
           const restored = fromRecord(deepFreeze(json(snapshot.record)), snapshot.policy);
           let bound = Math.max(snapshot.policy.seenCount, restored.seen.size);
           assertInvariants(restored, { ...snapshot.policy, seenCount: bound });

@@ -38,4 +38,6 @@ Several processes can share one store. Any of them can `push`, and any number ca
 
 Keep processes sharing a store on the same reducer version before using [observation time](reference.md#observation-time) or [continuous quiet durations](reference.md#continuous-quiet-duration). A reducer-version mismatch triggers replay and a fresh snapshot; it does not fence out older readers or writers. Older entries without `observedAt` retain their stored `seenAt` during replay. The clock at replay time never replaces that timestamp.
 
+[Accumulating continuation](reference.md#accumulating-continuation) uses reducer revision 4 and retains failures in waiting state. Choose the same mode in every writer of a scope. A writer refuses a mode change while the replayed scope has a held batch or fresh entries; finish them under the saved mode first, or use a new scope. Recent decisions and outbox work can remain. Old separate waiting snapshots lack historic failure counts and stay on their old semantics. Read-only inspection uses the saved policy. This check does not fence older writers that lack it.
+
 Each adapter also has an `EventLog`: `memoryLog`, `sqliteLog`, `postgresLog` and `redisLog`. When producers live in other processes and you want a durable shared log in front of attend, append to the log and attach `logSource(log, scope)` instead of calling `push`.

@@ -15,6 +15,9 @@ export function initialState(scope: string, _policy: SettlePolicy): ScopeState {
 /** Builds owned state from a snapshot. Copies every array it will mutate and never mutates `record`. O(W + S + outbox). */
 export function fromRecord(record: ScopeRecord, policy: SettlePolicy): ScopeState {
   const held = record.batch;
+  if (policy.continuation === 'accumulate' && held?.phase.phase === 'waiting' && held.phase.failures === undefined) {
+    throw new Error('attend: accumulating waiting state requires failures');
+  }
   const state: ScopeState = {
     scope: record.scope, version: record.version, cursors: record.cursors,
     ...seenFrom(record.seen, record.buffer.entries, held?.window.events ?? []),

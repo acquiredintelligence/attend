@@ -156,7 +156,7 @@ async def test_intake_snapshot_and_tail_continue_without_intake_in_other_runtime
             assert written["record"]["cursors"] == {"feed": "3"}
             stored = await owned.load(scope)
             assert stored is not None and stored["snapshot"] is not None
-            assert stored["snapshot"]["reducer"] == 3 and stored["tail"]
+            assert stored["snapshot"]["reducer"] == 4 and stored["tail"]
             encoded = json.dumps(stored)
             assert all(field not in encoded for field in ('"catchUp"', '"catch_up"', '"prepare"', '"owner"'))
             read = await (typescript(kind, prefix, "read", scope) if writer == "python" else python(owned, "read", scope))

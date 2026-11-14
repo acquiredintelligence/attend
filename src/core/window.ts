@@ -64,7 +64,7 @@ function summarizeEntry(summary: TriggerSummary, entry: Entry, index: number): v
   summary.lastObservationAt = observedAt;
 }
 
-function observationTime(entry: Entry): number {
+export function observationTime(entry: Entry): number {
   return entry.observedAt ?? entry.seenAt;
 }
 
