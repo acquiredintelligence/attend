@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, cast
 
@@ -53,6 +54,10 @@ def copy_event(event: Mapping[str, object], fill: tuple[Callable[[], str], Calla
     if not isinstance(data, Mapping):
         raise TypeError("attend: event data must be a JSON object")
     fields["data"] = _to_json(cast(Mapping[str, object], data), 1)
+    if "observedAt" in fields:
+        observed = fields["observedAt"]
+        if isinstance(observed, bool) or not isinstance(observed, (int, float)) or not -sys.float_info.max <= observed <= sys.float_info.max:
+            raise TypeError("attend: observedAt must be a finite number")
     if fill is not None:
         if "id" not in fields:
             fields["id"] = fill[0]()

@@ -314,6 +314,8 @@ class Attend:
         classified: list[KindedEvent] = []
         for event in events:
             copied = copy_event(event, fill)
+            if "observedAt" in copied and copied["observedAt"] > self._clock.now():
+                raise TypeError("attend: observedAt must not be in the future")
             kind = self._kind(copied)
             if kind not in KINDS:
                 raise TypeError("attend: invalid event kind")

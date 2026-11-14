@@ -15,6 +15,50 @@ const T = 'test/attend.test.ts';
 
 export const SCENARIOS: Scenario[] = [
   {
+    name: 'observation time sets a quiet deadline while at and seenAt remain distinct',
+    kinds: KINDS,
+    judge: { '*': { answers: [{ route: 'queue' }] } },
+    steps: [push('s', ev('a', 'drag', { at: -1, observedAt: 100 })), { inspect: 's' }, advance(99), { inspect: 's' }, advance(1)],
+  },
+  {
+    name: 'an already-due observation settles at processing time',
+    start: 2000,
+    kinds: KINDS,
+    judge: { '*': { answers: [{ route: 'queue' }] } },
+    steps: [push('s', ev('a', 'drag', { observedAt: 100 })), advance(0)],
+  },
+  {
+    name: 'a wait horizon starts when a source-timed judgment finishes',
+    kinds: KINDS,
+    judge: { '*': { answers: [{ route: 'wait' }, { route: 'note' }] } },
+    steps: [push('s', ev('a', 'drag', { observedAt: 100 })), advance(100), { inspect: 's' }, advance(9999), { inspect: 's' }, advance(1)],
+  },
+  {
+    name: 'a retry and its leases keep processing time after an old observation',
+    kinds: KINDS,
+    judge: { '*': { answers: [{ fail: 'temporary' }, { route: 'queue' }] } },
+    steps: [push('s', ev('a', 'drag', { observedAt: 0 })), advance(0), { inspect: 's' }, advance(999), { inspect: 's' }, advance(1)],
+  },
+  {
+    name: 'older observations do not shorten a quiet deadline and implicit observations join it',
+    kinds: KINDS,
+    judge: { '*': { answers: [{ route: 'note' }] } },
+    steps: [push('s', ev('a', 'drag', { observedAt: 900 }), ev('b', 'drag', { observedAt: 100 }), ev('c', 'drag')), { inspect: 's' }, advance(999), { inspect: 's' }, advance(1)],
+  },
+  {
+    name: 'old background observations are pruned behind newer observations',
+    kinds: KINDS,
+    settle: { maxWindowMs: 200 },
+    judge: { '*': { answers: [{ route: 'note' }] } },
+    steps: [push('s', ev('a', 'out', { observedAt: 900 }), ev('b', 'out', { observedAt: 100 }), ev('c', 'out', { observedAt: 950 })), { inspect: 's' }],
+  },
+  {
+    name: 'a future observation refuses the complete batch before any event is stored',
+    kinds: KINDS,
+    judge: { '*': { answers: [{ route: 'note' }] } },
+    steps: [push('s', ev('a', 'drag', { observedAt: 100 }), ev('b', 'drag', { observedAt: 1001 })), { inspect: 's' }, push('s', ev('a', 'drag', { observedAt: 100 })), advance(100)],
+  },
+  {
     name: 'a closing act settles after the grace, is judged with the configured context, and is delivered',
     from: `${T}: a closing act settles after the grace, is judged with the configured context, and is delivered`,
     kinds: KINDS,

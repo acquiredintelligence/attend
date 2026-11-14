@@ -6,7 +6,7 @@ from .ids import fnv_start, fold_id
 from .reducer import next_due, same
 from .seen import seen_from, seen_ids
 from .types import Buffer, Entry, FnvState, HeldBatch, ScopeRecord, ScopeState, SettlePolicy
-from .window import estimate_rendered_bytes, open_window, summarize, window_from
+from .window import estimate_rendered_bytes, observation_time, open_window, summarize, window_from
 
 
 def initial_state(scope: str) -> ScopeState:
@@ -110,5 +110,5 @@ def assert_invariants(state: ScopeState, policy: SettlePolicy) -> None:
     for lane in (state.decisions, state.dead_letters):
         if any(delivery["phase"]["phase"] == "inFlight" for delivery in lane[1:]):
             raise AssertionError("outbox: more than one in flight in a lane")
-    if open.monotone and any(b["seenAt"] < a["seenAt"] for a, b in zip(open.entries, open.entries[1:], strict=False)):
-        raise AssertionError("monotone: seenAt decreased")
+    if open.monotone and any(observation_time(b) < observation_time(a) for a, b in zip(open.entries, open.entries[1:], strict=False)):
+        raise AssertionError("monotone: observation time decreased")

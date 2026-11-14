@@ -248,7 +248,17 @@ async def run_scenario(scenario: Mapping[str, Any]) -> dict[str, Any]:
     for index, step in enumerate(scenario["steps"]):
         if "push" in step:
             scopes.add(step["push"])
-            events = [{"id": e["id"], "at": e.get("at", 0), "name": e["name"], "data": e.get("data", {}), **({"text": e["text"]} if "text" in e else {})} for e in step["events"]]
+            events = [
+                {
+                    "id": e["id"],
+                    "at": e.get("at", 0),
+                    "name": e["name"],
+                    "data": e.get("data", {}),
+                    **({"text": e["text"]} if "text" in e else {}),
+                    **({"observedAt": e["observedAt"]} if "observedAt" in e else {}),
+                }
+                for e in step["events"]
+            ]
             await result(index, attend.push(step["push"], events))
         elif "advance" in step:
             await clock.advance(step["advance"])

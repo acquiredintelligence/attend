@@ -20,12 +20,10 @@ export interface AdmissionOptions {
 }
 
 /** An event as `push` takes it: `id` defaults to a random UUID, `at` to the clock and `data` to `{}`. Pass your own `id` to drop redeliveries. */
-export interface EventInput {
-  name: string;
-  id?: string;
-  at?: number;
-  data?: JsonObject;
-  text?: string;
+export interface EventInput extends Omit<Event, 'id' | 'at' | 'data'> {
+  id?: Event['id'];
+  at?: Event['at'];
+  data?: Event['data'];
 }
 
 /** Store, effects, policy and resource limits for an instance. */

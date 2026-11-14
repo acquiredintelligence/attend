@@ -10,8 +10,10 @@ export type JsonObject = { [key: string]: JsonValue };
 /** One event as a source hands it in. `id` is unique within the scope and is the dedup key. */
 export interface Event {
   id: string;
-  /** ms since the epoch, as the source reports it. Informational: timers use `Entry.seenAt`. */
+  /** ms since the epoch, as the source reports it. Informational. */
   at: number;
+  /** Source observation time in the engine clock's coordinates. Omit to settle from ingestion. */
+  observedAt?: number;
   name: string;
   data: JsonObject;
   /** One plain line describing the event. The judge never writes text; notices are built from these. */
@@ -500,8 +502,8 @@ export type KnownIds = Map<string, number>;
 
 /**
  * Everything `deadline()` reads, kept O(1). Acts and flushes are never shed or pruned, so their
- * fields only move forward. NaN means none for the `*At` fields; `minFlushAt` and
- * `prefixMinSheddableAt` use Infinity for none. Equal to what a scan of the live entries derives.
+ * time summaries need no removal update. NaN marks absent times; minima start at Infinity and
+ * maxima at -Infinity. Equal to what a scan of the live entries derives.
  */
 export interface TriggerSummary {
   minFlushAt: number;
@@ -509,13 +511,23 @@ export interface TriggerSummary {
   lastStreamAt: number;
   lastPassiveAt: number;
   firstActAt: number;
+  /** Candidate extrema retain earlier entries before a kind first uses observation time. */
+  maxClosingAt: number;
+  maxStreamAt: number;
+  maxPassiveAt: number;
+  minActAt: number;
+  closingObserved: boolean;
+  streamObserved: boolean;
+  passiveObserved: boolean;
+  actObserved: boolean;
   /** Index of the first act relative to `start`, or -1. Adjusted on removal, unchanged by compaction. */
   firstActIndex: number;
-  /** Smallest `seenAt` among sheddable entries before the first act: the O(1) prune test. */
+  /** Smallest effective observation time among sheddable entries before the first act: the O(1) prune test. */
   prefixMinSheddableAt: number;
   /** Live consequence and context entries; zero means nothing can be shed. */
   sheddable: number;
   lastSeenAt: number;
+  lastObservationAt: number;
 }
 
 /** The open window, appended in place by its single writer. Live entries are `entries[start..]`. */
@@ -536,7 +548,7 @@ export interface OpenWindow {
   hash: FnvState;
   /** False after a prune or shed inside the window; the settle then refolds the final list. */
   hashValid: boolean;
-  /** False once an appended `seenAt` was smaller than the last one; prune then scans the whole prefix. */
+  /** False once observation time decreases in arrival order; prune then scans the whole prefix. */
   monotone: boolean;
 }
 
