@@ -46,6 +46,33 @@ An already-due observation settles through the normal runner at processing time.
 
 Both runtimes retain `observedAt` through snapshots, logged inputs, windows and decision records. See [storage](storage.md) for version coordination when sharing a store.
 
+## Continuous quiet duration
+
+A continuous event can supply a finite, nonnegative `quietForMs`. Zero makes its quiet deadline immediate. `push` and `attach` refuse invalid values or a duration on any other kind before admitting the batch or committing its cursor.
+
+Once a continuous entry supplies a duration, that group's deadline is the maximum of each entry's observation time plus its duration. An omitted duration uses `streamGapMs`; an omitted observation uses ingestion time. A late observation can therefore be due on arrival, but settlement still happens at processing time. Entry order does not change.
+
+```ts
+import { createAttend } from '@acquiredintelligence/attend';
+import { fakeClock } from '@acquiredintelligence/attend/testing';
+
+const clock = fakeClock(100);
+const attend = createAttend({
+  clock,
+  kind: { dial: 'continuous', confirmation: 'continuous' },
+  judge: async () => ({ route: 'note' }),
+  sink: 'log',
+});
+await attend.push('device', { name: 'dial', quietForMs: 40 });
+await clock.advance(20);
+await attend.push('device', { name: 'confirmation', quietForMs: 90 });
+console.log((await attend.inspect('device'))?.dueAt); // 210
+```
+
+Closing and passive deadlines can still settle the window earlier. Flush, age and bounds keep their existing precedence. After a wait, only fresh entries set a new quiet deadline; held entries retain their durations as data. Waits, retries and leases keep engine time.
+
+When every continuous entry omits `quietForMs`, existing timing remains unchanged, including backwards engine clocks. Explicit durations persist through snapshots, tails and decisions. Replay uses the snapshot policy for omitted durations. Changing a live engine's policy recalculates those default durations; it never changes an explicit duration. [Storage](storage.md) describes version coordination.
+
 ## Routes
 
 | Route | The agent | Reaches the sink |

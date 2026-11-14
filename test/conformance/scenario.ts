@@ -53,6 +53,7 @@ export interface EventSpec {
   name: string;
   at?: number;
   observedAt?: number;
+  quietForMs?: number;
   data?: JsonObject;
   text?: string;
 }
@@ -268,7 +269,7 @@ export async function runScenario(scenario: Scenario): Promise<Observed> {
   for (const [index, step] of scenario.steps.entries()) {
     if ('push' in step) {
       scopes.add(step.push);
-      const events = step.events.map((e) => ({ id: e.id, at: e.at ?? 0, name: e.name, data: e.data ?? {}, ...(e.text === undefined ? {} : { text: e.text }), ...(e.observedAt === undefined ? {} : { observedAt: e.observedAt }) }));
+      const events = step.events.map((e) => ({ id: e.id, at: e.at ?? 0, name: e.name, data: e.data ?? {}, ...(e.text === undefined ? {} : { text: e.text }), ...(e.observedAt === undefined ? {} : { observedAt: e.observedAt }), ...(e.quietForMs === undefined ? {} : { quietForMs: e.quietForMs }) }));
       await result(index, () => attend.push(step.push, events));
     } else if ('advance' in step) {
       await clock.advance(step.advance);

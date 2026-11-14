@@ -39,6 +39,10 @@ def _summarize_entry(summary: TriggerSummary, entry: Entry, index: int) -> None:
         summary.max_stream_at = _max(summary.max_stream_at, observed_at)
         summary.stream_observed |= explicit
         summary.last_stream_at = summary.max_stream_at if summary.stream_observed else seen_at
+        if "quietForMs" in entry:
+            summary.max_explicit_stream_end_at = _max(summary.max_explicit_stream_end_at, observed_at + entry["quietForMs"])
+        else:
+            summary.max_default_stream_at = _max(summary.max_default_stream_at, observed_at)
     elif kind == "passive":
         summary.max_passive_at = _max(summary.max_passive_at, observed_at)
         summary.passive_observed |= explicit
@@ -267,7 +271,12 @@ def window_deadline(policy: SettlePolicy, open: OpenWindow) -> tuple[float, Sett
     if not math.isnan(s.last_closing_at) and (reason is None or closing < at):
         at = closing
         reason = "closing"
-    stream = s.last_stream_at + policy["streamGapMs"]
+    if s.max_explicit_stream_end_at == -math.inf:
+        stream = s.last_stream_at + policy["streamGapMs"]
+    elif s.max_default_stream_at == -math.inf:
+        stream = s.max_explicit_stream_end_at
+    else:
+        stream = _max(s.max_explicit_stream_end_at, s.max_default_stream_at + policy["streamGapMs"])
     if not math.isnan(s.last_stream_at) and (reason is None or stream < at):
         at = stream
         reason = "stream_quiet"

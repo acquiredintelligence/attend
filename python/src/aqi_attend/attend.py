@@ -319,6 +319,8 @@ class Attend:
             kind = self._kind(copied)
             if kind not in KINDS:
                 raise TypeError("attend: invalid event kind")
+            if "quietForMs" in copied and kind != "continuous":
+                raise TypeError("attend: quietForMs requires a continuous event")
             classified.append(cast(KindedEvent, {**copied, "kind": kind}))
         return classified
 

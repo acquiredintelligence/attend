@@ -14,6 +14,8 @@ export interface Event {
   at: number;
   /** Source observation time in the engine clock's coordinates. Omit to settle from ingestion. */
   observedAt?: number;
+  /** Quiet duration for a continuous event, in ms. Omit to use streamGapMs. */
+  quietForMs?: number;
   name: string;
   data: JsonObject;
   /** One plain line describing the event. The judge never writes text; notices are built from these. */
@@ -514,6 +516,9 @@ export interface TriggerSummary {
   /** Candidate extrema retain earlier entries before a kind first uses observation time. */
   maxClosingAt: number;
   maxStreamAt: number;
+  /** Default durations retain observation time so policy changes can recompute their ends. */
+  maxDefaultStreamAt: number;
+  maxExplicitStreamEndAt: number;
   maxPassiveAt: number;
   minActAt: number;
   closingObserved: boolean;

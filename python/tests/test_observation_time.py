@@ -259,7 +259,7 @@ async def test_prior_reducer_snapshot_and_tail_keep_ingestion_deadlines() -> Non
         assert loaded is not None and loaded["dueAt"] == 2100
         assert [(event["id"], event["seenAt"], event.get("observedAt")) for event in loaded["buffer"]["entries"]] == [("a", 1000, None), ("b", 1100, None)]
         stored = await store.load("s")
-        assert stored is not None and stored["snapshot"] is not None and stored["snapshot"]["reducer"] == 2
+        assert stored is not None and stored["snapshot"] is not None and stored["snapshot"]["reducer"] == 3
     finally:
         await attend.stop()
         await store.close()
@@ -291,13 +291,14 @@ async def test_conflicting_write_reloads_without_replacing_observation_time() ->
     store = RacingStore()
     attend = create_attend(store=store, clock=clock, kind={"change": "continuous"}, judge=scripted_judge([{"route": "queue"}]), sink="log")
     try:
-        pushed = attend.push("s", {"id": "a", "name": "change", "observedAt": 100})
+        pushed = attend.push("s", {"id": "a", "name": "change", "observedAt": 100, "quietForMs": 1000})
         await raced.wait()
         await clock.advance(50)
         await pushed
         record = await attend.inspect("s")
         assert record is not None and [event["id"] for event in record["buffer"]["entries"]] == ["racer", "a"]
         assert record["buffer"]["entries"][1].get("observedAt") == 100
+        assert record["buffer"]["entries"][1].get("quietForMs") == 1000
         assert record["dueAt"] == 1100
     finally:
         await attend.stop()

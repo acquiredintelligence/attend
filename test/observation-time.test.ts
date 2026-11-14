@@ -207,7 +207,7 @@ test('a prior reducer snapshot and tail retain ingestion-time deadlines on upgra
     const loaded = await attend.inspect('s');
     expect(loaded?.dueAt).toBe(2100);
     expect(loaded?.buffer.entries.map((event) => [event.id, event.seenAt, event.observedAt])).toEqual([['a', 1000, undefined], ['b', 1100, undefined]]);
-    expect((await store.load('s'))?.snapshot?.reducer).toBe(2);
+    expect((await store.load('s'))?.snapshot?.reducer).toBe(3);
   } finally {
     await attend.stop();
   }
@@ -233,13 +233,14 @@ test('a conflicting write reloads without replacing observation time', async () 
   };
   const attend = createAttend({ store, clock, kind: { change: 'continuous' }, judge: scriptedJudge([{ route: 'queue' }]), sink: 'log' });
   try {
-    const pushed = attend.push('s', { id: 'a', name: 'change', observedAt: 100 });
+    const pushed = attend.push('s', { id: 'a', name: 'change', observedAt: 100, quietForMs: 1000 });
     await raced.promise;
     await clock.advance(50);
     await pushed;
     const record = await attend.inspect('s');
     expect(record?.buffer.entries.map((event) => event.id)).toEqual(['racer', 'a']);
     expect(record?.buffer.entries[1]?.observedAt).toBe(100);
+    expect(record?.buffer.entries[1]?.quietForMs).toBe(1000);
     expect(record?.dueAt).toBe(1100);
   } finally {
     await attend.stop();

@@ -16,7 +16,7 @@ function logged(id: string, now = 1000): LoggedInput {
 
 function window(id: string): Window {
   return {
-    id, events: [{ id: `event:${id}`, at: 1, observedAt: 1, name: 'changed', data: { nested: [null, true, 'héllo 🌍\u0000'] }, text: 'héllo 🌍\u0000', kind: 'closing', seenAt: 2 }],
+    id, events: [{ id: `event:${id}`, at: 1, observedAt: 1, quietForMs: 12, name: 'changed', data: { nested: [null, true, 'héllo 🌍\u0000'] }, text: 'héllo 🌍\u0000', kind: 'continuous', seenAt: 2 }],
     reason: 'closing', waits: 0, dropped: 0, gap: false, settledAt: 3,
   };
 }

@@ -256,6 +256,7 @@ async def run_scenario(scenario: Mapping[str, Any]) -> dict[str, Any]:
                     "data": e.get("data", {}),
                     **({"text": e["text"]} if "text" in e else {}),
                     **({"observedAt": e["observedAt"]} if "observedAt" in e else {}),
+                    **({"quietForMs": e["quietForMs"]} if "quietForMs" in e else {}),
                 }
                 for e in step["events"]
             ]

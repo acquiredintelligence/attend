@@ -71,6 +71,7 @@ function copyObject(value: object, key: string | number, depth: number): JsonVal
   for (const name of keys(source)) {
     const field = source[name];
     if (depth === 0 && name === 'observedAt') checkObservation(field);
+    if (depth === 0 && name === 'quietForMs') checkQuietDuration(field);
     const copied = toJson(field, name, depth + 1);
     if (copied === undefined) continue;
     if (name === '__proto__') defineProperty(object, name, { value: copied, enumerable: true, writable: true, configurable: true });
@@ -123,6 +124,7 @@ export function copyEvent(event: Event, defaultData = false): Event {
       if (!isRecord(data)) throw new TypeError('attend: event data must be a JSON object');
       fields.data = data;
       checkObservation(fields.observedAt);
+      checkQuietDuration(fields.quietForMs);
       return fields as unknown as Event;
     }
     return checkedEvent(toJson(fields, '', 0), defaultData);
@@ -134,9 +136,14 @@ function checkedEvent(copied: JsonValue | undefined, defaultData: boolean): Even
   if (defaultData && isRecord(copied) && copied.data === undefined) copied.data = {};
   if (!isRecord(copied) || !isRecord(copied.data)) throw new TypeError('attend: event data must be a JSON object');
   checkObservation(copied.observedAt);
+  checkQuietDuration(copied.quietForMs);
   return copied as unknown as Event;
 }
 
 function checkObservation(value: unknown): void {
   if (value !== undefined && (typeof value !== 'number' || !isFinite(value))) throw new TypeError('attend: observedAt must be a finite number');
+}
+
+function checkQuietDuration(value: unknown): void {
+  if (value !== undefined && (typeof value !== 'number' || !isFinite(value) || value < 0)) throw new TypeError('attend: quietForMs must be a finite nonnegative number');
 }
