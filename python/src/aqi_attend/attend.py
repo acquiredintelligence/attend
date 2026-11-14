@@ -53,7 +53,7 @@ from .errors import ConflictError, IntakeError, is_permanent, message_of
 from .shell.budget import window_bytes_for
 from .shell.copy import copy_decision, copy_event, copy_letter, copy_window
 from .shell.decisions import DecisionCursorPage, read_decisions
-from .shell.intake import Intake
+from .shell.intake import Intake, owns_callback
 from .shell.read import read_record
 from .shell.scheduler import Scheduler
 from .shell.scope import Scopes
@@ -688,16 +688,18 @@ class Attend:
     async def _run(self, signal: AbortSignal, own: AbortController, finished: asyncio.Future[None], sweep_ms: float, sweep_limit: int) -> None:
         try:
             await self._run_loop(signal, sweep_ms, sweep_limit)
-        except asyncio.CancelledError:
-            own.abort()
-            await self._shutdown()
-            raise
         finally:
-            if not finished.done():
-                finished.set_result(None)
+            own.abort()
+            try:
+                await self._join_shutdown()
+            finally:
+                if not finished.done():
+                    finished.set_result(None)
 
     async def stop(self) -> None:
         """Stops the run, whether or not it was given a signal, and returns when it has finished."""
+        if owns_callback(self._intake_identity):
+            raise IntakeError("attend: cannot stop an engine from its own callback")
         if self._stopper is not None:
             self._stopper.abort()
         if self._finished is not None:
@@ -731,7 +733,6 @@ class Attend:
     async def _run_loop(self, signal: AbortSignal, sweep_ms: float, sweep_limit: int) -> None:
         self._running = signal
         remove = signal.add_listener(self._on_abort)
-        shutdown = True
         try:
             if signal.aborted:
                 return
@@ -741,14 +742,21 @@ class Attend:
                 await self._sweep(self._clock.now(), sweep_limit, False)
                 self._scopes.evict()
                 await sleep(self._clock, sweep_ms, signal)
-        except asyncio.CancelledError:
-            shutdown = False
-            raise
         finally:
             self._on_abort()
             remove()
-            if shutdown:
-                await self._shutdown()
+
+    async def _join_shutdown(self) -> None:
+        cleanup = asyncio.create_task(self._shutdown())
+        interrupted: asyncio.CancelledError | None = None
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError as error:
+                interrupted = error
+        cleanup.result()
+        if interrupted is not None:
+            raise interrupted
 
     async def _shutdown(self) -> None:
         writes = self._scopes.pending()
@@ -759,7 +767,7 @@ class Attend:
         for task in list(self._calls):
             if not task.done():
                 task.cancel()
-        await asyncio.gather(*(intake.fence() for intake in self._intakes.values()), return_exceptions=True)
+        await asyncio.gather(*(asyncio.shield(intake.fence()) for intake in self._intakes.values()), return_exceptions=True)
 
     async def _settled_or_expired(self, task: asyncio.Task[None], lease_until: float) -> None:
         if lease_until <= self._clock.now() or task.done():

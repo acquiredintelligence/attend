@@ -65,6 +65,7 @@ interface Runtime {
 export class IntakeQueue implements Intake {
   private readonly owner: IntakeOwner;
   private readonly queue = new Set<Operation>();
+  private readonly preparations = new Set<Promise<void>>();
   private active: Activity | null = null;
   private timerPending = false;
   private work = 0;
@@ -78,6 +79,8 @@ export class IntakeQueue implements Intake {
 
   get closed(): boolean { return this.closing !== null; }
   get completionSignal(): AbortSignal { return this.completion.signal; }
+
+  ownsCurrentCallback(): boolean { return this.context.getStore()?.engine === this.owner.engine; }
 
   private checkContext(): void {
     const active = this.context.getStore();
@@ -138,7 +141,11 @@ export class IntakeQueue implements Intake {
       const success = (batch: SourceBatch) => { signal.removeEventListener('abort', abort); resolve(batch); };
       const failure = (error: unknown) => { signal.removeEventListener('abort', abort); reject(error); };
       signal.addEventListener('abort', abort, { once: true });
-      try { void operation.prepare(signal).then(success, failure); }
+      try {
+        const preparation = operation.prepare(signal).then(success, failure);
+        this.preparations.add(preparation);
+        void preparation.then(() => { this.preparations.delete(preparation); });
+      }
       catch (error) { failure(error); }
     });
   }
@@ -209,6 +216,7 @@ export class IntakeQueue implements Intake {
     void (async () => {
       await activity?.finished.promise;
       await this.workDone?.promise;
+      await Promise.all([...this.preparations]);
       if (activity?.failure) throw activity.failure.error;
     })().then(closing.resolve, closing.reject);
     return closing.promise;

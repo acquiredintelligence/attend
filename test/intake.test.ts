@@ -417,7 +417,10 @@ test('late preparation cannot admit after withdrawal', async () => {
     const pending = intake.submit(async () => { started.open(); await release.promise; returned.open(); return batch('late'); }, { signal: controller.signal });
     await started.promise;
     controller.abort(); await expect(pending).rejects.toBeDefined();
-    await intake.close(); release.open(); await returned.promise; await drain();
+    let closed = false;
+    const closing = intake.close().then(() => { closed = true; });
+    await drain(); expect(closed).toBe(false);
+    release.open(); await returned.promise; await closing; await drain();
     expect(await attend.inspect('s')).toBeNull();
   } finally { release.open(); await attend.stop(); await running; }
 });
