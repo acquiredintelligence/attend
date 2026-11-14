@@ -52,10 +52,12 @@ test('decision data survives a failed delivery and a retained-store restart', as
     await clock.advance(1);
     expect(recent).toEqual([{ revision: 7, tags: ['alpha'] }]);
     expect((await second.inspect('scope'))?.recent[0]?.data).toEqual({ revision: 7, tags: ['alpha'] });
+    expect(sink.delivered[1]).not.toHaveProperty('data');
   } finally {
     await second.stop();
     await secondRun;
   }
+  expect(clock.nextAt()).toBeNull();
 });
 
 const values: JsonValue[] = [null, false, 0, '', [], {}];

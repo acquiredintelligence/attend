@@ -257,7 +257,7 @@ async def test_revision_four_snapshots_and_tails_keep_saved_policy(item: dict[st
         await write
         stored = await store.load("s")
         assert stored is not None and stored["snapshot"] is not None
-        assert stored["snapshot"]["reducer"] == 5
+        assert stored["snapshot"]["reducer"] == 6
         assert stored["snapshot"]["policy"].get("eventLimits") == {"counted": 3, "background": 2}
         record = await engine.inspect("s")
         assert record is not None and record["recent"] == item["expected"]["recent"]

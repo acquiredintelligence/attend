@@ -158,6 +158,7 @@ class Verdict(TypedDict):
     id: str
     route: DecidedRoute
     at: float
+    data: NotRequired[JsonValue]
 
 
 class Decision(TypedDict):
@@ -169,6 +170,7 @@ class Decision(TypedDict):
     probabilities: dict[str, float]
     predicates: dict[str, float]
     confidence: float | None
+    data: NotRequired[JsonValue]
     window: Window
     at: float
 
@@ -250,6 +252,7 @@ class Judgment(TypedDict):
     """What a judge returns. Validated against the offered routes inside ``step``."""
 
     route: Route
+    data: NotRequired[JsonValue]
     probabilities: NotRequired[dict[str, float]]
     predicates: NotRequired[dict[str, float]]
     confidence: NotRequired[float]

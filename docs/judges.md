@@ -2,11 +2,32 @@
 
 **The speed default is a system-one classifier.** `jevJudge` (TypeSafe's Jev, with your own TypeSafe key) and `decisionsJudge` (the OpenAI Decisions API) answer a fixed multiple-choice question with probabilities in roughly 140 ms or more, which is what a real-time agent can afford on every settled window. `llmJudge` calls a general model you already use; it is slower, and its self-reported probabilities are close to one-hot. Use it when you want reasoning over speed.
 
-A judge is a function, `(input: JudgeInput, signal: AbortSignal) => Promise<Judgment>`. It gets the settled `window`, the `routes` on offer with your criteria, your `guidance`, the `predicates` to answer, live `facts` from `context()` and the scope's `recent` verdicts. It returns `{ route, probabilities?, predicates? }`.
+A judge is a function, `(input: JudgeInput, signal: AbortSignal) => Promise<Judgment>`. It gets the settled `window`, the `routes` on offer with your criteria, your `guidance`, the `predicates` to answer, live `facts` from `context()` and the scope's `recent` verdicts. It returns `{ route, probabilities?, predicates?, confidence?, data? }`.
 
 - Throw to retry with backoff. Throw a `PermanentError` to dead-letter the window at once.
 - A route that was not offered counts as a retryable failure. Check `input.routes` before you answer `wait`.
 - Stop when `signal` aborts. attend aborts the call after `judgeTimeoutMs`.
+
+## Carry a result to the sink
+
+A custom judge can return optional JSON `data`. attend commits it with the final verdict and gives the sink the same value on `decision.data`, including after delivery retries or recovery. Each subsequent custom judge also receives it on `input.recent[].data`. The built-in hosted judge prompts still summarize recent routes and times; they do not embed this data.
+
+```ts
+import { createAttend } from '@acquiredintelligence/attend';
+
+const attend = createAttend({
+  kind: { 'job.completed': 'closing' },
+  judge: async ({ window }) => ({
+    route: 'queue',
+    data: { eventIds: window.events.map((event) => event.id) },
+  }),
+  sink: (decision) => console.log(decision.id, decision.data),
+});
+```
+
+Omission leaves the field absent. Explicit `null`, `false`, zero and empty values are retained. A `skip` retains data in recent context without calling the sink; a `wait` retains neither a verdict nor its data. JSON normalization follows event data in each runtime. Invalid data fails the judgment and follows its retry schedule. Changes to a sink's copy or a later judge's recent context cannot change stored data.
+
+Keep data bounded: it is stored in the outbox and up to `recentCount` verdicts. Use compatible reducer versions in every process sharing the store before returning it. The same `data` field is available in Python.
 
 ## llmJudge
 

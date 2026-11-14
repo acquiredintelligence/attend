@@ -18,7 +18,7 @@ export interface Event {
   quietForMs?: number;
   name: string;
   data: JsonObject;
-  /** One plain line describing the event. The judge never writes text; notices are built from these. */
+  /** One plain line describing the event, used by the default notice. */
   text?: string;
 }
 
@@ -175,6 +175,7 @@ export interface Verdict {
   id: string;
   route: DecidedRoute;
   at: number;
+  data?: JsonValue;
 }
 
 /**
@@ -191,6 +192,8 @@ export interface Decision {
   predicates: Record<string, number>;
   /** How sure the judge was of the route, from 0 to 1, when it says; null when it does not. */
   confidence: number | null;
+  /** The judge's JSON result, retained across delivery attempts. */
+  data?: JsonValue;
   window: Window;
   at: number;
 }
@@ -261,6 +264,8 @@ export interface ScopeRecord {
 /** What a judge returns. Validated against the offered routes inside `step`. */
 export interface Judgment {
   route: Route;
+  /** Optional JSON result for the sink and subsequent judge context. */
+  data?: JsonValue;
   /** Per offered route. Missing routes count as 0; the reducer renormalises. */
   probabilities?: Partial<Record<Route, number>>;
   predicates?: Record<string, number>;

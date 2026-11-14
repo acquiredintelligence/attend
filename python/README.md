@@ -156,3 +156,5 @@ uv run python bench/latency.py --store redis
 ## License
 
 MIT, Zettel Labs, Inc.
+
+Custom judges can return optional JSON `data`. It reaches `decision["data"]` and subsequent `input["recent"]` verdicts through delivery retries and recovery. Omission keeps the field absent. See [the result contract](../docs/judges.md#carry-a-result-to-the-sink) and [storage compatibility](../docs/storage.md).

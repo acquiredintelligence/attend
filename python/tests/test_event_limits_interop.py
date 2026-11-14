@@ -127,7 +127,7 @@ async def test_independent_limits_continue_across_runtimes(kind: str, phase: str
         written = await (python(owned, "write", scope, phase) if writer == "python" else typescript(kind, prefix, "write", scope, phase))
         stored = await owned.load(scope)
         assert stored is not None and stored["snapshot"] is not None
-        assert stored["snapshot"]["reducer"] == 5 and stored["tail"]
+        assert stored["snapshot"]["reducer"] == 6 and stored["tail"]
         assert stored["snapshot"]["policy"].get("eventLimits") == {"counted": 3, "background": 2}
         read = await (typescript(kind, prefix, "read", scope, phase) if writer == "python" else python(owned, "read", scope, phase))
         assert read["record"] == written["record"]

@@ -8,7 +8,7 @@ import type { Attend, AttendConfig, EventInput } from './shell/types.js';
 import { memoryStore } from './store/memory.js';
 import { createScopes } from './shell/scope.js';
 import { createScheduler } from './shell/scheduler.js';
-import { copyDecision, copyEventSized, copyLetter, copyWindowSliced } from './shell/copy.js';
+import { copyDecision, copyEventSized, copyJudgment, copyLetter, copyWindowSliced } from './shell/copy.js';
 import { windowBytesFor } from './shell/budget.js';
 import { readRecord } from './shell/read.js';
 import { readDecisions } from './shell/decisions.js';
@@ -222,7 +222,7 @@ export function createAttendInternal(config: AttendConfig, snapshot: 'ratio' | '
       if (isJudgment(judgment)) {
         const threshold = config.actThreshold === undefined ? null : thresholdRoute(judgment, effect.offered, config.actThreshold);
         if (threshold) observe({ kind: 'routeThresholded', scope, batchId, from: judgment.route, to: threshold.route, act: threshold.act });
-        result = { kind: 'judged', batchId, attempt, judgment: structuredClone(threshold ? { ...judgment, route: threshold.route } : judgment) };
+        result = { kind: 'judged', batchId, attempt, judgment: copyJudgment(threshold ? { ...judgment, route: threshold.route } : judgment) };
       } else result = { kind: 'judgeFailed', batchId, attempt, message: 'malformed judgment', permanent: false };
     } catch (error) {
       result = { kind: 'judgeFailed', batchId, attempt, message: messageOf(error), permanent: isPermanent(error) };

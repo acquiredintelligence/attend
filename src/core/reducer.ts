@@ -9,7 +9,7 @@ import { seenAdmit, seenRelease, seenTrim } from './seen.js';
 import { estimateRenderedBytes, isBackground, observationTime, openWindow, shedEntries, windowAppend, windowCompact, windowDeadline, windowEntries, windowPrune, windowShed, windowSize } from './window.js';
 
 /** Bumped whenever a release changes a transition. Stored with every snapshot. */
-export const REDUCER_VERSION = 5;
+export const REDUCER_VERSION = 6;
 
 /** An empty output. One output may collect several inputs: `apply` only ever sets `changed`. */
 export function newOutput(): ApplyOutput {
@@ -367,12 +367,13 @@ function onJudged(ctx: Ctx, state: ScopeState, input: Extract<Input, { kind: 'ju
     if (ctx.config.traces) ctx.out.effects.push({ kind: 'trace', trace: { kind: 'waiting', scope: state.scope, batchId: window.id, waits, until } });
     return;
   }
-  const recent = [...state.recent, { id: window.id, route: verdict.route, at: ctx.now }];
+  const data = verdict.data === undefined ? {} : { data: verdict.data };
+  const recent = [...state.recent, { id: window.id, route: verdict.route, at: ctx.now, ...data }];
   state.recent = ctx.config.policy.recentCount <= 0 ? [] : recent.slice(-ctx.config.policy.recentCount);
   if (ctx.config.traces) ctx.out.effects.push({ kind: 'trace', trace: { kind: 'judged', scope: state.scope, batchId: window.id, route: verdict.route } });
   if (verdict.route !== 'skip') {
     const decision: Decision = { id: window.id, scope: state.scope, route: verdict.route, probabilities: verdict.probabilities,
-      predicates: verdict.predicates, confidence: verdict.confidence, window, at: ctx.now };
+      predicates: verdict.predicates, confidence: verdict.confidence, window, at: ctx.now, ...data };
     ctx.out.appends.push({ kind: 'decision', id: decision.id, scope: state.scope, at: decision.at, route: decision.route, body: decision });
     if (ctx.config.decisions === 'lane') state.outbox.decisions.push({ item: { id: window.id, kind: 'decision', decision },
       phase: { phase: 'retrying', attempt: 0, failures: 0, at: ctx.now } });
@@ -390,7 +391,7 @@ function unit(value: unknown): number | null {
  * renormalised; when it sums to 0 the chosen route gets 1. Predicates and a confidence outside
  * [0, 1] are dropped.
  */
-export function validate(judgment: Judgment, offered: Route[]): (Pick<Decision, 'probabilities' | 'predicates' | 'confidence'> & { route: Route }) | null {
+export function validate(judgment: Judgment, offered: Route[]): (Pick<Decision, 'probabilities' | 'predicates' | 'confidence' | 'data'> & { route: Route }) | null {
   const route = offered.find((candidate) => candidate === judgment.route);
   if (route === undefined) return null;
   const raw: Record<Route, number> = { interrupt: 0, queue: 0, note: 0, ask: 0, skip: 0, wait: 0 };
@@ -407,7 +408,8 @@ export function validate(judgment: Judgment, offered: Route[]): (Pick<Decision, 
     const p = unit(value);
     if (p !== null) predicates[name] = p;
   }
-  return { route, probabilities, predicates, confidence: unit(judgment.confidence) };
+  return { route, probabilities, predicates, confidence: unit(judgment.confidence),
+    ...(judgment.data === undefined ? {} : { data: structuredClone(judgment.data) }) };
 }
 
 function deadLetter(ctx: Ctx, state: ScopeState, letter: DeadLetter, attempt: number): void {

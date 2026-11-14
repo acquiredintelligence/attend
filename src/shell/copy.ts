@@ -1,4 +1,4 @@
-import type { DeadLetter, Decision, Event, Window } from '../core/types.js';
+import type { DeadLetter, Decision, Event, Judgment, Window } from '../core/types.js';
 import { copyEvent } from '../internal/shared.js';
 import { estimateRenderedBytes } from '../core/window.js';
 
@@ -16,6 +16,13 @@ export function copyEventSized(event: Event, fill?: { id(): string; at(): number
 }
 
 const copying = new Set<Promise<Window>>();
+
+/** Captures the result and normalizes its optional data at the JSON boundary. */
+export function copyJudgment(judgment: Judgment): Judgment {
+  const copy = { ...judgment };
+  if (copy.data !== undefined) copy.data = JSON.parse(JSON.stringify(copy.data));
+  return structuredClone(copy);
+}
 
 /** Waits for active window copies when advancing a deterministic test clock. */
 export async function drainCopies(): Promise<void> {
@@ -44,6 +51,7 @@ export function copyWindowSliced(window: Window, slice = 64): Window | Promise<W
 /** Copies a decision and slices the copy of its window. */
 export function copyDecision(decision: Decision): Decision | Promise<Decision> {
   const copy = { ...decision, probabilities: { ...decision.probabilities }, predicates: { ...decision.predicates } };
+  if (decision.data !== undefined) copy.data = structuredClone(decision.data);
   const window = copyWindowSliced(decision.window);
   return window instanceof Promise ? window.then((window) => ({ ...copy, window })) : { ...copy, window };
 }

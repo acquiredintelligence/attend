@@ -15,6 +15,17 @@ const T = 'test/attend.test.ts';
 
 export const SCENARIOS: Scenario[] = [
   {
+    name: 'decision data survives wait, delivery retry and recent context',
+    start: 0, kinds: KINDS,
+    settle: { closingGraceMs: 1, waitHorizonMs: 5, retryBackoffMs: [3] },
+    judge: { '*': { answers: [{ route: 'wait', data: { transient: true } },
+      { route: 'note', data: { revision: 7, tags: ['alpha'], optional: null } },
+      { route: 'skip', data: false }] } },
+    sink: { '*': { attempts: [{ fail: 'retry' }, 'ok'] } },
+    steps: [push('s', ev('a')), advance(1), { inspect: 's' }, advance(5), { inspect: 's' },
+      advance(3), push('s', ev('b')), advance(1), { inspect: 's' }],
+  },
+  {
     name: 'independent limits settle counted equality while retaining background',
     start: 0, intakes: ['s'], kinds: KINDS,
     settle: { continuation: 'accumulate', eventLimits: { counted: 3, background: 2 } },

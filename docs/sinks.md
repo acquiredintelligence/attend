@@ -2,6 +2,8 @@
 
 A sink delivers decisions to the agent. attend calls `sink.deliver(decision, signal)` at least once per decision, one decision at a time per scope, oldest first. After a crash it can deliver the same decision again with the same id, so make the sink idempotent on `decision.id`, which is unique across scopes. Throw to retry, or throw a `PermanentError` to dead-letter at once.
 
+For a host-prepared result, return [`Judgment.data`](judges.md#carry-a-result-to-the-sink) from the custom judge and read `decision.data` here. The outbox owns that JSON value through retries and recovery, so the sink does not need a separate pending-result cache. The sink receives a detached copy. The default notice remains based on event lines and ignores this field.
+
 A sink can be one function, `(decision, signal) => …`, that gets every delivered decision. `routes()` builds a sink from one handler per delivered route instead, so a route you forgot fails to typecheck. A sink never sees `skip` or `wait`. This excerpt from [`examples/postgres-worker.ts`](../examples/postgres-worker.ts) writes every decision to an inbox table that the agent's runtime reads:
 
 ```ts

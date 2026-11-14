@@ -1,5 +1,6 @@
 import asyncio
 from copy import deepcopy
+from typing import cast
 
 import pytest
 
@@ -60,6 +61,7 @@ async def test_data_survives_failed_delivery_and_retained_store_restart() -> Non
         await second.push("scope", {"id": "b", "name": "change", "at": 10, "data": {}})
         await clock.advance(1)
         assert recent == [{"revision": 7, "tags": ["alpha"]}]
+        assert "data" not in sink.delivered[1]
         record = await second.inspect("scope")
         assert record is not None
         assert record["recent"][0].get("data") == {"revision": 7, "tags": ["alpha"]}
@@ -86,6 +88,32 @@ async def test_explicit_json_data(data: JsonValue) -> None:
         record = await attend.inspect("scope")
         assert record is not None
         assert "data" in record["recent"][0] and record["recent"][0]["data"] == data
+    finally:
+        await attend.stop()
+        await running
+
+
+async def test_invalid_json_data_retries_before_committing_a_decision() -> None:
+    clock = fake_clock()
+    sink = recording_sink()
+    calls = 0
+
+    async def judge(input: JudgeInput, signal: AbortSignal) -> Judgment:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return cast(Judgment, {"route": "note", "data": object()})
+        return {"route": "note", "data": {"valid": True}}
+
+    attend = create_attend(clock=clock, kind={"change": "closing"}, sink=sink, settle={"closing_grace_ms": 1, "retry_backoff_ms": [10]}, judge=judge)
+    running = asyncio.create_task(attend.run())
+    try:
+        await attend.push("scope", {"id": "a", "name": "change", "at": 0, "data": {}})
+        await clock.advance(1)
+        assert sink.delivered == []
+        await clock.advance(10)
+        assert calls == 2
+        assert sink.delivered[0].get("data") == {"valid": True}
     finally:
         await attend.stop()
         await running
