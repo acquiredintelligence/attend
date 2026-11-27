@@ -1,6 +1,8 @@
 import { expect, test } from 'vitest';
 import { createAttend, memoryStore, type SourceBatch } from '../src/index.js';
 import { fakeClock, scriptedJudge } from '../src/testing.js';
+import { replay } from '../src/shell/read.js';
+import { toRecord } from '../src/core/state.js';
 
 test('closing waits for the latest explicit or default deadline', async () => {
   const attend = createAttend({ clock: fakeClock(100), kind: { save: 'closing' }, judge: scriptedJudge([]), sink: 'log' });
@@ -73,4 +75,26 @@ test.each([false, null, 1, 'true', Symbol('settles'), { toJSON: () => undefined 
   } finally {
     await attend.stop();
   }
+});
+
+test('a tail under an older snapshot keeps settles as metadata', async () => {
+  const clock = fakeClock(100);
+  const store = memoryStore();
+  const writer = createAttend({ clock, store, judge: scriptedJudge([]), sink: 'log', kind: { save: 'closing', out: 'consequence' } });
+  try {
+    await writer.push('s', [{ id: 'save', name: 'save' }]);
+    await clock.advance(10);
+    await writer.push('s', [{ id: 'out', name: 'out', settles: true }]);
+  } finally {
+    await writer.stop();
+  }
+  const stored = await store.load('s');
+  expect(stored?.snapshot).toBeTruthy();
+  expect(stored?.tail).toMatchObject([{ input: { kind: 'events', events: [{ id: 'out', settles: true }] } }]);
+  const modes = { decisions: 'lane', deadLetters: 'lane' } as const;
+  expect(toRecord(replay('s', stored!, modes)).buffer.endedAt).toBe(110);
+  const legacy = { ...stored!, snapshot: { ...stored!.snapshot!, reducer: 6 } };
+  const record = toRecord(replay('s', legacy, modes));
+  expect(record.buffer.endedAt).toBeUndefined();
+  expect(record.buffer.entries).toMatchObject([{ id: 'save' }, { id: 'out', settles: true }]);
 });

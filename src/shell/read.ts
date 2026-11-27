@@ -1,4 +1,4 @@
-import { apply, newOutput } from '../core/reducer.js';
+import { apply, COMPLETION_REVISION, newOutput } from '../core/reducer.js';
 import { fromRecord, initialState, toRecord } from '../core/state.js';
 import { DEFAULT_POLICY, type ApplyConfig, type ScopeRecord, type ScopeState } from '../core/types.js';
 import type { ScopeStore, StoredScope } from '../store/types.js';
@@ -7,8 +7,10 @@ import type { ScopeStore, StoredScope } from '../store/types.js';
 export function replay(scope: string, stored: StoredScope, modes: Pick<ApplyConfig, 'decisions' | 'deadLetters'>): ScopeState {
   const policy = stored.snapshot?.policy ?? DEFAULT_POLICY;
   const state = stored.snapshot ? fromRecord(stored.snapshot.record, policy) : initialState(scope, policy);
+  // A tail under an older snapshot was logged by an older reducer, where `settles` meant nothing.
+  const completion = !stored.snapshot || stored.snapshot.reducer >= COMPLETION_REVISION;
   for (const logged of stored.tail) {
-    apply({ policy, decisions: modes.decisions, deadLetters: modes.deadLetters, traces: false }, state, logged, newOutput());
+    apply({ policy, decisions: modes.decisions, deadLetters: modes.deadLetters, traces: false, completion }, state, logged, newOutput());
     state.version += 1;
   }
   if (state.version !== stored.version) throw new Error(`attend: invalid stored version for scope "${scope}"`);

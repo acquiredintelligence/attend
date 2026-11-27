@@ -46,4 +46,4 @@ Each adapter also has an `EventLog`: `memoryLog`, `sqliteLog`, `postgresLog` and
 
 [Judgment data](judges.md#carry-a-result-to-the-sink) uses reducer revision 6. Optional data stays in logged judgments, decisions and recent verdicts. Old records without it remain readable. Use compatible readers and writers before returning data; replay on a version mismatch does not fence older processes or make them retain the field.
 
-[Closing durations and completion](reference.md#closing-duration-and-completion) use reducer revision 7. Upgrade every reader and writer sharing a store before using either field. Replay uses the saved policy for default grace and the logged event times for explicit deadlines.
+[Closing durations and completion](reference.md#closing-duration-and-completion) use reducer revision 7. Upgrade every reader and writer sharing a store before using either field. Replay uses the saved policy for default grace and the logged event times for explicit deadlines. A tail logged under a snapshot from an older revision keeps `settles` as plain metadata, since older revisions gave it no meaning; only input logged at revision 7 or later ends a window with it.

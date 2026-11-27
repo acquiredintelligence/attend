@@ -68,3 +68,50 @@ async def test_invalid_completion_refuses_whole_batch(settles: object) -> None:
     finally:
         await attend.stop()
         await attend.store.close()
+
+
+async def test_a_tail_under_an_older_snapshot_keeps_settles_as_metadata() -> None:
+    from aqi_attend.core.step import initial_record
+    from aqi_attend.core.types import default_policy
+    from aqi_attend.store.types import ScopeWrite
+
+    store = memory_store()
+    policy = default_policy()
+    record = initial_record("s")
+    record.update(
+        version=1,
+        seen=["save"],
+        buffer={"entries": [{"id": "save", "at": 0, "name": "save", "data": {}, "kind": "closing", "seenAt": 100}], "dropped": 0, "gap": False, "forcedAt": None},
+        dueAt=100 + policy["closingGraceMs"],
+    )
+    checkpoint: ScopeWrite = {
+        "scope": "s",
+        "expectedVersion": 0,
+        "inputs": [{"now": 100, "input": {"kind": "tick"}}],
+        "snapshot": {"version": 1, "record": record, "policy": policy, "reducer": 6},
+        "appends": [],
+    }
+    tail: ScopeWrite = {
+        "scope": "s",
+        "expectedVersion": 1,
+        "snapshot": None,
+        "appends": [],
+        "inputs": [
+            {
+                "now": 110,
+                "input": {"kind": "events", "events": [{"id": "out", "at": 0, "name": "out", "data": {}, "kind": "consequence", "settles": True}]},
+            }
+        ],
+    }
+    assert await store.commit([checkpoint]) == ["ok"]
+    assert await store.commit([tail]) == ["ok"]
+    attend = create_attend(store=store, clock=fake_clock(110), kind={"save": "closing", "out": "consequence"}, judge=scripted_judge([]), sink="log")
+    try:
+        loaded = await attend.inspect("s")
+        assert loaded is not None
+        assert loaded["dueAt"] == 100 + policy["closingGraceMs"]
+        assert loaded["buffer"].get("endedAt") is None
+        assert [event.get("settles") for event in loaded["buffer"]["entries"]] == [None, True]
+    finally:
+        await attend.stop()
+        await store.close()

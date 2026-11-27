@@ -11,6 +11,9 @@ import { estimateRenderedBytes, isBackground, observationTime, openWindow, shedE
 /** Bumped whenever a release changes a transition. Stored with every snapshot. */
 export const REDUCER_VERSION = 7;
 
+/** The first revision whose logged inputs give `settles` its meaning. */
+export const COMPLETION_REVISION = 7;
+
 /** An empty output. One output may collect several inputs: `apply` only ever sets `changed`. */
 export function newOutput(): ApplyOutput {
   return { effects: [], appends: [], changed: false };
@@ -128,7 +131,7 @@ function ingest(ctx: Ctx, state: ScopeState, input: EventsInput): void {
     if (!seenAdmit(state, event.id)) { duplicates += 1; continue; }
     const entry = { ...event, seenAt: ctx.now };
     // Act presence is checked in admission order, before background retention.
-    if (entry.kind === 'consequence' && entry.settles === true && state.open.summary.firstActIndex !== -1) {
+    if (ctx.config.completion !== false && entry.kind === 'consequence' && entry.settles === true && state.open.summary.firstActIndex !== -1) {
       state.open.endedAt = observationTime(entry);
     }
     windowAppend(state.open, entry, estimateRenderedBytes(entry));

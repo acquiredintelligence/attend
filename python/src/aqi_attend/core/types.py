@@ -490,6 +490,9 @@ class ApplyConfig:
     decisions: DeliveryMode = "lane"
     dead_letters: DeliveryMode = "lane"
     traces: bool = True
+    completion: bool = True
+    """Read ``settles`` on consequences. False while replaying a tail logged under a reducer older
+    than revision 7, where the field was application metadata with no meaning."""
 
 
 @dataclass(slots=True)

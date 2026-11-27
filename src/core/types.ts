@@ -609,6 +609,11 @@ export interface ApplyConfig {
   deadLetters: 'lane' | 'log';
   /** Build trace effects. False when nothing observes. Traces never change state. */
   traces: boolean;
+  /**
+   * Read `settles` on consequences. False while replaying a tail logged under a reducer older
+   * than revision 7, where the field was application metadata with no meaning.
+   */
+  completion?: boolean;
 }
 
 /** A row `apply` asks the store to append in the same write as the input that produced it. */
