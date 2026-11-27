@@ -2,6 +2,10 @@
 
 What changed in each release, for people who use attend. The npm package `@acquiredintelligence/attend` and the Python package `aqi-attend` are released together under one version number.
 
+## Unreleased
+
+- Closing events can set a per-event `quietForMs` for their output. A consequence can carry `settles: true` when that output is complete, including through serial intake. Both runtimes persist the fields at reducer revision 7. See [closing duration and completion](docs/reference.md#closing-duration-and-completion).
+
 ## 0.3.0 (2026-11-14)
 
 This is the first release of the Python package. The npm package gains folded notices and five opt-in features, and `attend serve` delivers decisions sooner on Redis and Postgres.

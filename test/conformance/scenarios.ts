@@ -15,6 +15,68 @@ const T = 'test/attend.test.ts';
 
 export const SCENARIOS: Scenario[] = [
   {
+    name: 'closing combines default grace with explicit deadlines',
+    start: 100, kinds: KINDS,
+    judge: { '*': { answers: [{ route: 'note' }] } },
+    steps: [
+      push('s', ev('a', 'close', { observedAt: 10, quietForMs: 800 }), ev('b')), { inspect: 's' },
+      advance(200), push('s', ev('c'), ev('d', 'close', { observedAt: 280, quietForMs: 0 })),
+      advance(11), push('s', ev('e')), { inspect: 's' },
+      advance(500), push('s', ev('f', 'close', { observedAt: 700, quietForMs: 0 })), advance(0),
+    ],
+  },
+  {
+    name: 'a completion applies only to acts admitted before it',
+    start: 100, kinds: KINDS,
+    judge: { '*': { answers: [{ route: 'note' }] } },
+    steps: [
+      push('s', ev('early', 'out', { settles: true }), ev('act', 'drag')), { inspect: 's' },
+      advance(10), push('s', ev('early', 'out', { settles: true })), { inspect: 's' },
+      push('s', ev('done', 'out', { observedAt: 105, settles: true }), ev('trailing', 'out')), { inspect: 's' },
+      push('s', ev('alone', 'out', { settles: true })), { inspect: 's' },
+    ],
+  },
+  {
+    name: 'ordered completion overrides stream quiet through serial intake',
+    start: 100, kinds: KINDS, intakes: ['s'],
+    judge: { '*': { answers: [{ route: 'note' }] } },
+    steps: [
+      { submit: 's', events: [ev('a', 'close', { quietForMs: 2000 }), ev('b', 'drag', { quietForMs: 1900 })] },
+      advance(10), { submit: 's', events: [ev('wrong', 'close', { settles: true })], source: 'feed', cursor: '1' }, { inspect: 's' },
+      { submit: 's', events: [ev('done', 'out', { settles: true })], source: 'feed', cursor: '2' }, { inspect: 's' },
+    ],
+  },
+  {
+    name: 'after wait only a fresh act can give a completion effect',
+    start: 100, kinds: KINDS, intakes: ['s'],
+    settle: { continuation: 'accumulate', waitHorizonMs: 100 },
+    judge: { '*': { answers: [{ route: 'wait' }, { route: 'note' }] } },
+    steps: [
+      { submit: 's', events: [ev('a', 'close', { quietForMs: 2000 }), ev('done', 'out', { settles: true })] },
+      advance(10), { submit: 's', events: [ev('held-only', 'out', { settles: true })] }, { inspect: 's' },
+      { submit: 's', events: [ev('b', 'close', { quietForMs: 2000 })] }, { inspect: 's' },
+      advance(10), { submit: 's', events: [ev('fresh-done', 'out', { settles: true })] },
+    ],
+  },
+  {
+    name: 'completion preserves the accumulating retry deadline',
+    start: 100, kinds: KINDS, intakes: ['s'],
+    settle: { continuation: 'accumulate', retryBackoffMs: [40] },
+    judge: { '*': { answers: [{ fail: 'outage' }, { route: 'note' }] } },
+    steps: [
+      { submit: 's', events: [ev('a', 'drag', { quietForMs: 0 })] },
+      advance(10), { submit: 's', events: [ev('b', 'drag'), ev('done', 'out', { settles: true })] },
+      advance(29), { inspect: 's' }, advance(1),
+    ],
+  },
+  {
+    name: 'completion takes effect before background retention',
+    start: 100, kinds: KINDS, intakes: ['s'],
+    settle: { continuation: 'accumulate', eventLimits: { counted: 3, background: 0 } },
+    judge: { '*': { answers: [{ route: 'note' }] } },
+    steps: [{ submit: 's', events: [ev('a', 'close'), ev('done', 'out', { settles: true })] }, { inspect: 's' }],
+  },
+  {
     name: 'decision data survives wait, delivery retry and recent context',
     start: 0, kinds: KINDS,
     settle: { closingGraceMs: 1, waitHorizonMs: 5, retryBackoffMs: [3] },

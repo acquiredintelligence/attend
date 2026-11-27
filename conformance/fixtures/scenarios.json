@@ -2,6 +2,3452 @@
  "scenarios": [
   {
    "scenario": {
+    "name": "closing combines default grace with explicit deadlines",
+    "start": 100,
+    "kinds": {
+     "close": "closing",
+     "say": "flush",
+     "drag": "continuous",
+     "look": "passive",
+     "out": "consequence",
+     "said": "context"
+    },
+    "judge": {
+     "*": {
+      "answers": [
+       {
+        "route": "note"
+       }
+      ]
+     }
+    },
+    "steps": [
+     {
+      "push": "s",
+      "events": [
+       {
+        "id": "a",
+        "name": "close",
+        "text": "close a",
+        "observedAt": 10,
+        "quietForMs": 800
+       },
+       {
+        "id": "b",
+        "name": "close",
+        "text": "close b"
+       }
+      ]
+     },
+     {
+      "inspect": "s"
+     },
+     {
+      "advance": 200
+     },
+     {
+      "push": "s",
+      "events": [
+       {
+        "id": "c",
+        "name": "close",
+        "text": "close c"
+       },
+       {
+        "id": "d",
+        "name": "close",
+        "text": "close d",
+        "observedAt": 280,
+        "quietForMs": 0
+       }
+      ]
+     },
+     {
+      "advance": 11
+     },
+     {
+      "push": "s",
+      "events": [
+       {
+        "id": "e",
+        "name": "close",
+        "text": "close e"
+       }
+      ]
+     },
+     {
+      "inspect": "s"
+     },
+     {
+      "advance": 500
+     },
+     {
+      "push": "s",
+      "events": [
+       {
+        "id": "f",
+        "name": "close",
+        "text": "close f",
+        "observedAt": 700,
+        "quietForMs": 0
+       }
+      ]
+     },
+     {
+      "advance": 0
+     }
+    ]
+   },
+   "expected": {
+    "judgeCalls": {
+     "s": [
+      {
+       "scope": "s",
+       "window": {
+        "id": "45546e68c47d033f",
+        "events": [
+         {
+          "id": "a",
+          "at": 0,
+          "name": "close",
+          "data": {},
+          "text": "close a",
+          "observedAt": 10,
+          "quietForMs": 800,
+          "kind": "closing",
+          "seenAt": 100
+         },
+         {
+          "id": "b",
+          "at": 0,
+          "name": "close",
+          "data": {},
+          "text": "close b",
+          "kind": "closing",
+          "seenAt": 100
+         },
+         {
+          "id": "c",
+          "at": 0,
+          "name": "close",
+          "data": {},
+          "text": "close c",
+          "kind": "closing",
+          "seenAt": 300
+         },
+         {
+          "id": "d",
+          "at": 0,
+          "name": "close",
+          "data": {},
+          "text": "close d",
+          "observedAt": 280,
+          "quietForMs": 0,
+          "kind": "closing",
+          "seenAt": 300
+         },
+         {
+          "id": "e",
+          "at": 0,
+          "name": "close",
+          "data": {},
+          "text": "close e",
+          "kind": "closing",
+          "seenAt": 311
+         }
+        ],
+        "reason": "closing",
+        "waits": 0,
+        "dropped": 0,
+        "gap": false,
+        "settledAt": 811
+       },
+       "routes": [
+        {
+         "route": "interrupt"
+        },
+        {
+         "route": "queue"
+        },
+        {
+         "route": "note"
+        },
+        {
+         "route": "ask"
+        },
+        {
+         "route": "skip"
+        },
+        {
+         "route": "wait"
+        }
+       ],
+       "predicates": [],
+       "facts": {},
+       "recent": [],
+       "now": 811
+      },
+      {
+       "scope": "s",
+       "window": {
+        "id": "3ecbd1f2ef91c276",
+        "events": [
+         {
+          "id": "f",
+          "at": 0,
+          "name": "close",
+          "data": {},
+          "text": "close f",
+          "observedAt": 700,
+          "quietForMs": 0,
+          "kind": "closing",
+          "seenAt": 811
+         }
+        ],
+        "reason": "closing",
+        "waits": 0,
+        "dropped": 0,
+        "gap": false,
+        "settledAt": 811
+       },
+       "routes": [
+        {
+         "route": "interrupt"
+        },
+        {
+         "route": "queue"
+        },
+        {
+         "route": "note"
+        },
+        {
+         "route": "ask"
+        },
+        {
+         "route": "skip"
+        },
+        {
+         "route": "wait"
+        }
+       ],
+       "predicates": [],
+       "facts": {},
+       "recent": [
+        {
+         "id": "45546e68c47d033f",
+         "route": "note",
+         "at": 811
+        }
+       ],
+       "now": 811
+      }
+     ]
+    },
+    "deliveries": {
+     "s": [
+      {
+       "decision": {
+        "id": "45546e68c47d033f",
+        "scope": "s",
+        "route": "note",
+        "probabilities": {
+         "interrupt": 0,
+         "queue": 0,
+         "note": 1,
+         "ask": 0,
+         "skip": 0,
+         "wait": 0
+        },
+        "predicates": {},
+        "confidence": null,
+        "window": {
+         "id": "45546e68c47d033f",
+         "events": [
+          {
+           "id": "a",
+           "at": 0,
+           "name": "close",
+           "data": {},
+           "text": "close a",
+           "observedAt": 10,
+           "quietForMs": 800,
+           "kind": "closing",
+           "seenAt": 100
+          },
+          {
+           "id": "b",
+           "at": 0,
+           "name": "close",
+           "data": {},
+           "text": "close b",
+           "kind": "closing",
+           "seenAt": 100
+          },
+          {
+           "id": "c",
+           "at": 0,
+           "name": "close",
+           "data": {},
+           "text": "close c",
+           "kind": "closing",
+           "seenAt": 300
+          },
+          {
+           "id": "d",
+           "at": 0,
+           "name": "close",
+           "data": {},
+           "text": "close d",
+           "observedAt": 280,
+           "quietForMs": 0,
+           "kind": "closing",
+           "seenAt": 300
+          },
+          {
+           "id": "e",
+           "at": 0,
+           "name": "close",
+           "data": {},
+           "text": "close e",
+           "kind": "closing",
+           "seenAt": 311
+          }
+         ],
+         "reason": "closing",
+         "waits": 0,
+         "dropped": 0,
+         "gap": false,
+         "settledAt": 811
+        },
+        "at": 811
+       },
+       "outcome": "ok"
+      },
+      {
+       "decision": {
+        "id": "3ecbd1f2ef91c276",
+        "scope": "s",
+        "route": "note",
+        "probabilities": {
+         "interrupt": 0,
+         "queue": 0,
+         "note": 1,
+         "ask": 0,
+         "skip": 0,
+         "wait": 0
+        },
+        "predicates": {},
+        "confidence": null,
+        "window": {
+         "id": "3ecbd1f2ef91c276",
+         "events": [
+          {
+           "id": "f",
+           "at": 0,
+           "name": "close",
+           "data": {},
+           "text": "close f",
+           "observedAt": 700,
+           "quietForMs": 0,
+           "kind": "closing",
+           "seenAt": 811
+          }
+         ],
+         "reason": "closing",
+         "waits": 0,
+         "dropped": 0,
+         "gap": false,
+         "settledAt": 811
+        },
+        "at": 811
+       },
+       "outcome": "ok"
+      }
+     ]
+    },
+    "deadLetterCalls": {},
+    "traces": {
+     "s": [
+      {
+       "kind": "ingested",
+       "scope": "s",
+       "count": 2,
+       "duplicates": 0
+      },
+      {
+       "kind": "ingested",
+       "scope": "s",
+       "count": 2,
+       "duplicates": 0
+      },
+      {
+       "kind": "ingested",
+       "scope": "s",
+       "count": 1,
+       "duplicates": 0
+      },
+      {
+       "kind": "settled",
+       "scope": "s",
+       "batchId": "45546e68c47d033f",
+       "reason": "closing",
+       "count": 5,
+       "merged": false
+      },
+      {
+       "kind": "judging",
+       "scope": "s",
+       "batchId": "45546e68c47d033f",
+       "attempt": 1,
+       "offerWait": true
+      },
+      {
+       "kind": "judged",
+       "scope": "s",
+       "batchId": "45546e68c47d033f",
+       "route": "note"
+      },
+      {
+       "kind": "delivering",
+       "scope": "s",
+       "deliveryId": "45546e68c47d033f",
+       "attempt": 1
+      },
+      {
+       "kind": "delivered",
+       "scope": "s",
+       "deliveryId": "45546e68c47d033f"
+      },
+      {
+       "kind": "ingested",
+       "scope": "s",
+       "count": 1,
+       "duplicates": 0
+      },
+      {
+       "kind": "settled",
+       "scope": "s",
+       "batchId": "3ecbd1f2ef91c276",
+       "reason": "closing",
+       "count": 1,
+       "merged": false
+      },
+      {
+       "kind": "judging",
+       "scope": "s",
+       "batchId": "3ecbd1f2ef91c276",
+       "attempt": 1,
+       "offerWait": true
+      },
+      {
+       "kind": "judged",
+       "scope": "s",
+       "batchId": "3ecbd1f2ef91c276",
+       "route": "note"
+      },
+      {
+       "kind": "delivering",
+       "scope": "s",
+       "deliveryId": "3ecbd1f2ef91c276",
+       "attempt": 1
+      },
+      {
+       "kind": "delivered",
+       "scope": "s",
+       "deliveryId": "3ecbd1f2ef91c276"
+      }
+     ]
+    },
+    "results": [
+     {
+      "step": 0,
+      "error": null
+     },
+     {
+      "step": 3,
+      "error": null
+     },
+     {
+      "step": 5,
+      "error": null
+     },
+     {
+      "step": 8,
+      "error": null
+     }
+    ],
+    "inspections": [
+     {
+      "step": 1,
+      "scope": "s",
+      "record": {
+       "version": 1,
+       "scope": "s",
+       "cursors": {},
+       "seen": [
+        "a",
+        "b"
+       ],
+       "buffer": {
+        "entries": [
+         {
+          "id": "a",
+          "at": 0,
+          "name": "close",
+          "data": {},
+          "text": "close a",
+          "observedAt": 10,
+          "quietForMs": 800,
+          "kind": "closing",
+          "seenAt": 100
+         },
+         {
+          "id": "b",
+          "at": 0,
+          "name": "close",
+          "data": {},
+          "text": "close b",
+          "kind": "closing",
+          "seenAt": 100
+         }
+        ],
+        "dropped": 0,
+        "gap": false,
+        "forcedAt": null
+       },
+       "batch": null,
+       "outbox": {
+        "decisions": [],
+        "deadLetters": []
+       },
+       "recent": [],
+       "dueAt": 810
+      }
+     },
+     {
+      "step": 6,
+      "scope": "s",
+      "record": {
+       "version": 3,
+       "scope": "s",
+       "cursors": {},
+       "seen": [
+        "a",
+        "b",
+        "c",
+        "d",
+        "e"
+       ],
+       "buffer": {
+        "entries": [
+         {
+          "id": "a",
+          "at": 0,
+          "name": "close",
+          "data": {},
+          "text": "close a",
+          "observedAt": 10,
+          "quietForMs": 800,
+          "kind": "closing",
+          "seenAt": 100
+         },
+         {
+          "id": "b",
+          "at": 0,
+          "name": "close",
+          "data": {},
+          "text": "close b",
+          "kind": "closing",
+          "seenAt": 100
+         },
+         {
+          "id": "c",
+          "at": 0,
+          "name": "close",
+          "data": {},
+          "text": "close c",
+          "kind": "closing",
+          "seenAt": 300
+         },
+         {
+          "id": "d",
+          "at": 0,
+          "name": "close",
+          "data": {},
+          "text": "close d",
+          "observedAt": 280,
+          "quietForMs": 0,
+          "kind": "closing",
+          "seenAt": 300
+         },
+         {
+          "id": "e",
+          "at": 0,
+          "name": "close",
+          "data": {},
+          "text": "close e",
+          "kind": "closing",
+          "seenAt": 311
+         }
+        ],
+        "dropped": 0,
+        "gap": false,
+        "forcedAt": null
+       },
+       "batch": null,
+       "outbox": {
+        "decisions": [],
+        "deadLetters": []
+       },
+       "recent": [],
+       "dueAt": 811
+      }
+     }
+    ],
+    "records": {
+     "s": {
+      "version": 10,
+      "scope": "s",
+      "cursors": {},
+      "seen": [
+       "a",
+       "b",
+       "c",
+       "d",
+       "e",
+       "f"
+      ],
+      "buffer": {
+       "entries": [],
+       "dropped": 0,
+       "gap": false,
+       "forcedAt": null
+      },
+      "batch": null,
+      "outbox": {
+       "decisions": [],
+       "deadLetters": []
+      },
+      "recent": [
+       {
+        "id": "45546e68c47d033f",
+        "route": "note",
+        "at": 811
+       },
+       {
+        "id": "3ecbd1f2ef91c276",
+        "route": "note",
+        "at": 811
+       }
+      ],
+      "dueAt": null
+     }
+    },
+    "log": [
+     {
+      "kind": "decision",
+      "id": "45546e68c47d033f",
+      "scope": "s",
+      "at": 811,
+      "route": "note",
+      "body": {
+       "id": "45546e68c47d033f",
+       "scope": "s",
+       "route": "note",
+       "probabilities": {
+        "interrupt": 0,
+        "queue": 0,
+        "note": 1,
+        "ask": 0,
+        "skip": 0,
+        "wait": 0
+       },
+       "predicates": {},
+       "confidence": null,
+       "window": {
+        "id": "45546e68c47d033f",
+        "events": [
+         {
+          "id": "a",
+          "at": 0,
+          "name": "close",
+          "data": {},
+          "text": "close a",
+          "observedAt": 10,
+          "quietForMs": 800,
+          "kind": "closing",
+          "seenAt": 100
+         },
+         {
+          "id": "b",
+          "at": 0,
+          "name": "close",
+          "data": {},
+          "text": "close b",
+          "kind": "closing",
+          "seenAt": 100
+         },
+         {
+          "id": "c",
+          "at": 0,
+          "name": "close",
+          "data": {},
+          "text": "close c",
+          "kind": "closing",
+          "seenAt": 300
+         },
+         {
+          "id": "d",
+          "at": 0,
+          "name": "close",
+          "data": {},
+          "text": "close d",
+          "observedAt": 280,
+          "quietForMs": 0,
+          "kind": "closing",
+          "seenAt": 300
+         },
+         {
+          "id": "e",
+          "at": 0,
+          "name": "close",
+          "data": {},
+          "text": "close e",
+          "kind": "closing",
+          "seenAt": 311
+         }
+        ],
+        "reason": "closing",
+        "waits": 0,
+        "dropped": 0,
+        "gap": false,
+        "settledAt": 811
+       },
+       "at": 811
+      },
+      "position": "1"
+     },
+     {
+      "kind": "decision",
+      "id": "3ecbd1f2ef91c276",
+      "scope": "s",
+      "at": 811,
+      "route": "note",
+      "body": {
+       "id": "3ecbd1f2ef91c276",
+       "scope": "s",
+       "route": "note",
+       "probabilities": {
+        "interrupt": 0,
+        "queue": 0,
+        "note": 1,
+        "ask": 0,
+        "skip": 0,
+        "wait": 0
+       },
+       "predicates": {},
+       "confidence": null,
+       "window": {
+        "id": "3ecbd1f2ef91c276",
+        "events": [
+         {
+          "id": "f",
+          "at": 0,
+          "name": "close",
+          "data": {},
+          "text": "close f",
+          "observedAt": 700,
+          "quietForMs": 0,
+          "kind": "closing",
+          "seenAt": 811
+         }
+        ],
+        "reason": "closing",
+        "waits": 0,
+        "dropped": 0,
+        "gap": false,
+        "settledAt": 811
+       },
+       "at": 811
+      },
+      "position": "2"
+     }
+    ]
+   }
+  },
+  {
+   "scenario": {
+    "name": "a completion applies only to acts admitted before it",
+    "start": 100,
+    "kinds": {
+     "close": "closing",
+     "say": "flush",
+     "drag": "continuous",
+     "look": "passive",
+     "out": "consequence",
+     "said": "context"
+    },
+    "judge": {
+     "*": {
+      "answers": [
+       {
+        "route": "note"
+       }
+      ]
+     }
+    },
+    "steps": [
+     {
+      "push": "s",
+      "events": [
+       {
+        "id": "early",
+        "name": "out",
+        "text": "out early",
+        "settles": true
+       },
+       {
+        "id": "act",
+        "name": "drag",
+        "text": "drag act"
+       }
+      ]
+     },
+     {
+      "inspect": "s"
+     },
+     {
+      "advance": 10
+     },
+     {
+      "push": "s",
+      "events": [
+       {
+        "id": "early",
+        "name": "out",
+        "text": "out early",
+        "settles": true
+       }
+      ]
+     },
+     {
+      "inspect": "s"
+     },
+     {
+      "push": "s",
+      "events": [
+       {
+        "id": "done",
+        "name": "out",
+        "text": "out done",
+        "observedAt": 105,
+        "settles": true
+       },
+       {
+        "id": "trailing",
+        "name": "out",
+        "text": "out trailing"
+       }
+      ]
+     },
+     {
+      "inspect": "s"
+     },
+     {
+      "push": "s",
+      "events": [
+       {
+        "id": "alone",
+        "name": "out",
+        "text": "out alone",
+        "settles": true
+       }
+      ]
+     },
+     {
+      "inspect": "s"
+     }
+    ]
+   },
+   "expected": {
+    "judgeCalls": {
+     "s": [
+      {
+       "scope": "s",
+       "window": {
+        "id": "b1cdf195ebcee12a",
+        "events": [
+         {
+          "id": "early",
+          "at": 0,
+          "name": "out",
+          "data": {},
+          "text": "out early",
+          "settles": true,
+          "kind": "consequence",
+          "seenAt": 100
+         },
+         {
+          "id": "act",
+          "at": 0,
+          "name": "drag",
+          "data": {},
+          "text": "drag act",
+          "kind": "continuous",
+          "seenAt": 100
+         },
+         {
+          "id": "done",
+          "at": 0,
+          "name": "out",
+          "data": {},
+          "text": "out done",
+          "observedAt": 105,
+          "settles": true,
+          "kind": "consequence",
+          "seenAt": 110
+         },
+         {
+          "id": "trailing",
+          "at": 0,
+          "name": "out",
+          "data": {},
+          "text": "out trailing",
+          "kind": "consequence",
+          "seenAt": 110
+         }
+        ],
+        "reason": "closing",
+        "waits": 0,
+        "dropped": 0,
+        "gap": false,
+        "settledAt": 110
+       },
+       "routes": [
+        {
+         "route": "interrupt"
+        },
+        {
+         "route": "queue"
+        },
+        {
+         "route": "note"
+        },
+        {
+         "route": "ask"
+        },
+        {
+         "route": "skip"
+        },
+        {
+         "route": "wait"
+        }
+       ],
+       "predicates": [],
+       "facts": {},
+       "recent": [],
+       "now": 110
+      }
+     ]
+    },
+    "deliveries": {
+     "s": [
+      {
+       "decision": {
+        "id": "b1cdf195ebcee12a",
+        "scope": "s",
+        "route": "note",
+        "probabilities": {
+         "interrupt": 0,
+         "queue": 0,
+         "note": 1,
+         "ask": 0,
+         "skip": 0,
+         "wait": 0
+        },
+        "predicates": {},
+        "confidence": null,
+        "window": {
+         "id": "b1cdf195ebcee12a",
+         "events": [
+          {
+           "id": "early",
+           "at": 0,
+           "name": "out",
+           "data": {},
+           "text": "out early",
+           "settles": true,
+           "kind": "consequence",
+           "seenAt": 100
+          },
+          {
+           "id": "act",
+           "at": 0,
+           "name": "drag",
+           "data": {},
+           "text": "drag act",
+           "kind": "continuous",
+           "seenAt": 100
+          },
+          {
+           "id": "done",
+           "at": 0,
+           "name": "out",
+           "data": {},
+           "text": "out done",
+           "observedAt": 105,
+           "settles": true,
+           "kind": "consequence",
+           "seenAt": 110
+          },
+          {
+           "id": "trailing",
+           "at": 0,
+           "name": "out",
+           "data": {},
+           "text": "out trailing",
+           "kind": "consequence",
+           "seenAt": 110
+          }
+         ],
+         "reason": "closing",
+         "waits": 0,
+         "dropped": 0,
+         "gap": false,
+         "settledAt": 110
+        },
+        "at": 110
+       },
+       "outcome": "ok"
+      }
+     ]
+    },
+    "deadLetterCalls": {},
+    "traces": {
+     "s": [
+      {
+       "kind": "ingested",
+       "scope": "s",
+       "count": 2,
+       "duplicates": 0
+      },
+      {
+       "kind": "ingested",
+       "scope": "s",
+       "count": 0,
+       "duplicates": 1
+      },
+      {
+       "kind": "ingested",
+       "scope": "s",
+       "count": 2,
+       "duplicates": 0
+      },
+      {
+       "kind": "settled",
+       "scope": "s",
+       "batchId": "b1cdf195ebcee12a",
+       "reason": "closing",
+       "count": 4,
+       "merged": false
+      },
+      {
+       "kind": "judging",
+       "scope": "s",
+       "batchId": "b1cdf195ebcee12a",
+       "attempt": 1,
+       "offerWait": true
+      },
+      {
+       "kind": "ingested",
+       "scope": "s",
+       "count": 1,
+       "duplicates": 0
+      },
+      {
+       "kind": "judged",
+       "scope": "s",
+       "batchId": "b1cdf195ebcee12a",
+       "route": "note"
+      },
+      {
+       "kind": "delivering",
+       "scope": "s",
+       "deliveryId": "b1cdf195ebcee12a",
+       "attempt": 1
+      },
+      {
+       "kind": "delivered",
+       "scope": "s",
+       "deliveryId": "b1cdf195ebcee12a"
+      }
+     ]
+    },
+    "results": [
+     {
+      "step": 0,
+      "error": null
+     },
+     {
+      "step": 3,
+      "error": null
+     },
+     {
+      "step": 5,
+      "error": null
+     },
+     {
+      "step": 7,
+      "error": null
+     }
+    ],
+    "inspections": [
+     {
+      "step": 1,
+      "scope": "s",
+      "record": {
+       "version": 1,
+       "scope": "s",
+       "cursors": {},
+       "seen": [
+        "early",
+        "act"
+       ],
+       "buffer": {
+        "entries": [
+         {
+          "id": "early",
+          "at": 0,
+          "name": "out",
+          "data": {},
+          "text": "out early",
+          "settles": true,
+          "kind": "consequence",
+          "seenAt": 100
+         },
+         {
+          "id": "act",
+          "at": 0,
+          "name": "drag",
+          "data": {},
+          "text": "drag act",
+          "kind": "continuous",
+          "seenAt": 100
+         }
+        ],
+        "dropped": 0,
+        "gap": false,
+        "forcedAt": null
+       },
+       "batch": null,
+       "outbox": {
+        "decisions": [],
+        "deadLetters": []
+       },
+       "recent": [],
+       "dueAt": 1100
+      }
+     },
+     {
+      "step": 4,
+      "scope": "s",
+      "record": {
+       "version": 1,
+       "scope": "s",
+       "cursors": {},
+       "seen": [
+        "early",
+        "act"
+       ],
+       "buffer": {
+        "entries": [
+         {
+          "id": "early",
+          "at": 0,
+          "name": "out",
+          "data": {},
+          "text": "out early",
+          "settles": true,
+          "kind": "consequence",
+          "seenAt": 100
+         },
+         {
+          "id": "act",
+          "at": 0,
+          "name": "drag",
+          "data": {},
+          "text": "drag act",
+          "kind": "continuous",
+          "seenAt": 100
+         }
+        ],
+        "dropped": 0,
+        "gap": false,
+        "forcedAt": null
+       },
+       "batch": null,
+       "outbox": {
+        "decisions": [],
+        "deadLetters": []
+       },
+       "recent": [],
+       "dueAt": 1100
+      }
+     },
+     {
+      "step": 6,
+      "scope": "s",
+      "record": {
+       "version": 2,
+       "scope": "s",
+       "cursors": {},
+       "seen": [
+        "early",
+        "act",
+        "done",
+        "trailing"
+       ],
+       "buffer": {
+        "entries": [
+         {
+          "id": "early",
+          "at": 0,
+          "name": "out",
+          "data": {},
+          "text": "out early",
+          "settles": true,
+          "kind": "consequence",
+          "seenAt": 100
+         },
+         {
+          "id": "act",
+          "at": 0,
+          "name": "drag",
+          "data": {},
+          "text": "drag act",
+          "kind": "continuous",
+          "seenAt": 100
+         },
+         {
+          "id": "done",
+          "at": 0,
+          "name": "out",
+          "data": {},
+          "text": "out done",
+          "observedAt": 105,
+          "settles": true,
+          "kind": "consequence",
+          "seenAt": 110
+         },
+         {
+          "id": "trailing",
+          "at": 0,
+          "name": "out",
+          "data": {},
+          "text": "out trailing",
+          "kind": "consequence",
+          "seenAt": 110
+         }
+        ],
+        "dropped": 0,
+        "gap": false,
+        "forcedAt": null,
+        "endedAt": 105
+       },
+       "batch": null,
+       "outbox": {
+        "decisions": [],
+        "deadLetters": []
+       },
+       "recent": [],
+       "dueAt": 105
+      }
+     },
+     {
+      "step": 8,
+      "scope": "s",
+      "record": {
+       "version": 6,
+       "scope": "s",
+       "cursors": {},
+       "seen": [
+        "early",
+        "act",
+        "done",
+        "trailing",
+        "alone"
+       ],
+       "buffer": {
+        "entries": [
+         {
+          "id": "alone",
+          "at": 0,
+          "name": "out",
+          "data": {},
+          "text": "out alone",
+          "settles": true,
+          "kind": "consequence",
+          "seenAt": 110
+         }
+        ],
+        "dropped": 0,
+        "gap": false,
+        "forcedAt": null
+       },
+       "batch": null,
+       "outbox": {
+        "decisions": [],
+        "deadLetters": []
+       },
+       "recent": [
+        {
+         "id": "b1cdf195ebcee12a",
+         "route": "note",
+         "at": 110
+        }
+       ],
+       "dueAt": null
+      }
+     }
+    ],
+    "records": {
+     "s": {
+      "version": 6,
+      "scope": "s",
+      "cursors": {},
+      "seen": [
+       "early",
+       "act",
+       "done",
+       "trailing",
+       "alone"
+      ],
+      "buffer": {
+       "entries": [
+        {
+         "id": "alone",
+         "at": 0,
+         "name": "out",
+         "data": {},
+         "text": "out alone",
+         "settles": true,
+         "kind": "consequence",
+         "seenAt": 110
+        }
+       ],
+       "dropped": 0,
+       "gap": false,
+       "forcedAt": null
+      },
+      "batch": null,
+      "outbox": {
+       "decisions": [],
+       "deadLetters": []
+      },
+      "recent": [
+       {
+        "id": "b1cdf195ebcee12a",
+        "route": "note",
+        "at": 110
+       }
+      ],
+      "dueAt": null
+     }
+    },
+    "log": [
+     {
+      "kind": "decision",
+      "id": "b1cdf195ebcee12a",
+      "scope": "s",
+      "at": 110,
+      "route": "note",
+      "body": {
+       "id": "b1cdf195ebcee12a",
+       "scope": "s",
+       "route": "note",
+       "probabilities": {
+        "interrupt": 0,
+        "queue": 0,
+        "note": 1,
+        "ask": 0,
+        "skip": 0,
+        "wait": 0
+       },
+       "predicates": {},
+       "confidence": null,
+       "window": {
+        "id": "b1cdf195ebcee12a",
+        "events": [
+         {
+          "id": "early",
+          "at": 0,
+          "name": "out",
+          "data": {},
+          "text": "out early",
+          "settles": true,
+          "kind": "consequence",
+          "seenAt": 100
+         },
+         {
+          "id": "act",
+          "at": 0,
+          "name": "drag",
+          "data": {},
+          "text": "drag act",
+          "kind": "continuous",
+          "seenAt": 100
+         },
+         {
+          "id": "done",
+          "at": 0,
+          "name": "out",
+          "data": {},
+          "text": "out done",
+          "observedAt": 105,
+          "settles": true,
+          "kind": "consequence",
+          "seenAt": 110
+         },
+         {
+          "id": "trailing",
+          "at": 0,
+          "name": "out",
+          "data": {},
+          "text": "out trailing",
+          "kind": "consequence",
+          "seenAt": 110
+         }
+        ],
+        "reason": "closing",
+        "waits": 0,
+        "dropped": 0,
+        "gap": false,
+        "settledAt": 110
+       },
+       "at": 110
+      },
+      "position": "1"
+     }
+    ]
+   }
+  },
+  {
+   "scenario": {
+    "name": "ordered completion overrides stream quiet through serial intake",
+    "start": 100,
+    "kinds": {
+     "close": "closing",
+     "say": "flush",
+     "drag": "continuous",
+     "look": "passive",
+     "out": "consequence",
+     "said": "context"
+    },
+    "intakes": [
+     "s"
+    ],
+    "judge": {
+     "*": {
+      "answers": [
+       {
+        "route": "note"
+       }
+      ]
+     }
+    },
+    "steps": [
+     {
+      "submit": "s",
+      "events": [
+       {
+        "id": "a",
+        "name": "close",
+        "text": "close a",
+        "quietForMs": 2000
+       },
+       {
+        "id": "b",
+        "name": "drag",
+        "text": "drag b",
+        "quietForMs": 1900
+       }
+      ]
+     },
+     {
+      "advance": 10
+     },
+     {
+      "submit": "s",
+      "events": [
+       {
+        "id": "wrong",
+        "name": "close",
+        "text": "close wrong",
+        "settles": true
+       }
+      ],
+      "source": "feed",
+      "cursor": "1"
+     },
+     {
+      "inspect": "s"
+     },
+     {
+      "submit": "s",
+      "events": [
+       {
+        "id": "done",
+        "name": "out",
+        "text": "out done",
+        "settles": true
+       }
+      ],
+      "source": "feed",
+      "cursor": "2"
+     },
+     {
+      "inspect": "s"
+     }
+    ]
+   },
+   "expected": {
+    "judgeCalls": {
+     "s": [
+      {
+       "scope": "s",
+       "window": {
+        "id": "de2e9a837d937444",
+        "events": [
+         {
+          "id": "a",
+          "at": 0,
+          "name": "close",
+          "data": {},
+          "text": "close a",
+          "quietForMs": 2000,
+          "kind": "closing",
+          "seenAt": 100
+         },
+         {
+          "id": "b",
+          "at": 0,
+          "name": "drag",
+          "data": {},
+          "text": "drag b",
+          "quietForMs": 1900,
+          "kind": "continuous",
+          "seenAt": 100
+         },
+         {
+          "id": "done",
+          "at": 0,
+          "name": "out",
+          "data": {},
+          "text": "out done",
+          "settles": true,
+          "kind": "consequence",
+          "seenAt": 110
+         }
+        ],
+        "reason": "closing",
+        "waits": 0,
+        "dropped": 0,
+        "gap": false,
+        "settledAt": 110
+       },
+       "routes": [
+        {
+         "route": "interrupt"
+        },
+        {
+         "route": "queue"
+        },
+        {
+         "route": "note"
+        },
+        {
+         "route": "ask"
+        },
+        {
+         "route": "skip"
+        },
+        {
+         "route": "wait"
+        }
+       ],
+       "predicates": [],
+       "facts": {},
+       "recent": [],
+       "now": 110
+      }
+     ]
+    },
+    "deliveries": {
+     "s": [
+      {
+       "decision": {
+        "id": "de2e9a837d937444",
+        "scope": "s",
+        "route": "note",
+        "probabilities": {
+         "interrupt": 0,
+         "queue": 0,
+         "note": 1,
+         "ask": 0,
+         "skip": 0,
+         "wait": 0
+        },
+        "predicates": {},
+        "confidence": null,
+        "window": {
+         "id": "de2e9a837d937444",
+         "events": [
+          {
+           "id": "a",
+           "at": 0,
+           "name": "close",
+           "data": {},
+           "text": "close a",
+           "quietForMs": 2000,
+           "kind": "closing",
+           "seenAt": 100
+          },
+          {
+           "id": "b",
+           "at": 0,
+           "name": "drag",
+           "data": {},
+           "text": "drag b",
+           "quietForMs": 1900,
+           "kind": "continuous",
+           "seenAt": 100
+          },
+          {
+           "id": "done",
+           "at": 0,
+           "name": "out",
+           "data": {},
+           "text": "out done",
+           "settles": true,
+           "kind": "consequence",
+           "seenAt": 110
+          }
+         ],
+         "reason": "closing",
+         "waits": 0,
+         "dropped": 0,
+         "gap": false,
+         "settledAt": 110
+        },
+        "at": 110
+       },
+       "outcome": "ok"
+      }
+     ]
+    },
+    "deadLetterCalls": {},
+    "traces": {
+     "s": [
+      {
+       "kind": "ingested",
+       "scope": "s",
+       "count": 2,
+       "duplicates": 0
+      },
+      {
+       "kind": "ingested",
+       "scope": "s",
+       "count": 1,
+       "duplicates": 0
+      },
+      {
+       "kind": "settled",
+       "scope": "s",
+       "batchId": "de2e9a837d937444",
+       "reason": "closing",
+       "count": 3,
+       "merged": false
+      },
+      {
+       "kind": "judging",
+       "scope": "s",
+       "batchId": "de2e9a837d937444",
+       "attempt": 1,
+       "offerWait": true
+      },
+      {
+       "kind": "judged",
+       "scope": "s",
+       "batchId": "de2e9a837d937444",
+       "route": "note"
+      },
+      {
+       "kind": "delivering",
+       "scope": "s",
+       "deliveryId": "de2e9a837d937444",
+       "attempt": 1
+      },
+      {
+       "kind": "delivered",
+       "scope": "s",
+       "deliveryId": "de2e9a837d937444"
+      }
+     ]
+    },
+    "results": [
+     {
+      "step": 0,
+      "error": null
+     },
+     {
+      "step": 2,
+      "error": {
+       "name": "TypeError",
+       "message": "attend: settles requires a consequence event"
+      }
+     },
+     {
+      "step": 4,
+      "error": null
+     }
+    ],
+    "inspections": [
+     {
+      "step": 3,
+      "scope": "s",
+      "record": {
+       "version": 1,
+       "scope": "s",
+       "cursors": {},
+       "seen": [
+        "a",
+        "b"
+       ],
+       "buffer": {
+        "entries": [
+         {
+          "id": "a",
+          "at": 0,
+          "name": "close",
+          "data": {},
+          "text": "close a",
+          "quietForMs": 2000,
+          "kind": "closing",
+          "seenAt": 100
+         },
+         {
+          "id": "b",
+          "at": 0,
+          "name": "drag",
+          "data": {},
+          "text": "drag b",
+          "quietForMs": 1900,
+          "kind": "continuous",
+          "seenAt": 100
+         }
+        ],
+        "dropped": 0,
+        "gap": false,
+        "forcedAt": null
+       },
+       "batch": null,
+       "outbox": {
+        "decisions": [],
+        "deadLetters": []
+       },
+       "recent": [],
+       "dueAt": 2000
+      }
+     },
+     {
+      "step": 5,
+      "scope": "s",
+      "record": {
+       "version": 5,
+       "scope": "s",
+       "cursors": {
+        "feed": "2"
+       },
+       "seen": [
+        "a",
+        "b",
+        "done"
+       ],
+       "buffer": {
+        "entries": [],
+        "dropped": 0,
+        "gap": false,
+        "forcedAt": null
+       },
+       "batch": null,
+       "outbox": {
+        "decisions": [],
+        "deadLetters": []
+       },
+       "recent": [
+        {
+         "id": "de2e9a837d937444",
+         "route": "note",
+         "at": 110
+        }
+       ],
+       "dueAt": null
+      }
+     }
+    ],
+    "records": {
+     "s": {
+      "version": 5,
+      "scope": "s",
+      "cursors": {
+       "feed": "2"
+      },
+      "seen": [
+       "a",
+       "b",
+       "done"
+      ],
+      "buffer": {
+       "entries": [],
+       "dropped": 0,
+       "gap": false,
+       "forcedAt": null
+      },
+      "batch": null,
+      "outbox": {
+       "decisions": [],
+       "deadLetters": []
+      },
+      "recent": [
+       {
+        "id": "de2e9a837d937444",
+        "route": "note",
+        "at": 110
+       }
+      ],
+      "dueAt": null
+     }
+    },
+    "log": [
+     {
+      "kind": "decision",
+      "id": "de2e9a837d937444",
+      "scope": "s",
+      "at": 110,
+      "route": "note",
+      "body": {
+       "id": "de2e9a837d937444",
+       "scope": "s",
+       "route": "note",
+       "probabilities": {
+        "interrupt": 0,
+        "queue": 0,
+        "note": 1,
+        "ask": 0,
+        "skip": 0,
+        "wait": 0
+       },
+       "predicates": {},
+       "confidence": null,
+       "window": {
+        "id": "de2e9a837d937444",
+        "events": [
+         {
+          "id": "a",
+          "at": 0,
+          "name": "close",
+          "data": {},
+          "text": "close a",
+          "quietForMs": 2000,
+          "kind": "closing",
+          "seenAt": 100
+         },
+         {
+          "id": "b",
+          "at": 0,
+          "name": "drag",
+          "data": {},
+          "text": "drag b",
+          "quietForMs": 1900,
+          "kind": "continuous",
+          "seenAt": 100
+         },
+         {
+          "id": "done",
+          "at": 0,
+          "name": "out",
+          "data": {},
+          "text": "out done",
+          "settles": true,
+          "kind": "consequence",
+          "seenAt": 110
+         }
+        ],
+        "reason": "closing",
+        "waits": 0,
+        "dropped": 0,
+        "gap": false,
+        "settledAt": 110
+       },
+       "at": 110
+      },
+      "position": "1"
+     }
+    ]
+   }
+  },
+  {
+   "scenario": {
+    "name": "after wait only a fresh act can give a completion effect",
+    "start": 100,
+    "kinds": {
+     "close": "closing",
+     "say": "flush",
+     "drag": "continuous",
+     "look": "passive",
+     "out": "consequence",
+     "said": "context"
+    },
+    "intakes": [
+     "s"
+    ],
+    "settle": {
+     "continuation": "accumulate",
+     "waitHorizonMs": 100
+    },
+    "judge": {
+     "*": {
+      "answers": [
+       {
+        "route": "wait"
+       },
+       {
+        "route": "note"
+       }
+      ]
+     }
+    },
+    "steps": [
+     {
+      "submit": "s",
+      "events": [
+       {
+        "id": "a",
+        "name": "close",
+        "text": "close a",
+        "quietForMs": 2000
+       },
+       {
+        "id": "done",
+        "name": "out",
+        "text": "out done",
+        "settles": true
+       }
+      ]
+     },
+     {
+      "advance": 10
+     },
+     {
+      "submit": "s",
+      "events": [
+       {
+        "id": "held-only",
+        "name": "out",
+        "text": "out held-only",
+        "settles": true
+       }
+      ]
+     },
+     {
+      "inspect": "s"
+     },
+     {
+      "submit": "s",
+      "events": [
+       {
+        "id": "b",
+        "name": "close",
+        "text": "close b",
+        "quietForMs": 2000
+       }
+      ]
+     },
+     {
+      "inspect": "s"
+     },
+     {
+      "advance": 10
+     },
+     {
+      "submit": "s",
+      "events": [
+       {
+        "id": "fresh-done",
+        "name": "out",
+        "text": "out fresh-done",
+        "settles": true
+       }
+      ]
+     }
+    ]
+   },
+   "expected": {
+    "judgeCalls": {
+     "s": [
+      {
+       "scope": "s",
+       "window": {
+        "id": "95912af0dc2a4b0d",
+        "events": [
+         {
+          "id": "a",
+          "at": 0,
+          "name": "close",
+          "data": {},
+          "text": "close a",
+          "quietForMs": 2000,
+          "kind": "closing",
+          "seenAt": 100
+         },
+         {
+          "id": "done",
+          "at": 0,
+          "name": "out",
+          "data": {},
+          "text": "out done",
+          "settles": true,
+          "kind": "consequence",
+          "seenAt": 100
+         }
+        ],
+        "reason": "closing",
+        "waits": 0,
+        "dropped": 0,
+        "gap": false,
+        "settledAt": 100
+       },
+       "routes": [
+        {
+         "route": "interrupt"
+        },
+        {
+         "route": "queue"
+        },
+        {
+         "route": "note"
+        },
+        {
+         "route": "ask"
+        },
+        {
+         "route": "skip"
+        },
+        {
+         "route": "wait"
+        }
+       ],
+       "predicates": [],
+       "facts": {},
+       "recent": [],
+       "now": 100
+      },
+      {
+       "scope": "s",
+       "window": {
+        "id": "e470113cd11322bd",
+        "events": [
+         {
+          "id": "a",
+          "at": 0,
+          "name": "close",
+          "data": {},
+          "text": "close a",
+          "quietForMs": 2000,
+          "kind": "closing",
+          "seenAt": 100
+         },
+         {
+          "id": "done",
+          "at": 0,
+          "name": "out",
+          "data": {},
+          "text": "out done",
+          "settles": true,
+          "kind": "consequence",
+          "seenAt": 100
+         },
+         {
+          "id": "held-only",
+          "at": 0,
+          "name": "out",
+          "data": {},
+          "text": "out held-only",
+          "settles": true,
+          "kind": "consequence",
+          "seenAt": 110
+         },
+         {
+          "id": "b",
+          "at": 0,
+          "name": "close",
+          "data": {},
+          "text": "close b",
+          "quietForMs": 2000,
+          "kind": "closing",
+          "seenAt": 110
+         },
+         {
+          "id": "fresh-done",
+          "at": 0,
+          "name": "out",
+          "data": {},
+          "text": "out fresh-done",
+          "settles": true,
+          "kind": "consequence",
+          "seenAt": 120
+         }
+        ],
+        "reason": "closing",
+        "waits": 1,
+        "dropped": 0,
+        "gap": false,
+        "settledAt": 120
+       },
+       "routes": [
+        {
+         "route": "interrupt"
+        },
+        {
+         "route": "queue"
+        },
+        {
+         "route": "note"
+        },
+        {
+         "route": "ask"
+        },
+        {
+         "route": "skip"
+        },
+        {
+         "route": "wait"
+        }
+       ],
+       "predicates": [],
+       "facts": {},
+       "recent": [],
+       "now": 120
+      }
+     ]
+    },
+    "deliveries": {
+     "s": [
+      {
+       "decision": {
+        "id": "e470113cd11322bd",
+        "scope": "s",
+        "route": "note",
+        "probabilities": {
+         "interrupt": 0,
+         "queue": 0,
+         "note": 1,
+         "ask": 0,
+         "skip": 0,
+         "wait": 0
+        },
+        "predicates": {},
+        "confidence": null,
+        "window": {
+         "id": "e470113cd11322bd",
+         "events": [
+          {
+           "id": "a",
+           "at": 0,
+           "name": "close",
+           "data": {},
+           "text": "close a",
+           "quietForMs": 2000,
+           "kind": "closing",
+           "seenAt": 100
+          },
+          {
+           "id": "done",
+           "at": 0,
+           "name": "out",
+           "data": {},
+           "text": "out done",
+           "settles": true,
+           "kind": "consequence",
+           "seenAt": 100
+          },
+          {
+           "id": "held-only",
+           "at": 0,
+           "name": "out",
+           "data": {},
+           "text": "out held-only",
+           "settles": true,
+           "kind": "consequence",
+           "seenAt": 110
+          },
+          {
+           "id": "b",
+           "at": 0,
+           "name": "close",
+           "data": {},
+           "text": "close b",
+           "quietForMs": 2000,
+           "kind": "closing",
+           "seenAt": 110
+          },
+          {
+           "id": "fresh-done",
+           "at": 0,
+           "name": "out",
+           "data": {},
+           "text": "out fresh-done",
+           "settles": true,
+           "kind": "consequence",
+           "seenAt": 120
+          }
+         ],
+         "reason": "closing",
+         "waits": 1,
+         "dropped": 0,
+         "gap": false,
+         "settledAt": 120
+        },
+        "at": 120
+       },
+       "outcome": "ok"
+      }
+     ]
+    },
+    "deadLetterCalls": {},
+    "traces": {
+     "s": [
+      {
+       "kind": "ingested",
+       "scope": "s",
+       "count": 2,
+       "duplicates": 0
+      },
+      {
+       "kind": "settled",
+       "scope": "s",
+       "batchId": "95912af0dc2a4b0d",
+       "reason": "closing",
+       "count": 2,
+       "merged": false
+      },
+      {
+       "kind": "judging",
+       "scope": "s",
+       "batchId": "95912af0dc2a4b0d",
+       "attempt": 1,
+       "offerWait": true
+      },
+      {
+       "kind": "waiting",
+       "scope": "s",
+       "batchId": "95912af0dc2a4b0d",
+       "waits": 1,
+       "until": 200
+      },
+      {
+       "kind": "ingested",
+       "scope": "s",
+       "count": 1,
+       "duplicates": 0
+      },
+      {
+       "kind": "ingested",
+       "scope": "s",
+       "count": 1,
+       "duplicates": 0
+      },
+      {
+       "kind": "ingested",
+       "scope": "s",
+       "count": 1,
+       "duplicates": 0
+      },
+      {
+       "kind": "settled",
+       "scope": "s",
+       "batchId": "e470113cd11322bd",
+       "reason": "closing",
+       "count": 5,
+       "merged": true
+      },
+      {
+       "kind": "judging",
+       "scope": "s",
+       "batchId": "e470113cd11322bd",
+       "attempt": 2,
+       "offerWait": true
+      },
+      {
+       "kind": "judged",
+       "scope": "s",
+       "batchId": "e470113cd11322bd",
+       "route": "note"
+      },
+      {
+       "kind": "delivering",
+       "scope": "s",
+       "deliveryId": "e470113cd11322bd",
+       "attempt": 1
+      },
+      {
+       "kind": "delivered",
+       "scope": "s",
+       "deliveryId": "e470113cd11322bd"
+      }
+     ]
+    },
+    "results": [
+     {
+      "step": 0,
+      "error": null
+     },
+     {
+      "step": 2,
+      "error": null
+     },
+     {
+      "step": 4,
+      "error": null
+     },
+     {
+      "step": 7,
+      "error": null
+     }
+    ],
+    "inspections": [
+     {
+      "step": 3,
+      "scope": "s",
+      "record": {
+       "version": 4,
+       "scope": "s",
+       "cursors": {},
+       "seen": [
+        "a",
+        "done",
+        "held-only"
+       ],
+       "buffer": {
+        "entries": [
+         {
+          "id": "held-only",
+          "at": 0,
+          "name": "out",
+          "data": {},
+          "text": "out held-only",
+          "settles": true,
+          "kind": "consequence",
+          "seenAt": 110
+         }
+        ],
+        "dropped": 0,
+        "gap": false,
+        "forcedAt": null
+       },
+       "batch": {
+        "window": {
+         "id": "95912af0dc2a4b0d",
+         "events": [
+          {
+           "id": "a",
+           "at": 0,
+           "name": "close",
+           "data": {},
+           "text": "close a",
+           "quietForMs": 2000,
+           "kind": "closing",
+           "seenAt": 100
+          },
+          {
+           "id": "done",
+           "at": 0,
+           "name": "out",
+           "data": {},
+           "text": "out done",
+           "settles": true,
+           "kind": "consequence",
+           "seenAt": 100
+          }
+         ],
+         "reason": "closing",
+         "waits": 1,
+         "dropped": 0,
+         "gap": false,
+         "settledAt": 100
+        },
+        "phase": {
+         "phase": "waiting",
+         "attempt": 1,
+         "until": 200,
+         "failures": 0
+        }
+       },
+       "outbox": {
+        "decisions": [],
+        "deadLetters": []
+       },
+       "recent": [],
+       "dueAt": 200
+      }
+     },
+     {
+      "step": 5,
+      "scope": "s",
+      "record": {
+       "version": 5,
+       "scope": "s",
+       "cursors": {},
+       "seen": [
+        "a",
+        "done",
+        "held-only",
+        "b"
+       ],
+       "buffer": {
+        "entries": [
+         {
+          "id": "held-only",
+          "at": 0,
+          "name": "out",
+          "data": {},
+          "text": "out held-only",
+          "settles": true,
+          "kind": "consequence",
+          "seenAt": 110
+         },
+         {
+          "id": "b",
+          "at": 0,
+          "name": "close",
+          "data": {},
+          "text": "close b",
+          "quietForMs": 2000,
+          "kind": "closing",
+          "seenAt": 110
+         }
+        ],
+        "dropped": 0,
+        "gap": false,
+        "forcedAt": null
+       },
+       "batch": {
+        "window": {
+         "id": "95912af0dc2a4b0d",
+         "events": [
+          {
+           "id": "a",
+           "at": 0,
+           "name": "close",
+           "data": {},
+           "text": "close a",
+           "quietForMs": 2000,
+           "kind": "closing",
+           "seenAt": 100
+          },
+          {
+           "id": "done",
+           "at": 0,
+           "name": "out",
+           "data": {},
+           "text": "out done",
+           "settles": true,
+           "kind": "consequence",
+           "seenAt": 100
+          }
+         ],
+         "reason": "closing",
+         "waits": 1,
+         "dropped": 0,
+         "gap": false,
+         "settledAt": 100
+        },
+        "phase": {
+         "phase": "waiting",
+         "attempt": 1,
+         "until": 200,
+         "failures": 0
+        }
+       },
+       "outbox": {
+        "decisions": [],
+        "deadLetters": []
+       },
+       "recent": [],
+       "dueAt": 200
+      }
+     }
+    ],
+    "records": {
+     "s": {
+      "version": 9,
+      "scope": "s",
+      "cursors": {},
+      "seen": [
+       "a",
+       "done",
+       "held-only",
+       "b",
+       "fresh-done"
+      ],
+      "buffer": {
+       "entries": [],
+       "dropped": 0,
+       "gap": false,
+       "forcedAt": null
+      },
+      "batch": null,
+      "outbox": {
+       "decisions": [],
+       "deadLetters": []
+      },
+      "recent": [
+       {
+        "id": "e470113cd11322bd",
+        "route": "note",
+        "at": 120
+       }
+      ],
+      "dueAt": null
+     }
+    },
+    "log": [
+     {
+      "kind": "decision",
+      "id": "e470113cd11322bd",
+      "scope": "s",
+      "at": 120,
+      "route": "note",
+      "body": {
+       "id": "e470113cd11322bd",
+       "scope": "s",
+       "route": "note",
+       "probabilities": {
+        "interrupt": 0,
+        "queue": 0,
+        "note": 1,
+        "ask": 0,
+        "skip": 0,
+        "wait": 0
+       },
+       "predicates": {},
+       "confidence": null,
+       "window": {
+        "id": "e470113cd11322bd",
+        "events": [
+         {
+          "id": "a",
+          "at": 0,
+          "name": "close",
+          "data": {},
+          "text": "close a",
+          "quietForMs": 2000,
+          "kind": "closing",
+          "seenAt": 100
+         },
+         {
+          "id": "done",
+          "at": 0,
+          "name": "out",
+          "data": {},
+          "text": "out done",
+          "settles": true,
+          "kind": "consequence",
+          "seenAt": 100
+         },
+         {
+          "id": "held-only",
+          "at": 0,
+          "name": "out",
+          "data": {},
+          "text": "out held-only",
+          "settles": true,
+          "kind": "consequence",
+          "seenAt": 110
+         },
+         {
+          "id": "b",
+          "at": 0,
+          "name": "close",
+          "data": {},
+          "text": "close b",
+          "quietForMs": 2000,
+          "kind": "closing",
+          "seenAt": 110
+         },
+         {
+          "id": "fresh-done",
+          "at": 0,
+          "name": "out",
+          "data": {},
+          "text": "out fresh-done",
+          "settles": true,
+          "kind": "consequence",
+          "seenAt": 120
+         }
+        ],
+        "reason": "closing",
+        "waits": 1,
+        "dropped": 0,
+        "gap": false,
+        "settledAt": 120
+       },
+       "at": 120
+      },
+      "position": "1"
+     }
+    ]
+   }
+  },
+  {
+   "scenario": {
+    "name": "completion preserves the accumulating retry deadline",
+    "start": 100,
+    "kinds": {
+     "close": "closing",
+     "say": "flush",
+     "drag": "continuous",
+     "look": "passive",
+     "out": "consequence",
+     "said": "context"
+    },
+    "intakes": [
+     "s"
+    ],
+    "settle": {
+     "continuation": "accumulate",
+     "retryBackoffMs": [
+      40
+     ]
+    },
+    "judge": {
+     "*": {
+      "answers": [
+       {
+        "fail": "outage"
+       },
+       {
+        "route": "note"
+       }
+      ]
+     }
+    },
+    "steps": [
+     {
+      "submit": "s",
+      "events": [
+       {
+        "id": "a",
+        "name": "drag",
+        "text": "drag a",
+        "quietForMs": 0
+       }
+      ]
+     },
+     {
+      "advance": 10
+     },
+     {
+      "submit": "s",
+      "events": [
+       {
+        "id": "b",
+        "name": "drag",
+        "text": "drag b"
+       },
+       {
+        "id": "done",
+        "name": "out",
+        "text": "out done",
+        "settles": true
+       }
+      ]
+     },
+     {
+      "advance": 29
+     },
+     {
+      "inspect": "s"
+     },
+     {
+      "advance": 1
+     }
+    ]
+   },
+   "expected": {
+    "judgeCalls": {
+     "s": [
+      {
+       "scope": "s",
+       "window": {
+        "id": "3ecbd4f2ef91c78f",
+        "events": [
+         {
+          "id": "a",
+          "at": 0,
+          "name": "drag",
+          "data": {},
+          "text": "drag a",
+          "quietForMs": 0,
+          "kind": "continuous",
+          "seenAt": 100
+         }
+        ],
+        "reason": "stream_quiet",
+        "waits": 0,
+        "dropped": 0,
+        "gap": false,
+        "settledAt": 100
+       },
+       "routes": [
+        {
+         "route": "interrupt"
+        },
+        {
+         "route": "queue"
+        },
+        {
+         "route": "note"
+        },
+        {
+         "route": "ask"
+        },
+        {
+         "route": "skip"
+        },
+        {
+         "route": "wait"
+        }
+       ],
+       "predicates": [],
+       "facts": {},
+       "recent": [],
+       "now": 100
+      },
+      {
+       "scope": "s",
+       "window": {
+        "id": "de2e9a837d937444",
+        "events": [
+         {
+          "id": "a",
+          "at": 0,
+          "name": "drag",
+          "data": {},
+          "text": "drag a",
+          "quietForMs": 0,
+          "kind": "continuous",
+          "seenAt": 100
+         },
+         {
+          "id": "b",
+          "at": 0,
+          "name": "drag",
+          "data": {},
+          "text": "drag b",
+          "kind": "continuous",
+          "seenAt": 110
+         },
+         {
+          "id": "done",
+          "at": 0,
+          "name": "out",
+          "data": {},
+          "text": "out done",
+          "settles": true,
+          "kind": "consequence",
+          "seenAt": 110
+         }
+        ],
+        "reason": "closing",
+        "waits": 0,
+        "dropped": 0,
+        "gap": false,
+        "settledAt": 140
+       },
+       "routes": [
+        {
+         "route": "interrupt"
+        },
+        {
+         "route": "queue"
+        },
+        {
+         "route": "note"
+        },
+        {
+         "route": "ask"
+        },
+        {
+         "route": "skip"
+        },
+        {
+         "route": "wait"
+        }
+       ],
+       "predicates": [],
+       "facts": {},
+       "recent": [],
+       "now": 140
+      }
+     ]
+    },
+    "deliveries": {
+     "s": [
+      {
+       "decision": {
+        "id": "de2e9a837d937444",
+        "scope": "s",
+        "route": "note",
+        "probabilities": {
+         "interrupt": 0,
+         "queue": 0,
+         "note": 1,
+         "ask": 0,
+         "skip": 0,
+         "wait": 0
+        },
+        "predicates": {},
+        "confidence": null,
+        "window": {
+         "id": "de2e9a837d937444",
+         "events": [
+          {
+           "id": "a",
+           "at": 0,
+           "name": "drag",
+           "data": {},
+           "text": "drag a",
+           "quietForMs": 0,
+           "kind": "continuous",
+           "seenAt": 100
+          },
+          {
+           "id": "b",
+           "at": 0,
+           "name": "drag",
+           "data": {},
+           "text": "drag b",
+           "kind": "continuous",
+           "seenAt": 110
+          },
+          {
+           "id": "done",
+           "at": 0,
+           "name": "out",
+           "data": {},
+           "text": "out done",
+           "settles": true,
+           "kind": "consequence",
+           "seenAt": 110
+          }
+         ],
+         "reason": "closing",
+         "waits": 0,
+         "dropped": 0,
+         "gap": false,
+         "settledAt": 140
+        },
+        "at": 140
+       },
+       "outcome": "ok"
+      }
+     ]
+    },
+    "deadLetterCalls": {},
+    "traces": {
+     "s": [
+      {
+       "kind": "ingested",
+       "scope": "s",
+       "count": 1,
+       "duplicates": 0
+      },
+      {
+       "kind": "settled",
+       "scope": "s",
+       "batchId": "3ecbd4f2ef91c78f",
+       "reason": "stream_quiet",
+       "count": 1,
+       "merged": false
+      },
+      {
+       "kind": "judging",
+       "scope": "s",
+       "batchId": "3ecbd4f2ef91c78f",
+       "attempt": 1,
+       "offerWait": true
+      },
+      {
+       "kind": "retrying",
+       "scope": "s",
+       "stage": "judge",
+       "id": "3ecbd4f2ef91c78f",
+       "attempt": 1,
+       "at": 140,
+       "message": "outage"
+      },
+      {
+       "kind": "ingested",
+       "scope": "s",
+       "count": 2,
+       "duplicates": 0
+      },
+      {
+       "kind": "settled",
+       "scope": "s",
+       "batchId": "de2e9a837d937444",
+       "reason": "closing",
+       "count": 3,
+       "merged": true
+      },
+      {
+       "kind": "judging",
+       "scope": "s",
+       "batchId": "de2e9a837d937444",
+       "attempt": 2,
+       "offerWait": true
+      },
+      {
+       "kind": "judged",
+       "scope": "s",
+       "batchId": "de2e9a837d937444",
+       "route": "note"
+      },
+      {
+       "kind": "delivering",
+       "scope": "s",
+       "deliveryId": "de2e9a837d937444",
+       "attempt": 1
+      },
+      {
+       "kind": "delivered",
+       "scope": "s",
+       "deliveryId": "de2e9a837d937444"
+      }
+     ]
+    },
+    "results": [
+     {
+      "step": 0,
+      "error": null
+     },
+     {
+      "step": 2,
+      "error": null
+     }
+    ],
+    "inspections": [
+     {
+      "step": 4,
+      "scope": "s",
+      "record": {
+       "version": 4,
+       "scope": "s",
+       "cursors": {},
+       "seen": [
+        "a",
+        "b",
+        "done"
+       ],
+       "buffer": {
+        "entries": [
+         {
+          "id": "b",
+          "at": 0,
+          "name": "drag",
+          "data": {},
+          "text": "drag b",
+          "kind": "continuous",
+          "seenAt": 110
+         },
+         {
+          "id": "done",
+          "at": 0,
+          "name": "out",
+          "data": {},
+          "text": "out done",
+          "settles": true,
+          "kind": "consequence",
+          "seenAt": 110
+         }
+        ],
+        "dropped": 0,
+        "gap": false,
+        "forcedAt": null,
+        "endedAt": 110
+       },
+       "batch": {
+        "window": {
+         "id": "3ecbd4f2ef91c78f",
+         "events": [
+          {
+           "id": "a",
+           "at": 0,
+           "name": "drag",
+           "data": {},
+           "text": "drag a",
+           "quietForMs": 0,
+           "kind": "continuous",
+           "seenAt": 100
+          }
+         ],
+         "reason": "stream_quiet",
+         "waits": 0,
+         "dropped": 0,
+         "gap": false,
+         "settledAt": 100
+        },
+        "phase": {
+         "phase": "retrying",
+         "attempt": 1,
+         "failures": 1,
+         "at": 140,
+         "offerWait": true
+        }
+       },
+       "outbox": {
+        "decisions": [],
+        "deadLetters": []
+       },
+       "recent": [],
+       "dueAt": 140
+      }
+     }
+    ],
+    "records": {
+     "s": {
+      "version": 7,
+      "scope": "s",
+      "cursors": {},
+      "seen": [
+       "a",
+       "b",
+       "done"
+      ],
+      "buffer": {
+       "entries": [],
+       "dropped": 0,
+       "gap": false,
+       "forcedAt": null
+      },
+      "batch": null,
+      "outbox": {
+       "decisions": [],
+       "deadLetters": []
+      },
+      "recent": [
+       {
+        "id": "de2e9a837d937444",
+        "route": "note",
+        "at": 140
+       }
+      ],
+      "dueAt": null
+     }
+    },
+    "log": [
+     {
+      "kind": "decision",
+      "id": "de2e9a837d937444",
+      "scope": "s",
+      "at": 140,
+      "route": "note",
+      "body": {
+       "id": "de2e9a837d937444",
+       "scope": "s",
+       "route": "note",
+       "probabilities": {
+        "interrupt": 0,
+        "queue": 0,
+        "note": 1,
+        "ask": 0,
+        "skip": 0,
+        "wait": 0
+       },
+       "predicates": {},
+       "confidence": null,
+       "window": {
+        "id": "de2e9a837d937444",
+        "events": [
+         {
+          "id": "a",
+          "at": 0,
+          "name": "drag",
+          "data": {},
+          "text": "drag a",
+          "quietForMs": 0,
+          "kind": "continuous",
+          "seenAt": 100
+         },
+         {
+          "id": "b",
+          "at": 0,
+          "name": "drag",
+          "data": {},
+          "text": "drag b",
+          "kind": "continuous",
+          "seenAt": 110
+         },
+         {
+          "id": "done",
+          "at": 0,
+          "name": "out",
+          "data": {},
+          "text": "out done",
+          "settles": true,
+          "kind": "consequence",
+          "seenAt": 110
+         }
+        ],
+        "reason": "closing",
+        "waits": 0,
+        "dropped": 0,
+        "gap": false,
+        "settledAt": 140
+       },
+       "at": 140
+      },
+      "position": "1"
+     }
+    ]
+   }
+  },
+  {
+   "scenario": {
+    "name": "completion takes effect before background retention",
+    "start": 100,
+    "kinds": {
+     "close": "closing",
+     "say": "flush",
+     "drag": "continuous",
+     "look": "passive",
+     "out": "consequence",
+     "said": "context"
+    },
+    "intakes": [
+     "s"
+    ],
+    "settle": {
+     "continuation": "accumulate",
+     "eventLimits": {
+      "counted": 3,
+      "background": 0
+     }
+    },
+    "judge": {
+     "*": {
+      "answers": [
+       {
+        "route": "note"
+       }
+      ]
+     }
+    },
+    "steps": [
+     {
+      "submit": "s",
+      "events": [
+       {
+        "id": "a",
+        "name": "close",
+        "text": "close a"
+       },
+       {
+        "id": "done",
+        "name": "out",
+        "text": "out done",
+        "settles": true
+       }
+      ]
+     },
+     {
+      "inspect": "s"
+     }
+    ]
+   },
+   "expected": {
+    "judgeCalls": {
+     "s": [
+      {
+       "scope": "s",
+       "window": {
+        "id": "3ecbd4f2ef91c78f",
+        "events": [
+         {
+          "id": "a",
+          "at": 0,
+          "name": "close",
+          "data": {},
+          "text": "close a",
+          "kind": "closing",
+          "seenAt": 100
+         }
+        ],
+        "reason": "closing",
+        "waits": 0,
+        "dropped": 1,
+        "gap": false,
+        "settledAt": 100
+       },
+       "routes": [
+        {
+         "route": "interrupt"
+        },
+        {
+         "route": "queue"
+        },
+        {
+         "route": "note"
+        },
+        {
+         "route": "ask"
+        },
+        {
+         "route": "skip"
+        },
+        {
+         "route": "wait"
+        }
+       ],
+       "predicates": [],
+       "facts": {},
+       "recent": [],
+       "now": 100
+      }
+     ]
+    },
+    "deliveries": {
+     "s": [
+      {
+       "decision": {
+        "id": "3ecbd4f2ef91c78f",
+        "scope": "s",
+        "route": "note",
+        "probabilities": {
+         "interrupt": 0,
+         "queue": 0,
+         "note": 1,
+         "ask": 0,
+         "skip": 0,
+         "wait": 0
+        },
+        "predicates": {},
+        "confidence": null,
+        "window": {
+         "id": "3ecbd4f2ef91c78f",
+         "events": [
+          {
+           "id": "a",
+           "at": 0,
+           "name": "close",
+           "data": {},
+           "text": "close a",
+           "kind": "closing",
+           "seenAt": 100
+          }
+         ],
+         "reason": "closing",
+         "waits": 0,
+         "dropped": 1,
+         "gap": false,
+         "settledAt": 100
+        },
+        "at": 100
+       },
+       "outcome": "ok"
+      }
+     ]
+    },
+    "deadLetterCalls": {},
+    "traces": {
+     "s": [
+      {
+       "kind": "dropped",
+       "scope": "s",
+       "entries": [
+        {
+         "id": "done",
+         "at": 0,
+         "name": "out",
+         "data": {},
+         "text": "out done",
+         "settles": true,
+         "kind": "consequence",
+         "seenAt": 100
+        }
+       ],
+       "why": "overflow"
+      },
+      {
+       "kind": "ingested",
+       "scope": "s",
+       "count": 2,
+       "duplicates": 0
+      },
+      {
+       "kind": "settled",
+       "scope": "s",
+       "batchId": "3ecbd4f2ef91c78f",
+       "reason": "closing",
+       "count": 1,
+       "merged": false
+      },
+      {
+       "kind": "judging",
+       "scope": "s",
+       "batchId": "3ecbd4f2ef91c78f",
+       "attempt": 1,
+       "offerWait": true
+      },
+      {
+       "kind": "judged",
+       "scope": "s",
+       "batchId": "3ecbd4f2ef91c78f",
+       "route": "note"
+      },
+      {
+       "kind": "delivering",
+       "scope": "s",
+       "deliveryId": "3ecbd4f2ef91c78f",
+       "attempt": 1
+      },
+      {
+       "kind": "delivered",
+       "scope": "s",
+       "deliveryId": "3ecbd4f2ef91c78f"
+      }
+     ]
+    },
+    "results": [
+     {
+      "step": 0,
+      "error": null
+     }
+    ],
+    "inspections": [
+     {
+      "step": 1,
+      "scope": "s",
+      "record": {
+       "version": 4,
+       "scope": "s",
+       "cursors": {},
+       "seen": [
+        "a",
+        "done"
+       ],
+       "buffer": {
+        "entries": [],
+        "dropped": 0,
+        "gap": false,
+        "forcedAt": null
+       },
+       "batch": null,
+       "outbox": {
+        "decisions": [],
+        "deadLetters": []
+       },
+       "recent": [
+        {
+         "id": "3ecbd4f2ef91c78f",
+         "route": "note",
+         "at": 100
+        }
+       ],
+       "dueAt": null
+      }
+     }
+    ],
+    "records": {
+     "s": {
+      "version": 4,
+      "scope": "s",
+      "cursors": {},
+      "seen": [
+       "a",
+       "done"
+      ],
+      "buffer": {
+       "entries": [],
+       "dropped": 0,
+       "gap": false,
+       "forcedAt": null
+      },
+      "batch": null,
+      "outbox": {
+       "decisions": [],
+       "deadLetters": []
+      },
+      "recent": [
+       {
+        "id": "3ecbd4f2ef91c78f",
+        "route": "note",
+        "at": 100
+       }
+      ],
+      "dueAt": null
+     }
+    },
+    "log": [
+     {
+      "kind": "decision",
+      "id": "3ecbd4f2ef91c78f",
+      "scope": "s",
+      "at": 100,
+      "route": "note",
+      "body": {
+       "id": "3ecbd4f2ef91c78f",
+       "scope": "s",
+       "route": "note",
+       "probabilities": {
+        "interrupt": 0,
+        "queue": 0,
+        "note": 1,
+        "ask": 0,
+        "skip": 0,
+        "wait": 0
+       },
+       "predicates": {},
+       "confidence": null,
+       "window": {
+        "id": "3ecbd4f2ef91c78f",
+        "events": [
+         {
+          "id": "a",
+          "at": 0,
+          "name": "close",
+          "data": {},
+          "text": "close a",
+          "kind": "closing",
+          "seenAt": 100
+         }
+        ],
+        "reason": "closing",
+        "waits": 0,
+        "dropped": 1,
+        "gap": false,
+        "settledAt": 100
+       },
+       "at": 100
+      },
+      "position": "1"
+     }
+    ]
+   }
+  },
+  {
+   "scenario": {
     "name": "decision data survives wait, delivery retry and recent context",
     "start": 0,
     "kinds": {
@@ -15936,7 +19382,7 @@
       "step": 0,
       "error": {
        "name": "TypeError",
-       "message": "attend: quietForMs requires a continuous event"
+       "message": "attend: quietForMs requires a continuous or closing event"
       }
      },
      {

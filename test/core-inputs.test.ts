@@ -356,7 +356,7 @@ test('assertInvariants identifies corrupt counts, rings, summaries, sizes, hashe
     ['I1:', (s) => { s.open.entries.push(s.open.entries[0]!); }],
     ['I2:', (s) => { s.seen.size = 31; }],
     ['I2:', (s) => { s.seen.head = -1; }],
-    ['I3:', (s) => { s.open.summary.lastClosingAt = 99; }],
+    ['I3:', (s) => { s.open.summary.lastDefaultClosingAt = 99; }],
     ['I4:', (s) => { s.open.sizes[0] = 99; }],
     ['I5:', (s) => { s.open.hash.lo = 0; }],
     ['I6:', (s) => { s.dueAt = 99; }],

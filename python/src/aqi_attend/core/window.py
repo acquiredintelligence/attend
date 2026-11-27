@@ -32,9 +32,12 @@ def _summarize_entry(summary: TriggerSummary, entry: Entry, index: int) -> None:
     if kind == "flush":
         summary.min_flush_at = _min(summary.min_flush_at, seen_at)
     elif kind == "closing":
-        summary.max_closing_at = _max(summary.max_closing_at, observed_at)
-        summary.closing_observed |= explicit
-        summary.last_closing_at = summary.max_closing_at if summary.closing_observed else seen_at
+        if "quietForMs" in entry:
+            summary.max_explicit_closing_end_at = _max(summary.max_explicit_closing_end_at, observed_at + entry["quietForMs"])
+        else:
+            summary.max_default_closing_at = _max(summary.max_default_closing_at, observed_at)
+            summary.default_closing_observed |= explicit
+            summary.last_default_closing_at = summary.max_default_closing_at if summary.default_closing_observed else seen_at
     elif kind == "continuous":
         summary.max_stream_at = _max(summary.max_stream_at, observed_at)
         summary.stream_observed |= explicit
@@ -269,8 +272,9 @@ def window_deadline(policy: SettlePolicy, open: OpenWindow) -> tuple[float, Sett
     if s.min_flush_at != math.inf and (reason is None or s.min_flush_at < at):
         at = s.min_flush_at
         reason = "flush"
-    closing = s.last_closing_at + policy["closingGraceMs"]
-    if not math.isnan(s.last_closing_at) and (reason is None or closing < at):
+    has_default_closing = not math.isnan(s.last_default_closing_at)
+    closing = _max(s.last_default_closing_at + policy["closingGraceMs"], s.max_explicit_closing_end_at) if has_default_closing else s.max_explicit_closing_end_at
+    if (has_default_closing or closing != -math.inf) and (reason is None or closing < at):
         at = closing
         reason = "closing"
     if s.max_explicit_stream_end_at == -math.inf:

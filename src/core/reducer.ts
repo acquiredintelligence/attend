@@ -9,7 +9,7 @@ import { seenAdmit, seenRelease, seenTrim } from './seen.js';
 import { estimateRenderedBytes, isBackground, observationTime, openWindow, shedEntries, windowAppend, windowCompact, windowDeadline, windowEntries, windowPrune, windowShed, windowSize } from './window.js';
 
 /** Bumped whenever a release changes a transition. Stored with every snapshot. */
-export const REDUCER_VERSION = 6;
+export const REDUCER_VERSION = 7;
 
 /** An empty output. One output may collect several inputs: `apply` only ever sets `changed`. */
 export function newOutput(): ApplyOutput {
@@ -127,6 +127,10 @@ function ingest(ctx: Ctx, state: ScopeState, input: EventsInput): void {
   for (const event of input.events) {
     if (!seenAdmit(state, event.id)) { duplicates += 1; continue; }
     const entry = { ...event, seenAt: ctx.now };
+    // Act presence is checked in admission order, before background retention.
+    if (entry.kind === 'consequence' && entry.settles === true && state.open.summary.firstActIndex !== -1) {
+      state.open.endedAt = observationTime(entry);
+    }
     windowAppend(state.open, entry, estimateRenderedBytes(entry));
     ctx.out.changed = true;
   }

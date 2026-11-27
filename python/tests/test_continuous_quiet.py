@@ -97,7 +97,7 @@ async def test_invalid_duration_refuses_whole_batch(quiet: object) -> None:
         await attend.store.close()
 
 
-@pytest.mark.parametrize("kind", ["closing", "passive", "flush", "consequence", "context"])
+@pytest.mark.parametrize("kind", ["passive", "flush", "consequence", "context"])
 async def test_duration_on_other_kind_refuses_whole_batch(kind: Kind) -> None:
     attend = create_attend(clock=fake_clock(100), kind=lambda event: "continuous" if event["name"] == "move" else kind, judge=scripted_judge([{"route": "queue"}]), sink="log")
     try:
@@ -254,7 +254,7 @@ async def test_revision_two_snapshot_and_mixed_tail_rebuild_end_times() -> None:
         assert loaded is not None and loaded["dueAt"] == 200
         assert [(event["id"], event.get("quietForMs"), event["seenAt"]) for event in loaded["buffer"]["entries"]] == [("a", None, 100), ("b", 90, 120), ("c", None, 120)]
         stored = await store.load("s")
-        assert stored is not None and stored["snapshot"] is not None and stored["snapshot"]["reducer"] == 6
+        assert stored is not None and stored["snapshot"] is not None and stored["snapshot"]["reducer"] == 7
     finally:
         await attend.stop()
         await store.close()

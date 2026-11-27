@@ -56,6 +56,7 @@ export interface EventSpec {
   at?: number;
   observedAt?: number;
   quietForMs?: number;
+  settles?: true;
   data?: JsonObject;
   text?: string;
 }
@@ -277,7 +278,7 @@ export async function runScenario(scenario: Scenario): Promise<Observed> {
     if ('push' in step || 'submit' in step) {
       const scope = 'push' in step ? step.push : step.submit;
       scopes.add(scope);
-      const events = step.events.map((e) => ({ id: e.id, at: e.at ?? 0, name: e.name, data: e.data ?? {}, ...(e.text === undefined ? {} : { text: e.text }), ...(e.observedAt === undefined ? {} : { observedAt: e.observedAt }), ...(e.quietForMs === undefined ? {} : { quietForMs: e.quietForMs }) }));
+      const events = step.events.map((e) => ({ id: e.id, at: e.at ?? 0, name: e.name, data: e.data ?? {}, ...(e.text === undefined ? {} : { text: e.text }), ...(e.observedAt === undefined ? {} : { observedAt: e.observedAt }), ...(e.quietForMs === undefined ? {} : { quietForMs: e.quietForMs }), ...(e.settles === undefined ? {} : { settles: e.settles }) }));
       if ('push' in step) await result(index, () => attend.push(scope, events));
       else {
         const intake = intakes.get(scope);

@@ -72,6 +72,7 @@ function copyObject(value: object, key: string | number, depth: number): JsonVal
     const field = source[name];
     if (depth === 0 && name === 'observedAt') checkObservation(field);
     if (depth === 0 && name === 'quietForMs') checkQuietDuration(field);
+    if (depth === 0 && name === 'settles') checkSettles(field);
     const copied = toJson(field, name, depth + 1);
     if (copied === undefined) continue;
     if (name === '__proto__') defineProperty(object, name, { value: copied, enumerable: true, writable: true, configurable: true });
@@ -125,6 +126,7 @@ export function copyEvent(event: Event, defaultData = false): Event {
       fields.data = data;
       checkObservation(fields.observedAt);
       checkQuietDuration(fields.quietForMs);
+      checkSettles(fields.settles);
       return fields as unknown as Event;
     }
     return checkedEvent(toJson(fields, '', 0), defaultData);
@@ -137,11 +139,16 @@ function checkedEvent(copied: JsonValue | undefined, defaultData: boolean): Even
   if (!isRecord(copied) || !isRecord(copied.data)) throw new TypeError('attend: event data must be a JSON object');
   checkObservation(copied.observedAt);
   checkQuietDuration(copied.quietForMs);
+  checkSettles(copied.settles);
   return copied as unknown as Event;
 }
 
 function checkObservation(value: unknown): void {
   if (value !== undefined && (typeof value !== 'number' || !isFinite(value))) throw new TypeError('attend: observedAt must be a finite number');
+}
+
+function checkSettles(value: unknown): void {
+  if (value !== undefined && value !== true) throw new TypeError('attend: settles must be true');
 }
 
 function checkQuietDuration(value: unknown): void {
