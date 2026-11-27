@@ -2,6 +2,2434 @@
  "scenarios": [
   {
    "scenario": {
+    "name": "a short sink backoff unblocks later deliveries while a judge backs off",
+    "start": 100,
+    "kinds": {
+     "close": "closing",
+     "say": "flush",
+     "drag": "continuous",
+     "look": "passive",
+     "out": "consequence",
+     "said": "context"
+    },
+    "settle": {
+     "retryBackoffMs": [
+      1000
+     ],
+     "deliveryRetryBackoffMs": [
+      10
+     ]
+    },
+    "judge": {
+     "*": {
+      "rules": [
+       {
+        "has": [
+         "provider"
+        ],
+        "once": true,
+        "answer": {
+         "fail": "provider unavailable"
+        }
+       },
+       {
+        "answer": {
+         "route": "note"
+        }
+       }
+      ]
+     }
+    },
+    "sink": {
+     "*": {
+      "attempts": [
+       {
+        "fail": "store unavailable"
+       }
+      ]
+     }
+    },
+    "steps": [
+     {
+      "push": "s",
+      "events": [
+       {
+        "id": "first",
+        "name": "say",
+        "text": "say first"
+       }
+      ]
+     },
+     {
+      "advance": 0
+     },
+     {
+      "advance": 1
+     },
+     {
+      "push": "s",
+      "events": [
+       {
+        "id": "next",
+        "name": "say",
+        "text": "say next"
+       }
+      ]
+     },
+     {
+      "advance": 0
+     },
+     {
+      "advance": 1
+     },
+     {
+      "push": "s",
+      "events": [
+       {
+        "id": "provider",
+        "name": "say",
+        "text": "say provider"
+       }
+      ]
+     },
+     {
+      "advance": 0
+     },
+     {
+      "inspect": "s"
+     },
+     {
+      "advance": 8
+     },
+     {
+      "inspect": "s"
+     },
+     {
+      "advance": 992
+     }
+    ]
+   },
+   "expected": {
+    "judgeCalls": {
+     "s": [
+      {
+       "scope": "s",
+       "window": {
+        "id": "28b47bfc372e3386",
+        "events": [
+         {
+          "id": "first",
+          "at": 0,
+          "name": "say",
+          "data": {},
+          "text": "say first",
+          "kind": "flush",
+          "seenAt": 100
+         }
+        ],
+        "reason": "flush",
+        "waits": 0,
+        "dropped": 0,
+        "gap": false,
+        "settledAt": 100
+       },
+       "routes": [
+        {
+         "route": "interrupt"
+        },
+        {
+         "route": "queue"
+        },
+        {
+         "route": "note"
+        },
+        {
+         "route": "ask"
+        },
+        {
+         "route": "skip"
+        }
+       ],
+       "predicates": [],
+       "facts": {},
+       "recent": [],
+       "now": 100
+      },
+      {
+       "scope": "s",
+       "window": {
+        "id": "5fc4d8db379e8b70",
+        "events": [
+         {
+          "id": "next",
+          "at": 0,
+          "name": "say",
+          "data": {},
+          "text": "say next",
+          "kind": "flush",
+          "seenAt": 101
+         }
+        ],
+        "reason": "flush",
+        "waits": 0,
+        "dropped": 0,
+        "gap": false,
+        "settledAt": 101
+       },
+       "routes": [
+        {
+         "route": "interrupt"
+        },
+        {
+         "route": "queue"
+        },
+        {
+         "route": "note"
+        },
+        {
+         "route": "ask"
+        },
+        {
+         "route": "skip"
+        }
+       ],
+       "predicates": [],
+       "facts": {},
+       "recent": [
+        {
+         "id": "28b47bfc372e3386",
+         "route": "note",
+         "at": 100
+        }
+       ],
+       "now": 101
+      },
+      {
+       "scope": "s",
+       "window": {
+        "id": "4708d8c9622d2c78",
+        "events": [
+         {
+          "id": "provider",
+          "at": 0,
+          "name": "say",
+          "data": {},
+          "text": "say provider",
+          "kind": "flush",
+          "seenAt": 102
+         }
+        ],
+        "reason": "flush",
+        "waits": 0,
+        "dropped": 0,
+        "gap": false,
+        "settledAt": 102
+       },
+       "routes": [
+        {
+         "route": "interrupt"
+        },
+        {
+         "route": "queue"
+        },
+        {
+         "route": "note"
+        },
+        {
+         "route": "ask"
+        },
+        {
+         "route": "skip"
+        }
+       ],
+       "predicates": [],
+       "facts": {},
+       "recent": [
+        {
+         "id": "28b47bfc372e3386",
+         "route": "note",
+         "at": 100
+        },
+        {
+         "id": "5fc4d8db379e8b70",
+         "route": "note",
+         "at": 101
+        }
+       ],
+       "now": 102
+      },
+      {
+       "scope": "s",
+       "window": {
+        "id": "4708d8c9622d2c78",
+        "events": [
+         {
+          "id": "provider",
+          "at": 0,
+          "name": "say",
+          "data": {},
+          "text": "say provider",
+          "kind": "flush",
+          "seenAt": 102
+         }
+        ],
+        "reason": "flush",
+        "waits": 0,
+        "dropped": 0,
+        "gap": false,
+        "settledAt": 102
+       },
+       "routes": [
+        {
+         "route": "interrupt"
+        },
+        {
+         "route": "queue"
+        },
+        {
+         "route": "note"
+        },
+        {
+         "route": "ask"
+        },
+        {
+         "route": "skip"
+        }
+       ],
+       "predicates": [],
+       "facts": {},
+       "recent": [
+        {
+         "id": "28b47bfc372e3386",
+         "route": "note",
+         "at": 100
+        },
+        {
+         "id": "5fc4d8db379e8b70",
+         "route": "note",
+         "at": 101
+        }
+       ],
+       "now": 1102
+      }
+     ]
+    },
+    "deliveries": {
+     "s": [
+      {
+       "decision": {
+        "id": "28b47bfc372e3386",
+        "scope": "s",
+        "route": "note",
+        "probabilities": {
+         "interrupt": 0,
+         "queue": 0,
+         "note": 1,
+         "ask": 0,
+         "skip": 0,
+         "wait": 0
+        },
+        "predicates": {},
+        "confidence": null,
+        "window": {
+         "id": "28b47bfc372e3386",
+         "events": [
+          {
+           "id": "first",
+           "at": 0,
+           "name": "say",
+           "data": {},
+           "text": "say first",
+           "kind": "flush",
+           "seenAt": 100
+          }
+         ],
+         "reason": "flush",
+         "waits": 0,
+         "dropped": 0,
+         "gap": false,
+         "settledAt": 100
+        },
+        "at": 100
+       },
+       "outcome": "Error: store unavailable"
+      },
+      {
+       "decision": {
+        "id": "28b47bfc372e3386",
+        "scope": "s",
+        "route": "note",
+        "probabilities": {
+         "interrupt": 0,
+         "queue": 0,
+         "note": 1,
+         "ask": 0,
+         "skip": 0,
+         "wait": 0
+        },
+        "predicates": {},
+        "confidence": null,
+        "window": {
+         "id": "28b47bfc372e3386",
+         "events": [
+          {
+           "id": "first",
+           "at": 0,
+           "name": "say",
+           "data": {},
+           "text": "say first",
+           "kind": "flush",
+           "seenAt": 100
+          }
+         ],
+         "reason": "flush",
+         "waits": 0,
+         "dropped": 0,
+         "gap": false,
+         "settledAt": 100
+        },
+        "at": 100
+       },
+       "outcome": "ok"
+      },
+      {
+       "decision": {
+        "id": "5fc4d8db379e8b70",
+        "scope": "s",
+        "route": "note",
+        "probabilities": {
+         "interrupt": 0,
+         "queue": 0,
+         "note": 1,
+         "ask": 0,
+         "skip": 0,
+         "wait": 0
+        },
+        "predicates": {},
+        "confidence": null,
+        "window": {
+         "id": "5fc4d8db379e8b70",
+         "events": [
+          {
+           "id": "next",
+           "at": 0,
+           "name": "say",
+           "data": {},
+           "text": "say next",
+           "kind": "flush",
+           "seenAt": 101
+          }
+         ],
+         "reason": "flush",
+         "waits": 0,
+         "dropped": 0,
+         "gap": false,
+         "settledAt": 101
+        },
+        "at": 101
+       },
+       "outcome": "ok"
+      },
+      {
+       "decision": {
+        "id": "4708d8c9622d2c78",
+        "scope": "s",
+        "route": "note",
+        "probabilities": {
+         "interrupt": 0,
+         "queue": 0,
+         "note": 1,
+         "ask": 0,
+         "skip": 0,
+         "wait": 0
+        },
+        "predicates": {},
+        "confidence": null,
+        "window": {
+         "id": "4708d8c9622d2c78",
+         "events": [
+          {
+           "id": "provider",
+           "at": 0,
+           "name": "say",
+           "data": {},
+           "text": "say provider",
+           "kind": "flush",
+           "seenAt": 102
+          }
+         ],
+         "reason": "flush",
+         "waits": 0,
+         "dropped": 0,
+         "gap": false,
+         "settledAt": 102
+        },
+        "at": 1102
+       },
+       "outcome": "ok"
+      }
+     ]
+    },
+    "deadLetterCalls": {},
+    "traces": {
+     "s": [
+      {
+       "kind": "ingested",
+       "scope": "s",
+       "count": 1,
+       "duplicates": 0
+      },
+      {
+       "kind": "settled",
+       "scope": "s",
+       "batchId": "28b47bfc372e3386",
+       "reason": "flush",
+       "count": 1,
+       "merged": false
+      },
+      {
+       "kind": "judging",
+       "scope": "s",
+       "batchId": "28b47bfc372e3386",
+       "attempt": 1,
+       "offerWait": false
+      },
+      {
+       "kind": "judged",
+       "scope": "s",
+       "batchId": "28b47bfc372e3386",
+       "route": "note"
+      },
+      {
+       "kind": "delivering",
+       "scope": "s",
+       "deliveryId": "28b47bfc372e3386",
+       "attempt": 1
+      },
+      {
+       "kind": "retrying",
+       "scope": "s",
+       "stage": "sink",
+       "id": "28b47bfc372e3386",
+       "attempt": 1,
+       "at": 110,
+       "message": "store unavailable"
+      },
+      {
+       "kind": "ingested",
+       "scope": "s",
+       "count": 1,
+       "duplicates": 0
+      },
+      {
+       "kind": "settled",
+       "scope": "s",
+       "batchId": "5fc4d8db379e8b70",
+       "reason": "flush",
+       "count": 1,
+       "merged": false
+      },
+      {
+       "kind": "judging",
+       "scope": "s",
+       "batchId": "5fc4d8db379e8b70",
+       "attempt": 1,
+       "offerWait": false
+      },
+      {
+       "kind": "judged",
+       "scope": "s",
+       "batchId": "5fc4d8db379e8b70",
+       "route": "note"
+      },
+      {
+       "kind": "ingested",
+       "scope": "s",
+       "count": 1,
+       "duplicates": 0
+      },
+      {
+       "kind": "settled",
+       "scope": "s",
+       "batchId": "4708d8c9622d2c78",
+       "reason": "flush",
+       "count": 1,
+       "merged": false
+      },
+      {
+       "kind": "judging",
+       "scope": "s",
+       "batchId": "4708d8c9622d2c78",
+       "attempt": 1,
+       "offerWait": false
+      },
+      {
+       "kind": "retrying",
+       "scope": "s",
+       "stage": "judge",
+       "id": "4708d8c9622d2c78",
+       "attempt": 1,
+       "at": 1102,
+       "message": "provider unavailable"
+      },
+      {
+       "kind": "delivering",
+       "scope": "s",
+       "deliveryId": "28b47bfc372e3386",
+       "attempt": 2
+      },
+      {
+       "kind": "delivered",
+       "scope": "s",
+       "deliveryId": "28b47bfc372e3386"
+      },
+      {
+       "kind": "delivering",
+       "scope": "s",
+       "deliveryId": "5fc4d8db379e8b70",
+       "attempt": 1
+      },
+      {
+       "kind": "delivered",
+       "scope": "s",
+       "deliveryId": "5fc4d8db379e8b70"
+      },
+      {
+       "kind": "judging",
+       "scope": "s",
+       "batchId": "4708d8c9622d2c78",
+       "attempt": 2,
+       "offerWait": false
+      },
+      {
+       "kind": "judged",
+       "scope": "s",
+       "batchId": "4708d8c9622d2c78",
+       "route": "note"
+      },
+      {
+       "kind": "delivering",
+       "scope": "s",
+       "deliveryId": "4708d8c9622d2c78",
+       "attempt": 1
+      },
+      {
+       "kind": "delivered",
+       "scope": "s",
+       "deliveryId": "4708d8c9622d2c78"
+      }
+     ]
+    },
+    "results": [
+     {
+      "step": 0,
+      "error": null
+     },
+     {
+      "step": 3,
+      "error": null
+     },
+     {
+      "step": 6,
+      "error": null
+     }
+    ],
+    "inspections": [
+     {
+      "step": 8,
+      "scope": "s",
+      "record": {
+       "version": 10,
+       "scope": "s",
+       "cursors": {},
+       "seen": [
+        "first",
+        "next",
+        "provider"
+       ],
+       "buffer": {
+        "entries": [],
+        "dropped": 0,
+        "gap": false,
+        "forcedAt": null
+       },
+       "batch": {
+        "window": {
+         "id": "4708d8c9622d2c78",
+         "events": [
+          {
+           "id": "provider",
+           "at": 0,
+           "name": "say",
+           "data": {},
+           "text": "say provider",
+           "kind": "flush",
+           "seenAt": 102
+          }
+         ],
+         "reason": "flush",
+         "waits": 0,
+         "dropped": 0,
+         "gap": false,
+         "settledAt": 102
+        },
+        "phase": {
+         "phase": "retrying",
+         "attempt": 1,
+         "failures": 1,
+         "at": 1102,
+         "offerWait": false
+        }
+       },
+       "outbox": {
+        "decisions": [
+         {
+          "item": {
+           "id": "28b47bfc372e3386",
+           "kind": "decision",
+           "decision": {
+            "id": "28b47bfc372e3386",
+            "scope": "s",
+            "route": "note",
+            "probabilities": {
+             "interrupt": 0,
+             "queue": 0,
+             "note": 1,
+             "ask": 0,
+             "skip": 0,
+             "wait": 0
+            },
+            "predicates": {},
+            "confidence": null,
+            "window": {
+             "id": "28b47bfc372e3386",
+             "events": [
+              {
+               "id": "first",
+               "at": 0,
+               "name": "say",
+               "data": {},
+               "text": "say first",
+               "kind": "flush",
+               "seenAt": 100
+              }
+             ],
+             "reason": "flush",
+             "waits": 0,
+             "dropped": 0,
+             "gap": false,
+             "settledAt": 100
+            },
+            "at": 100
+           }
+          },
+          "phase": {
+           "phase": "retrying",
+           "attempt": 1,
+           "failures": 1,
+           "at": 110
+          }
+         },
+         {
+          "item": {
+           "id": "5fc4d8db379e8b70",
+           "kind": "decision",
+           "decision": {
+            "id": "5fc4d8db379e8b70",
+            "scope": "s",
+            "route": "note",
+            "probabilities": {
+             "interrupt": 0,
+             "queue": 0,
+             "note": 1,
+             "ask": 0,
+             "skip": 0,
+             "wait": 0
+            },
+            "predicates": {},
+            "confidence": null,
+            "window": {
+             "id": "5fc4d8db379e8b70",
+             "events": [
+              {
+               "id": "next",
+               "at": 0,
+               "name": "say",
+               "data": {},
+               "text": "say next",
+               "kind": "flush",
+               "seenAt": 101
+              }
+             ],
+             "reason": "flush",
+             "waits": 0,
+             "dropped": 0,
+             "gap": false,
+             "settledAt": 101
+            },
+            "at": 101
+           }
+          },
+          "phase": {
+           "phase": "retrying",
+           "attempt": 0,
+           "failures": 0,
+           "at": 101
+          }
+         }
+        ],
+        "deadLetters": []
+       },
+       "recent": [
+        {
+         "id": "28b47bfc372e3386",
+         "route": "note",
+         "at": 100
+        },
+        {
+         "id": "5fc4d8db379e8b70",
+         "route": "note",
+         "at": 101
+        }
+       ],
+       "dueAt": 110
+      }
+     },
+     {
+      "step": 10,
+      "scope": "s",
+      "record": {
+       "version": 13,
+       "scope": "s",
+       "cursors": {},
+       "seen": [
+        "first",
+        "next",
+        "provider"
+       ],
+       "buffer": {
+        "entries": [],
+        "dropped": 0,
+        "gap": false,
+        "forcedAt": null
+       },
+       "batch": {
+        "window": {
+         "id": "4708d8c9622d2c78",
+         "events": [
+          {
+           "id": "provider",
+           "at": 0,
+           "name": "say",
+           "data": {},
+           "text": "say provider",
+           "kind": "flush",
+           "seenAt": 102
+          }
+         ],
+         "reason": "flush",
+         "waits": 0,
+         "dropped": 0,
+         "gap": false,
+         "settledAt": 102
+        },
+        "phase": {
+         "phase": "retrying",
+         "attempt": 1,
+         "failures": 1,
+         "at": 1102,
+         "offerWait": false
+        }
+       },
+       "outbox": {
+        "decisions": [],
+        "deadLetters": []
+       },
+       "recent": [
+        {
+         "id": "28b47bfc372e3386",
+         "route": "note",
+         "at": 100
+        },
+        {
+         "id": "5fc4d8db379e8b70",
+         "route": "note",
+         "at": 101
+        }
+       ],
+       "dueAt": 1102
+      }
+     }
+    ],
+    "records": {
+     "s": {
+      "version": 16,
+      "scope": "s",
+      "cursors": {},
+      "seen": [
+       "first",
+       "next",
+       "provider"
+      ],
+      "buffer": {
+       "entries": [],
+       "dropped": 0,
+       "gap": false,
+       "forcedAt": null
+      },
+      "batch": null,
+      "outbox": {
+       "decisions": [],
+       "deadLetters": []
+      },
+      "recent": [
+       {
+        "id": "28b47bfc372e3386",
+        "route": "note",
+        "at": 100
+       },
+       {
+        "id": "5fc4d8db379e8b70",
+        "route": "note",
+        "at": 101
+       },
+       {
+        "id": "4708d8c9622d2c78",
+        "route": "note",
+        "at": 1102
+       }
+      ],
+      "dueAt": null
+     }
+    },
+    "log": [
+     {
+      "kind": "decision",
+      "id": "28b47bfc372e3386",
+      "scope": "s",
+      "at": 100,
+      "route": "note",
+      "body": {
+       "id": "28b47bfc372e3386",
+       "scope": "s",
+       "route": "note",
+       "probabilities": {
+        "interrupt": 0,
+        "queue": 0,
+        "note": 1,
+        "ask": 0,
+        "skip": 0,
+        "wait": 0
+       },
+       "predicates": {},
+       "confidence": null,
+       "window": {
+        "id": "28b47bfc372e3386",
+        "events": [
+         {
+          "id": "first",
+          "at": 0,
+          "name": "say",
+          "data": {},
+          "text": "say first",
+          "kind": "flush",
+          "seenAt": 100
+         }
+        ],
+        "reason": "flush",
+        "waits": 0,
+        "dropped": 0,
+        "gap": false,
+        "settledAt": 100
+       },
+       "at": 100
+      },
+      "position": "1"
+     },
+     {
+      "kind": "decision",
+      "id": "5fc4d8db379e8b70",
+      "scope": "s",
+      "at": 101,
+      "route": "note",
+      "body": {
+       "id": "5fc4d8db379e8b70",
+       "scope": "s",
+       "route": "note",
+       "probabilities": {
+        "interrupt": 0,
+        "queue": 0,
+        "note": 1,
+        "ask": 0,
+        "skip": 0,
+        "wait": 0
+       },
+       "predicates": {},
+       "confidence": null,
+       "window": {
+        "id": "5fc4d8db379e8b70",
+        "events": [
+         {
+          "id": "next",
+          "at": 0,
+          "name": "say",
+          "data": {},
+          "text": "say next",
+          "kind": "flush",
+          "seenAt": 101
+         }
+        ],
+        "reason": "flush",
+        "waits": 0,
+        "dropped": 0,
+        "gap": false,
+        "settledAt": 101
+       },
+       "at": 101
+      },
+      "position": "2"
+     },
+     {
+      "kind": "decision",
+      "id": "4708d8c9622d2c78",
+      "scope": "s",
+      "at": 1102,
+      "route": "note",
+      "body": {
+       "id": "4708d8c9622d2c78",
+       "scope": "s",
+       "route": "note",
+       "probabilities": {
+        "interrupt": 0,
+        "queue": 0,
+        "note": 1,
+        "ask": 0,
+        "skip": 0,
+        "wait": 0
+       },
+       "predicates": {},
+       "confidence": null,
+       "window": {
+        "id": "4708d8c9622d2c78",
+        "events": [
+         {
+          "id": "provider",
+          "at": 0,
+          "name": "say",
+          "data": {},
+          "text": "say provider",
+          "kind": "flush",
+          "seenAt": 102
+         }
+        ],
+        "reason": "flush",
+        "waits": 0,
+        "dropped": 0,
+        "gap": false,
+        "settledAt": 102
+       },
+       "at": 1102
+      },
+      "position": "3"
+     }
+    ]
+   }
+  },
+  {
+   "scenario": {
+    "name": "sink exhaustion and dead-letter handler retries use separate schedules",
+    "start": 100,
+    "kinds": {
+     "close": "closing",
+     "say": "flush",
+     "drag": "continuous",
+     "look": "passive",
+     "out": "consequence",
+     "said": "context"
+    },
+    "settle": {
+     "retryBackoffMs": [
+      200,
+      500
+     ],
+     "deliveryRetryBackoffMs": [
+      10
+     ]
+    },
+    "judge": {
+     "*": {
+      "answers": [
+       {
+        "route": "note"
+       }
+      ]
+     }
+    },
+    "sink": {
+     "*": {
+      "attempts": [
+       {
+        "fail": "store unavailable"
+       },
+       {
+        "fail": "still unavailable"
+       }
+      ]
+     }
+    },
+    "deadLetter": {
+     "*": {
+      "attempts": [
+       {
+        "fail": "handler unavailable"
+       }
+      ]
+     }
+    },
+    "steps": [
+     {
+      "push": "s",
+      "events": [
+       {
+        "id": "first",
+        "name": "say",
+        "text": "say first"
+       }
+      ]
+     },
+     {
+      "advance": 0
+     },
+     {
+      "advance": 1
+     },
+     {
+      "push": "s",
+      "events": [
+       {
+        "id": "next",
+        "name": "say",
+        "text": "say next"
+       }
+      ]
+     },
+     {
+      "advance": 0
+     },
+     {
+      "advance": 9
+     },
+     {
+      "inspect": "s"
+     },
+     {
+      "advance": 200
+     }
+    ]
+   },
+   "expected": {
+    "judgeCalls": {
+     "s": [
+      {
+       "scope": "s",
+       "window": {
+        "id": "28b47bfc372e3386",
+        "events": [
+         {
+          "id": "first",
+          "at": 0,
+          "name": "say",
+          "data": {},
+          "text": "say first",
+          "kind": "flush",
+          "seenAt": 100
+         }
+        ],
+        "reason": "flush",
+        "waits": 0,
+        "dropped": 0,
+        "gap": false,
+        "settledAt": 100
+       },
+       "routes": [
+        {
+         "route": "interrupt"
+        },
+        {
+         "route": "queue"
+        },
+        {
+         "route": "note"
+        },
+        {
+         "route": "ask"
+        },
+        {
+         "route": "skip"
+        }
+       ],
+       "predicates": [],
+       "facts": {},
+       "recent": [],
+       "now": 100
+      },
+      {
+       "scope": "s",
+       "window": {
+        "id": "5fc4d8db379e8b70",
+        "events": [
+         {
+          "id": "next",
+          "at": 0,
+          "name": "say",
+          "data": {},
+          "text": "say next",
+          "kind": "flush",
+          "seenAt": 101
+         }
+        ],
+        "reason": "flush",
+        "waits": 0,
+        "dropped": 0,
+        "gap": false,
+        "settledAt": 101
+       },
+       "routes": [
+        {
+         "route": "interrupt"
+        },
+        {
+         "route": "queue"
+        },
+        {
+         "route": "note"
+        },
+        {
+         "route": "ask"
+        },
+        {
+         "route": "skip"
+        }
+       ],
+       "predicates": [],
+       "facts": {},
+       "recent": [
+        {
+         "id": "28b47bfc372e3386",
+         "route": "note",
+         "at": 100
+        }
+       ],
+       "now": 101
+      }
+     ]
+    },
+    "deliveries": {
+     "s": [
+      {
+       "decision": {
+        "id": "28b47bfc372e3386",
+        "scope": "s",
+        "route": "note",
+        "probabilities": {
+         "interrupt": 0,
+         "queue": 0,
+         "note": 1,
+         "ask": 0,
+         "skip": 0,
+         "wait": 0
+        },
+        "predicates": {},
+        "confidence": null,
+        "window": {
+         "id": "28b47bfc372e3386",
+         "events": [
+          {
+           "id": "first",
+           "at": 0,
+           "name": "say",
+           "data": {},
+           "text": "say first",
+           "kind": "flush",
+           "seenAt": 100
+          }
+         ],
+         "reason": "flush",
+         "waits": 0,
+         "dropped": 0,
+         "gap": false,
+         "settledAt": 100
+        },
+        "at": 100
+       },
+       "outcome": "Error: store unavailable"
+      },
+      {
+       "decision": {
+        "id": "28b47bfc372e3386",
+        "scope": "s",
+        "route": "note",
+        "probabilities": {
+         "interrupt": 0,
+         "queue": 0,
+         "note": 1,
+         "ask": 0,
+         "skip": 0,
+         "wait": 0
+        },
+        "predicates": {},
+        "confidence": null,
+        "window": {
+         "id": "28b47bfc372e3386",
+         "events": [
+          {
+           "id": "first",
+           "at": 0,
+           "name": "say",
+           "data": {},
+           "text": "say first",
+           "kind": "flush",
+           "seenAt": 100
+          }
+         ],
+         "reason": "flush",
+         "waits": 0,
+         "dropped": 0,
+         "gap": false,
+         "settledAt": 100
+        },
+        "at": 100
+       },
+       "outcome": "Error: still unavailable"
+      },
+      {
+       "decision": {
+        "id": "5fc4d8db379e8b70",
+        "scope": "s",
+        "route": "note",
+        "probabilities": {
+         "interrupt": 0,
+         "queue": 0,
+         "note": 1,
+         "ask": 0,
+         "skip": 0,
+         "wait": 0
+        },
+        "predicates": {},
+        "confidence": null,
+        "window": {
+         "id": "5fc4d8db379e8b70",
+         "events": [
+          {
+           "id": "next",
+           "at": 0,
+           "name": "say",
+           "data": {},
+           "text": "say next",
+           "kind": "flush",
+           "seenAt": 101
+          }
+         ],
+         "reason": "flush",
+         "waits": 0,
+         "dropped": 0,
+         "gap": false,
+         "settledAt": 101
+        },
+        "at": 101
+       },
+       "outcome": "ok"
+      }
+     ]
+    },
+    "deadLetterCalls": {
+     "s": [
+      {
+       "letter": {
+        "id": "28b47bfc372e3386",
+        "scope": "s",
+        "stage": "sink",
+        "window": {
+         "id": "28b47bfc372e3386",
+         "events": [
+          {
+           "id": "first",
+           "at": 0,
+           "name": "say",
+           "data": {},
+           "text": "say first",
+           "kind": "flush",
+           "seenAt": 100
+          }
+         ],
+         "reason": "flush",
+         "waits": 0,
+         "dropped": 0,
+         "gap": false,
+         "settledAt": 100
+        },
+        "decision": {
+         "id": "28b47bfc372e3386",
+         "scope": "s",
+         "route": "note",
+         "probabilities": {
+          "interrupt": 0,
+          "queue": 0,
+          "note": 1,
+          "ask": 0,
+          "skip": 0,
+          "wait": 0
+         },
+         "predicates": {},
+         "confidence": null,
+         "window": {
+          "id": "28b47bfc372e3386",
+          "events": [
+           {
+            "id": "first",
+            "at": 0,
+            "name": "say",
+            "data": {},
+            "text": "say first",
+            "kind": "flush",
+            "seenAt": 100
+           }
+          ],
+          "reason": "flush",
+          "waits": 0,
+          "dropped": 0,
+          "gap": false,
+          "settledAt": 100
+         },
+         "at": 100
+        },
+        "message": "still unavailable",
+        "permanent": false,
+        "attempts": 2,
+        "at": 110
+       },
+       "outcome": "Error: handler unavailable"
+      },
+      {
+       "letter": {
+        "id": "28b47bfc372e3386",
+        "scope": "s",
+        "stage": "sink",
+        "window": {
+         "id": "28b47bfc372e3386",
+         "events": [
+          {
+           "id": "first",
+           "at": 0,
+           "name": "say",
+           "data": {},
+           "text": "say first",
+           "kind": "flush",
+           "seenAt": 100
+          }
+         ],
+         "reason": "flush",
+         "waits": 0,
+         "dropped": 0,
+         "gap": false,
+         "settledAt": 100
+        },
+        "decision": {
+         "id": "28b47bfc372e3386",
+         "scope": "s",
+         "route": "note",
+         "probabilities": {
+          "interrupt": 0,
+          "queue": 0,
+          "note": 1,
+          "ask": 0,
+          "skip": 0,
+          "wait": 0
+         },
+         "predicates": {},
+         "confidence": null,
+         "window": {
+          "id": "28b47bfc372e3386",
+          "events": [
+           {
+            "id": "first",
+            "at": 0,
+            "name": "say",
+            "data": {},
+            "text": "say first",
+            "kind": "flush",
+            "seenAt": 100
+           }
+          ],
+          "reason": "flush",
+          "waits": 0,
+          "dropped": 0,
+          "gap": false,
+          "settledAt": 100
+         },
+         "at": 100
+        },
+        "message": "still unavailable",
+        "permanent": false,
+        "attempts": 2,
+        "at": 110
+       },
+       "outcome": "ok"
+      }
+     ]
+    },
+    "traces": {
+     "s": [
+      {
+       "kind": "ingested",
+       "scope": "s",
+       "count": 1,
+       "duplicates": 0
+      },
+      {
+       "kind": "settled",
+       "scope": "s",
+       "batchId": "28b47bfc372e3386",
+       "reason": "flush",
+       "count": 1,
+       "merged": false
+      },
+      {
+       "kind": "judging",
+       "scope": "s",
+       "batchId": "28b47bfc372e3386",
+       "attempt": 1,
+       "offerWait": false
+      },
+      {
+       "kind": "judged",
+       "scope": "s",
+       "batchId": "28b47bfc372e3386",
+       "route": "note"
+      },
+      {
+       "kind": "delivering",
+       "scope": "s",
+       "deliveryId": "28b47bfc372e3386",
+       "attempt": 1
+      },
+      {
+       "kind": "retrying",
+       "scope": "s",
+       "stage": "sink",
+       "id": "28b47bfc372e3386",
+       "attempt": 1,
+       "at": 110,
+       "message": "store unavailable"
+      },
+      {
+       "kind": "ingested",
+       "scope": "s",
+       "count": 1,
+       "duplicates": 0
+      },
+      {
+       "kind": "settled",
+       "scope": "s",
+       "batchId": "5fc4d8db379e8b70",
+       "reason": "flush",
+       "count": 1,
+       "merged": false
+      },
+      {
+       "kind": "judging",
+       "scope": "s",
+       "batchId": "5fc4d8db379e8b70",
+       "attempt": 1,
+       "offerWait": false
+      },
+      {
+       "kind": "judged",
+       "scope": "s",
+       "batchId": "5fc4d8db379e8b70",
+       "route": "note"
+      },
+      {
+       "kind": "delivering",
+       "scope": "s",
+       "deliveryId": "28b47bfc372e3386",
+       "attempt": 2
+      },
+      {
+       "kind": "deadLettered",
+       "scope": "s",
+       "letter": {
+        "id": "28b47bfc372e3386",
+        "scope": "s",
+        "stage": "sink",
+        "window": {
+         "id": "28b47bfc372e3386",
+         "events": [
+          {
+           "id": "first",
+           "at": 0,
+           "name": "say",
+           "data": {},
+           "text": "say first",
+           "kind": "flush",
+           "seenAt": 100
+          }
+         ],
+         "reason": "flush",
+         "waits": 0,
+         "dropped": 0,
+         "gap": false,
+         "settledAt": 100
+        },
+        "decision": {
+         "id": "28b47bfc372e3386",
+         "scope": "s",
+         "route": "note",
+         "probabilities": {
+          "interrupt": 0,
+          "queue": 0,
+          "note": 1,
+          "ask": 0,
+          "skip": 0,
+          "wait": 0
+         },
+         "predicates": {},
+         "confidence": null,
+         "window": {
+          "id": "28b47bfc372e3386",
+          "events": [
+           {
+            "id": "first",
+            "at": 0,
+            "name": "say",
+            "data": {},
+            "text": "say first",
+            "kind": "flush",
+            "seenAt": 100
+           }
+          ],
+          "reason": "flush",
+          "waits": 0,
+          "dropped": 0,
+          "gap": false,
+          "settledAt": 100
+         },
+         "at": 100
+        },
+        "message": "still unavailable",
+        "permanent": false,
+        "attempts": 2,
+        "at": 110
+       }
+      },
+      {
+       "kind": "delivering",
+       "scope": "s",
+       "deliveryId": "5fc4d8db379e8b70",
+       "attempt": 1
+      },
+      {
+       "kind": "delivering",
+       "scope": "s",
+       "deliveryId": "28b47bfc372e3386",
+       "attempt": 3
+      },
+      {
+       "kind": "delivered",
+       "scope": "s",
+       "deliveryId": "5fc4d8db379e8b70"
+      },
+      {
+       "kind": "retrying",
+       "scope": "s",
+       "stage": "deadLetter",
+       "id": "28b47bfc372e3386",
+       "attempt": 3,
+       "at": 310,
+       "message": "handler unavailable"
+      },
+      {
+       "kind": "delivering",
+       "scope": "s",
+       "deliveryId": "28b47bfc372e3386",
+       "attempt": 4
+      },
+      {
+       "kind": "delivered",
+       "scope": "s",
+       "deliveryId": "28b47bfc372e3386"
+      }
+     ]
+    },
+    "results": [
+     {
+      "step": 0,
+      "error": null
+     },
+     {
+      "step": 3,
+      "error": null
+     }
+    ],
+    "inspections": [
+     {
+      "step": 6,
+      "scope": "s",
+      "record": {
+       "version": 11,
+       "scope": "s",
+       "cursors": {},
+       "seen": [
+        "first",
+        "next"
+       ],
+       "buffer": {
+        "entries": [],
+        "dropped": 0,
+        "gap": false,
+        "forcedAt": null
+       },
+       "batch": null,
+       "outbox": {
+        "decisions": [],
+        "deadLetters": [
+         {
+          "item": {
+           "id": "28b47bfc372e3386",
+           "kind": "deadLetter",
+           "letter": {
+            "id": "28b47bfc372e3386",
+            "scope": "s",
+            "stage": "sink",
+            "window": {
+             "id": "28b47bfc372e3386",
+             "events": [
+              {
+               "id": "first",
+               "at": 0,
+               "name": "say",
+               "data": {},
+               "text": "say first",
+               "kind": "flush",
+               "seenAt": 100
+              }
+             ],
+             "reason": "flush",
+             "waits": 0,
+             "dropped": 0,
+             "gap": false,
+             "settledAt": 100
+            },
+            "decision": {
+             "id": "28b47bfc372e3386",
+             "scope": "s",
+             "route": "note",
+             "probabilities": {
+              "interrupt": 0,
+              "queue": 0,
+              "note": 1,
+              "ask": 0,
+              "skip": 0,
+              "wait": 0
+             },
+             "predicates": {},
+             "confidence": null,
+             "window": {
+              "id": "28b47bfc372e3386",
+              "events": [
+               {
+                "id": "first",
+                "at": 0,
+                "name": "say",
+                "data": {},
+                "text": "say first",
+                "kind": "flush",
+                "seenAt": 100
+               }
+              ],
+              "reason": "flush",
+              "waits": 0,
+              "dropped": 0,
+              "gap": false,
+              "settledAt": 100
+             },
+             "at": 100
+            },
+            "message": "still unavailable",
+            "permanent": false,
+            "attempts": 2,
+            "at": 110
+           }
+          },
+          "phase": {
+           "phase": "retrying",
+           "attempt": 3,
+           "failures": 1,
+           "at": 310
+          }
+         }
+        ]
+       },
+       "recent": [
+        {
+         "id": "28b47bfc372e3386",
+         "route": "note",
+         "at": 100
+        },
+        {
+         "id": "5fc4d8db379e8b70",
+         "route": "note",
+         "at": 101
+        }
+       ],
+       "dueAt": 310
+      }
+     }
+    ],
+    "records": {
+     "s": {
+      "version": 13,
+      "scope": "s",
+      "cursors": {},
+      "seen": [
+       "first",
+       "next"
+      ],
+      "buffer": {
+       "entries": [],
+       "dropped": 0,
+       "gap": false,
+       "forcedAt": null
+      },
+      "batch": null,
+      "outbox": {
+       "decisions": [],
+       "deadLetters": []
+      },
+      "recent": [
+       {
+        "id": "28b47bfc372e3386",
+        "route": "note",
+        "at": 100
+       },
+       {
+        "id": "5fc4d8db379e8b70",
+        "route": "note",
+        "at": 101
+       }
+      ],
+      "dueAt": null
+     }
+    },
+    "log": [
+     {
+      "kind": "decision",
+      "id": "28b47bfc372e3386",
+      "scope": "s",
+      "at": 100,
+      "route": "note",
+      "body": {
+       "id": "28b47bfc372e3386",
+       "scope": "s",
+       "route": "note",
+       "probabilities": {
+        "interrupt": 0,
+        "queue": 0,
+        "note": 1,
+        "ask": 0,
+        "skip": 0,
+        "wait": 0
+       },
+       "predicates": {},
+       "confidence": null,
+       "window": {
+        "id": "28b47bfc372e3386",
+        "events": [
+         {
+          "id": "first",
+          "at": 0,
+          "name": "say",
+          "data": {},
+          "text": "say first",
+          "kind": "flush",
+          "seenAt": 100
+         }
+        ],
+        "reason": "flush",
+        "waits": 0,
+        "dropped": 0,
+        "gap": false,
+        "settledAt": 100
+       },
+       "at": 100
+      },
+      "position": "1"
+     },
+     {
+      "kind": "decision",
+      "id": "5fc4d8db379e8b70",
+      "scope": "s",
+      "at": 101,
+      "route": "note",
+      "body": {
+       "id": "5fc4d8db379e8b70",
+       "scope": "s",
+       "route": "note",
+       "probabilities": {
+        "interrupt": 0,
+        "queue": 0,
+        "note": 1,
+        "ask": 0,
+        "skip": 0,
+        "wait": 0
+       },
+       "predicates": {},
+       "confidence": null,
+       "window": {
+        "id": "5fc4d8db379e8b70",
+        "events": [
+         {
+          "id": "next",
+          "at": 0,
+          "name": "say",
+          "data": {},
+          "text": "say next",
+          "kind": "flush",
+          "seenAt": 101
+         }
+        ],
+        "reason": "flush",
+        "waits": 0,
+        "dropped": 0,
+        "gap": false,
+        "settledAt": 101
+       },
+       "at": 101
+      },
+      "position": "2"
+     },
+     {
+      "kind": "deadLetter",
+      "id": "28b47bfc372e3386",
+      "scope": "s",
+      "at": 110,
+      "route": "note",
+      "body": {
+       "id": "28b47bfc372e3386",
+       "scope": "s",
+       "stage": "sink",
+       "window": {
+        "id": "28b47bfc372e3386",
+        "events": [
+         {
+          "id": "first",
+          "at": 0,
+          "name": "say",
+          "data": {},
+          "text": "say first",
+          "kind": "flush",
+          "seenAt": 100
+         }
+        ],
+        "reason": "flush",
+        "waits": 0,
+        "dropped": 0,
+        "gap": false,
+        "settledAt": 100
+       },
+       "decision": {
+        "id": "28b47bfc372e3386",
+        "scope": "s",
+        "route": "note",
+        "probabilities": {
+         "interrupt": 0,
+         "queue": 0,
+         "note": 1,
+         "ask": 0,
+         "skip": 0,
+         "wait": 0
+        },
+        "predicates": {},
+        "confidence": null,
+        "window": {
+         "id": "28b47bfc372e3386",
+         "events": [
+          {
+           "id": "first",
+           "at": 0,
+           "name": "say",
+           "data": {},
+           "text": "say first",
+           "kind": "flush",
+           "seenAt": 100
+          }
+         ],
+         "reason": "flush",
+         "waits": 0,
+         "dropped": 0,
+         "gap": false,
+         "settledAt": 100
+        },
+        "at": 100
+       },
+       "message": "still unavailable",
+       "permanent": false,
+       "attempts": 2,
+       "at": 110
+      },
+      "position": "3"
+     }
+    ]
+   }
+  },
+  {
+   "scenario": {
+    "name": "an empty sink schedule dead-letters an expired first attempt",
+    "start": 100,
+    "kinds": {
+     "close": "closing",
+     "say": "flush",
+     "drag": "continuous",
+     "look": "passive",
+     "out": "consequence",
+     "said": "context"
+    },
+    "settle": {
+     "retryBackoffMs": [
+      200
+     ],
+     "deliveryRetryBackoffMs": [],
+     "deliveryTimeoutMs": 10
+    },
+    "judge": {
+     "*": {
+      "answers": [
+       {
+        "route": "note"
+       }
+      ]
+     }
+    },
+    "sink": {
+     "*": {
+      "attempts": [
+       {
+        "hang": true
+       }
+      ]
+     }
+    },
+    "steps": [
+     {
+      "push": "s",
+      "events": [
+       {
+        "id": "first",
+        "name": "say",
+        "text": "say first"
+       }
+      ]
+     },
+     {
+      "advance": 0
+     },
+     {
+      "advance": 10
+     },
+     {
+      "inspect": "s"
+     }
+    ]
+   },
+   "expected": {
+    "judgeCalls": {
+     "s": [
+      {
+       "scope": "s",
+       "window": {
+        "id": "28b47bfc372e3386",
+        "events": [
+         {
+          "id": "first",
+          "at": 0,
+          "name": "say",
+          "data": {},
+          "text": "say first",
+          "kind": "flush",
+          "seenAt": 100
+         }
+        ],
+        "reason": "flush",
+        "waits": 0,
+        "dropped": 0,
+        "gap": false,
+        "settledAt": 100
+       },
+       "routes": [
+        {
+         "route": "interrupt"
+        },
+        {
+         "route": "queue"
+        },
+        {
+         "route": "note"
+        },
+        {
+         "route": "ask"
+        },
+        {
+         "route": "skip"
+        }
+       ],
+       "predicates": [],
+       "facts": {},
+       "recent": [],
+       "now": 100
+      }
+     ]
+    },
+    "deliveries": {
+     "s": [
+      {
+       "decision": {
+        "id": "28b47bfc372e3386",
+        "scope": "s",
+        "route": "note",
+        "probabilities": {
+         "interrupt": 0,
+         "queue": 0,
+         "note": 1,
+         "ask": 0,
+         "skip": 0,
+         "wait": 0
+        },
+        "predicates": {},
+        "confidence": null,
+        "window": {
+         "id": "28b47bfc372e3386",
+         "events": [
+          {
+           "id": "first",
+           "at": 0,
+           "name": "say",
+           "data": {},
+           "text": "say first",
+           "kind": "flush",
+           "seenAt": 100
+          }
+         ],
+         "reason": "flush",
+         "waits": 0,
+         "dropped": 0,
+         "gap": false,
+         "settledAt": 100
+        },
+        "at": 100
+       },
+       "outcome": "Error: aborted"
+      }
+     ]
+    },
+    "deadLetterCalls": {},
+    "traces": {
+     "s": [
+      {
+       "kind": "ingested",
+       "scope": "s",
+       "count": 1,
+       "duplicates": 0
+      },
+      {
+       "kind": "settled",
+       "scope": "s",
+       "batchId": "28b47bfc372e3386",
+       "reason": "flush",
+       "count": 1,
+       "merged": false
+      },
+      {
+       "kind": "judging",
+       "scope": "s",
+       "batchId": "28b47bfc372e3386",
+       "attempt": 1,
+       "offerWait": false
+      },
+      {
+       "kind": "judged",
+       "scope": "s",
+       "batchId": "28b47bfc372e3386",
+       "route": "note"
+      },
+      {
+       "kind": "delivering",
+       "scope": "s",
+       "deliveryId": "28b47bfc372e3386",
+       "attempt": 1
+      },
+      {
+       "kind": "deadLettered",
+       "scope": "s",
+       "letter": {
+        "id": "28b47bfc372e3386",
+        "scope": "s",
+        "stage": "sink",
+        "window": {
+         "id": "28b47bfc372e3386",
+         "events": [
+          {
+           "id": "first",
+           "at": 0,
+           "name": "say",
+           "data": {},
+           "text": "say first",
+           "kind": "flush",
+           "seenAt": 100
+          }
+         ],
+         "reason": "flush",
+         "waits": 0,
+         "dropped": 0,
+         "gap": false,
+         "settledAt": 100
+        },
+        "decision": {
+         "id": "28b47bfc372e3386",
+         "scope": "s",
+         "route": "note",
+         "probabilities": {
+          "interrupt": 0,
+          "queue": 0,
+          "note": 1,
+          "ask": 0,
+          "skip": 0,
+          "wait": 0
+         },
+         "predicates": {},
+         "confidence": null,
+         "window": {
+          "id": "28b47bfc372e3386",
+          "events": [
+           {
+            "id": "first",
+            "at": 0,
+            "name": "say",
+            "data": {},
+            "text": "say first",
+            "kind": "flush",
+            "seenAt": 100
+           }
+          ],
+          "reason": "flush",
+          "waits": 0,
+          "dropped": 0,
+          "gap": false,
+          "settledAt": 100
+         },
+         "at": 100
+        },
+        "message": "delivery lease expired",
+        "permanent": false,
+        "attempts": 1,
+        "at": 110
+       }
+      },
+      {
+       "kind": "stale",
+       "scope": "s",
+       "input": "deliveryFailed",
+       "why": "no live delivery attempt 1 for 28b47bfc372e3386"
+      }
+     ]
+    },
+    "results": [
+     {
+      "step": 0,
+      "error": null
+     }
+    ],
+    "inspections": [
+     {
+      "step": 3,
+      "scope": "s",
+      "record": {
+       "version": 4,
+       "scope": "s",
+       "cursors": {},
+       "seen": [
+        "first"
+       ],
+       "buffer": {
+        "entries": [],
+        "dropped": 0,
+        "gap": false,
+        "forcedAt": null
+       },
+       "batch": null,
+       "outbox": {
+        "decisions": [],
+        "deadLetters": []
+       },
+       "recent": [
+        {
+         "id": "28b47bfc372e3386",
+         "route": "note",
+         "at": 100
+        }
+       ],
+       "dueAt": null
+      }
+     }
+    ],
+    "records": {
+     "s": {
+      "version": 4,
+      "scope": "s",
+      "cursors": {},
+      "seen": [
+       "first"
+      ],
+      "buffer": {
+       "entries": [],
+       "dropped": 0,
+       "gap": false,
+       "forcedAt": null
+      },
+      "batch": null,
+      "outbox": {
+       "decisions": [],
+       "deadLetters": []
+      },
+      "recent": [
+       {
+        "id": "28b47bfc372e3386",
+        "route": "note",
+        "at": 100
+       }
+      ],
+      "dueAt": null
+     }
+    },
+    "log": [
+     {
+      "kind": "decision",
+      "id": "28b47bfc372e3386",
+      "scope": "s",
+      "at": 100,
+      "route": "note",
+      "body": {
+       "id": "28b47bfc372e3386",
+       "scope": "s",
+       "route": "note",
+       "probabilities": {
+        "interrupt": 0,
+        "queue": 0,
+        "note": 1,
+        "ask": 0,
+        "skip": 0,
+        "wait": 0
+       },
+       "predicates": {},
+       "confidence": null,
+       "window": {
+        "id": "28b47bfc372e3386",
+        "events": [
+         {
+          "id": "first",
+          "at": 0,
+          "name": "say",
+          "data": {},
+          "text": "say first",
+          "kind": "flush",
+          "seenAt": 100
+         }
+        ],
+        "reason": "flush",
+        "waits": 0,
+        "dropped": 0,
+        "gap": false,
+        "settledAt": 100
+       },
+       "at": 100
+      },
+      "position": "1"
+     },
+     {
+      "kind": "deadLetter",
+      "id": "28b47bfc372e3386",
+      "scope": "s",
+      "at": 110,
+      "route": "note",
+      "body": {
+       "id": "28b47bfc372e3386",
+       "scope": "s",
+       "stage": "sink",
+       "window": {
+        "id": "28b47bfc372e3386",
+        "events": [
+         {
+          "id": "first",
+          "at": 0,
+          "name": "say",
+          "data": {},
+          "text": "say first",
+          "kind": "flush",
+          "seenAt": 100
+         }
+        ],
+        "reason": "flush",
+        "waits": 0,
+        "dropped": 0,
+        "gap": false,
+        "settledAt": 100
+       },
+       "decision": {
+        "id": "28b47bfc372e3386",
+        "scope": "s",
+        "route": "note",
+        "probabilities": {
+         "interrupt": 0,
+         "queue": 0,
+         "note": 1,
+         "ask": 0,
+         "skip": 0,
+         "wait": 0
+        },
+        "predicates": {},
+        "confidence": null,
+        "window": {
+         "id": "28b47bfc372e3386",
+         "events": [
+          {
+           "id": "first",
+           "at": 0,
+           "name": "say",
+           "data": {},
+           "text": "say first",
+           "kind": "flush",
+           "seenAt": 100
+          }
+         ],
+         "reason": "flush",
+         "waits": 0,
+         "dropped": 0,
+         "gap": false,
+         "settledAt": 100
+        },
+        "at": 100
+       },
+       "message": "delivery lease expired",
+       "permanent": false,
+       "attempts": 1,
+       "at": 110
+      },
+      "position": "2"
+     }
+    ]
+   }
+  },
+  {
+   "scenario": {
     "name": "closing combines default grace with explicit deadlines",
     "start": 100,
     "kinds": {

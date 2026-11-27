@@ -43,6 +43,7 @@ _SETTLE = {
     "maxEvents": "max_events",
     "maxWindowMs": "max_window_ms",
     "retryBackoffMs": "retry_backoff_ms",
+    "deliveryRetryBackoffMs": "delivery_retry_backoff_ms",
     "judgeTimeoutMs": "judge_timeout_ms",
     "deliveryTimeoutMs": "delivery_timeout_ms",
     "recentCount": "recent_count",

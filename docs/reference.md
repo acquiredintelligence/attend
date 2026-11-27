@@ -208,6 +208,12 @@ One accepted source batch is still one admission. It can exceed the counted trig
 
 The pair persists with the snapshot at reducer revision 5. Tails and inspection use the saved policy. Adding, removing or changing the pair is refused before writes or effects while open entries or an unresolved batch remain. Empty scopes may adopt it while retaining recent decisions and outbox work. Old records without the pair keep scalar behavior. Coordinate writer versions: this is not a fence against older code that lacks the check.
 
+## Delivery retry schedule
+
+Set `settle.deliveryRetryBackoffMs` (`delivery_retry_backoff_ms` in Python) to give the sink its own retry delays. Supply a list of finite, nonnegative millisecond values. Its length is the number of retries after the first attempt, including failures from expired delivery leases. An empty list dead-letters on the first failure. Permanent failures dead-letter immediately.
+
+Omit the option to use `retryBackoffMs` for the sink. Judges and sources continue to use `retryBackoffMs`, which also provides the base delays for the dead-letter handler's capped backoff. Pending deliveries retain their committed retry deadlines on restart. A policy change applies to subsequent failures after replay under the saved policy.
+
 ## Guarantees
 
 - **One snapshot and a short tail per scope.** The snapshot holds the open window, the judge slot and the outbox. A write appends the inputs that changed state, and a snapshot replaces the tail once it grows past the snapshot's own size. A source's cursor commits in the same write as the events it covers.
@@ -215,7 +221,7 @@ The pair persists with the snapshot at reducer revision 5. Tails and inspection 
 - **Effects only after a committed write.** attend calls the judge and the sink only for state it has persisted. `push` and `flush` persist and return; the runner settles, judges and delivers. If a process crashes after a write and before its effect, the work stays in the store, and a runner retries it when its lease expires.
 - **The decision log is the delivery for subscribers.** The decision row commits with the state change that made it. Subscribers read it by cursor, so a reconnect resumes where it stopped; a cursor that fell behind retention is reported as `truncated`, never silently skipped.
 - **At-least-once delivery with stable ids.** A decision's id is a hash of the scope and its window's event ids, so a redelivery carries the same id and no two scopes share one. Deliveries in one scope run one at a time, oldest first.
-- **Dead letters are never dropped.** The judge and the sink each get `retryBackoffMs.length` retries. A window that still fails becomes a dead letter, which attend retries with capped backoff until `deadLetter` accepts it. A lane that fills to its cap (`maxOutbox` decisions, `maxDeadLetters` dead letters) makes `push` and a source's `emit` reject until it drains.
+- **Dead letters are never dropped.** The judge and sink each get as many retries as their schedule has entries. A window that still fails becomes a dead letter, which attend retries with capped backoff until `deadLetter` accepts it. A lane that fills to its cap (`maxOutbox` decisions, `maxDeadLetters` dead letters) makes `push` and a source's `emit` reject until it drains.
 - **Crash-tested at every commit boundary.** `crashSuite` runs a scripted session once, then once more for each commit with a crash just before it and again just after it. Every run must deliver the same decision ids and dead-letter ids. CI runs it against the memory, SQLite, Postgres and Redis stores.
 
 ## Defaults
@@ -234,7 +240,8 @@ These are round starting points, not tuned values. Override any of them with `se
 | `maxWindowMs` | 60000 | Age of the first act at which the window settles |
 | `windowShare` (a `createAttend` option) | 0.5 | Share of the judge's context budget a window may fill before it settles with reason `size` |
 | `actThreshold` (a `createAttend` option) | off | Act when p(interrupt) + p(ask) reaches it |
-| `retryBackoffMs` | `[1000, 4000, 16000]` | Backoff before each retry of a judge call, a delivery or a source. Its length is the retry budget for judges and sinks; a source repeats the last rung. |
+| `retryBackoffMs` | `[1000, 4000, 16000]` | Backoff for judges and sources, the default for sink delivery, and the base delays for the dead-letter handler. A source repeats the last rung. |
+| `deliveryRetryBackoffMs` | `retryBackoffMs` | Backoff for sink delivery. Its length is the sink retry budget. |
 | `judgeTimeoutMs` | 15000 | Aborts a judge call. The judge's lease is twice this. |
 | `deliveryTimeoutMs` | 10000 | Lease on one delivery. An expired lease counts as a failed attempt. |
 | `recentCount` | 8 | Recent verdicts the judge sees |

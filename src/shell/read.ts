@@ -1,11 +1,15 @@
-import { apply, COMPLETION_REVISION, newOutput } from '../core/reducer.js';
+import { apply, COMPLETION_REVISION, DELIVERY_RETRY_REVISION, newOutput } from '../core/reducer.js';
 import { fromRecord, initialState, toRecord } from '../core/state.js';
 import { DEFAULT_POLICY, type ApplyConfig, type ScopeRecord, type ScopeState } from '../core/types.js';
 import type { ScopeStore, StoredScope } from '../store/types.js';
 
 /** Replays immutable stored data under the snapshot's policy, ignoring effects and appends. */
 export function replay(scope: string, stored: StoredScope, modes: Pick<ApplyConfig, 'decisions' | 'deadLetters'>): ScopeState {
-  const policy = stored.snapshot?.policy ?? DEFAULT_POLICY;
+  let policy = stored.snapshot?.policy ?? DEFAULT_POLICY;
+  if (stored.snapshot && stored.snapshot.reducer < DELIVERY_RETRY_REVISION && Object.hasOwn(policy, 'deliveryRetryBackoffMs')) {
+    policy = { ...policy };
+    delete policy.deliveryRetryBackoffMs;
+  }
   const state = stored.snapshot ? fromRecord(stored.snapshot.record, policy) : initialState(scope, policy);
   // A tail under an older snapshot was logged by an older reducer, where `settles` meant nothing.
   const completion = !stored.snapshot || stored.snapshot.reducer >= COMPLETION_REVISION;

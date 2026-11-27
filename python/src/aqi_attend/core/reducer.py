@@ -49,8 +49,11 @@ from .window import (
     window_shed,
 )
 
-REDUCER_VERSION = 7
+REDUCER_VERSION = 8
 """Bumped whenever a release changes a transition. Stored with every snapshot."""
+
+DELIVERY_RETRY_REVISION = 8
+"""The first revision that applies the saved sink retry policy."""
 
 COMPLETION_REVISION = 7
 """The first revision whose logged inputs give ``settles`` its meaning."""
@@ -683,10 +686,11 @@ def _fail_delivery(ctx: _Ctx, state: ScopeState, lane: OutboxLane, message: str,
     attempt = phase["attempt"]
     failures = phase["failures"] + 1
     ctx.out.changed = True
-    backoff = ctx.config.policy["retryBackoffMs"]
+    policy = ctx.config.policy
     if item["kind"] == "deadLetter":
-        delay: float | None = _dead_letter_delay(ctx.config.policy, failures)
+        delay: float | None = _dead_letter_delay(policy, failures)
     else:
+        backoff = policy.get("deliveryRetryBackoffMs", policy["retryBackoffMs"])
         delay = None if permanent or failures - 1 >= len(backoff) else backoff[failures - 1]
     if delay is not None:
         at = ctx.now + delay

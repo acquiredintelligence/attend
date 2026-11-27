@@ -68,6 +68,7 @@ class SettlePolicy(TypedDict):
     maxEvents: int
     maxWindowMs: float
     retryBackoffMs: list[float]
+    deliveryRetryBackoffMs: NotRequired[list[float]]
     judgeTimeoutMs: float
     deliveryTimeoutMs: float
     recentCount: int
