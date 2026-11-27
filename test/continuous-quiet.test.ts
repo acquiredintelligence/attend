@@ -90,7 +90,7 @@ test('an explicit duration ignores an unused infinite default gap', async () => 
   }
 });
 
-test.each(KINDS.filter((kind) => kind !== 'continuous'))('duration on %s refuses the whole batch', async (kind) => {
+test.each(KINDS.filter((kind) => kind !== 'continuous' && kind !== 'closing'))('duration on %s refuses the whole batch', async (kind) => {
   const attend = createAttend({ clock: fakeClock(100), kind: (event) => event.name === 'move' ? 'continuous' : kind, judge: scriptedJudge([{ route: 'queue' }]), sink: 'log' });
   try {
     await expect(attend.push('s', [{ id: 'a', name: 'move' }, { id: 'b', name: 'other', quietForMs: 0 }])).rejects.toThrow('quietForMs');
@@ -204,7 +204,7 @@ test('a revision-two snapshot and mixed tail rebuild continuous end times', asyn
     const loaded = await attend.inspect('s');
     expect(loaded?.dueAt).toBe(200);
     expect(loaded?.buffer.entries.map((event) => [event.id, event.quietForMs, event.seenAt])).toEqual([['a', undefined, 100], ['b', 90, 120], ['c', undefined, 120]]);
-    expect((await store.load('s'))?.snapshot?.reducer).toBe(6);
+    expect((await store.load('s'))?.snapshot?.reducer).toBe(7);
   } finally {
     await attend.stop();
   }

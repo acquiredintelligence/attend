@@ -14,8 +14,10 @@ export interface Event {
   at: number;
   /** Source observation time in the engine clock's coordinates. Omit to settle from ingestion. */
   observedAt?: number;
-  /** Quiet duration for a continuous event, in ms. Omit to use streamGapMs. */
+  /** Quiet duration in ms for a continuous or closing event. Omit to use the kind's policy default. */
   quietForMs?: number;
+  /** A consequence that ends the acts already in the open window. */
+  settles?: true;
   name: string;
   data: JsonObject;
   /** One plain line describing the event, used by the default notice. */
@@ -33,7 +35,7 @@ export const KINDS = ['closing', 'flush', 'continuous', 'passive', 'consequence'
  * - flush: direct address; settles at once, with wait not offered, and is never shed.
  * - continuous: one step of an ongoing act; settles once no further step has arrived for a gap.
  * - passive: a dwell or look; settles after a quiet period.
- * - consequence: output that follows from an act; attaches to the act that caused it.
+ * - consequence: output that follows from an act; can end the open window with settles.
  * - context: the agent's own earlier output; rides along.
  */
 export type Kind = (typeof KINDS)[number];
@@ -522,19 +524,20 @@ export type KnownIds = Map<string, number>;
  */
 export interface TriggerSummary {
   minFlushAt: number;
-  lastClosingAt: number;
+  lastDefaultClosingAt: number;
   lastStreamAt: number;
   lastPassiveAt: number;
   firstActAt: number;
   /** Candidate extrema retain earlier entries before a kind first uses observation time. */
-  maxClosingAt: number;
+  maxDefaultClosingAt: number;
+  maxExplicitClosingEndAt: number;
   maxStreamAt: number;
   /** Default durations retain observation time so policy changes can recompute their ends. */
   maxDefaultStreamAt: number;
   maxExplicitStreamEndAt: number;
   maxPassiveAt: number;
   minActAt: number;
-  closingObserved: boolean;
+  defaultClosingObserved: boolean;
   streamObserved: boolean;
   passiveObserved: boolean;
   actObserved: boolean;
@@ -606,6 +609,11 @@ export interface ApplyConfig {
   deadLetters: 'lane' | 'log';
   /** Build trace effects. False when nothing observes. Traces never change state. */
   traces: boolean;
+  /**
+   * Read `settles` on consequences. False while replaying a tail logged under a reducer older
+   * than revision 7, where the field was application metadata with no meaning.
+   */
+  completion?: boolean;
 }
 
 /** A row `apply` asks the store to append in the same write as the input that produced it. */

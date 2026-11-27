@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import cast
 
 from .._json import clone
-from ..core.reducer import apply
+from ..core.reducer import COMPLETION_REVISION, apply
 from ..core.state import from_record, initial_state, to_record
 from ..core.types import DEFAULT_POLICY, ApplyConfig, ApplyOutput, DeliveryMode, ScopeRecord, ScopeState
 from ..store.types import ScopeStore, StoredScope
@@ -16,7 +16,9 @@ def replay(scope: str, stored: StoredScope, decisions: DeliveryMode, dead_letter
     snapshot = stored["snapshot"]
     policy = snapshot["policy"] if snapshot is not None else DEFAULT_POLICY
     state = from_record(snapshot["record"], policy) if snapshot is not None else initial_state(scope)
-    config = ApplyConfig(policy, decisions, dead_letters, False)
+    # A tail under an older snapshot was logged by an older reducer, where ``settles`` meant nothing.
+    completion = snapshot is None or snapshot["reducer"] >= COMPLETION_REVISION
+    config = ApplyConfig(policy, decisions, dead_letters, False, completion)
     for logged in stored["tail"]:
         apply(config, state, logged, ApplyOutput())
         state.version += 1

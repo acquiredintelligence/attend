@@ -356,7 +356,7 @@ test('assertInvariants identifies corrupt counts, rings, summaries, sizes, hashe
     ['I1:', (s) => { s.open.entries.push(s.open.entries[0]!); }],
     ['I2:', (s) => { s.seen.size = 31; }],
     ['I2:', (s) => { s.seen.head = -1; }],
-    ['I3:', (s) => { s.open.summary.lastClosingAt = 99; }],
+    ['I3:', (s) => { s.open.summary.lastDefaultClosingAt = 99; }],
     ['I4:', (s) => { s.open.sizes[0] = 99; }],
     ['I5:', (s) => { s.open.hash.lo = 0; }],
     ['I6:', (s) => { s.dueAt = 99; }],
@@ -379,7 +379,7 @@ test('assertInvariants identifies corrupt counts, rings, summaries, sizes, hashe
   lane.outbox.decisions.push(lane.outbox.decisions[0]!);
   lane.dueAt = nextDue(policy, lane);
   assert.throws(() => assertInvariants(lane, policy), /^Error: outbox: more than one in flight/);
-  assert.equal(REDUCER_VERSION, 6);
+  assert.equal(REDUCER_VERSION, 7);
 });
 
 test('fromRecord accepts frozen oracle snapshots without changing them', () => {

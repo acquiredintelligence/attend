@@ -4,14 +4,14 @@
 
 | Kind | Use it for | Settles the window |
 |---|---|---|
-| `closing` | The end of an act: a submit, a save, a merged pull request, a finished build | `closingGraceMs` after the last closing event, so the output it causes can join the window |
+| `closing` | The end of an act: a submit, a save, a merged pull request, a finished build | After the latest [closing deadline](#closing-duration-and-completion), so the output it causes can join the window |
 | `flush` | Someone addresses the agent directly: a message to it, an @mention | At once. `wait` is not offered. |
 | `continuous` | One step of an ongoing act: typing, scrolling, dragging, a partial transcript | Once no continuous event has arrived for `streamGapMs` |
 | `passive` | A dwell or a look: a hover, a focus, a page view | `passiveQuietMs` after the last passive event |
-| `consequence` | System output: a log line, a status change, a tool result | Never. It joins the open window. |
+| `consequence` | System output: a log line, a status change, a tool result | Joins the open window. With [`settles: true`](#closing-duration-and-completion), it can end the acts already there. |
 | `context` | The agent's own output | Never. It joins the open window as context for the judge, and [`defaultNotice`](sinks.md#the-notice) leaves it out. |
 
-`closing`, `flush`, `continuous` and `passive` events are acts: things that happen in the scope and can call for the agent, whether the user did them or an outside party did. A window also settles when its first act is `maxWindowMs` old (reason `age`), when it fills its share of the judge's context window (reason `size`, see [the window budget](judges.md#the-window-budget)), when you call `attend.end(scope)` because the producer knows the unit is over (reason `closing`, `wait` still offered), or when you call `attend.flush(scope)` (reason `forced`, with `wait` not offered). When a window passes `maxEvents`, attend drops its oldest consequence and context events and counts them in `window.dropped`. If the window is still too big, it settles with reason `overflow`. attend never drops an act. Consequence and context events that wait longer than `maxWindowMs` for an act are dropped and counted the same way.
+`closing`, `continuous` and `passive` events are acts: things that happen in the scope and can call for the agent, whether the user did them or an outside party did. A window also settles when its first act is `maxWindowMs` old (reason `age`), when it fills its share of the judge's context window (reason `size`, see [the window budget](judges.md#the-window-budget)), when you call `attend.end(scope)` because the producer knows the unit is over (reason `closing`, `wait` still offered), or when you call `attend.flush(scope)` (reason `forced`, with `wait` not offered). When a window passes `maxEvents`, attend drops its oldest consequence and context events and counts them in `window.dropped`. If the window is still too big, it settles with reason `overflow`. attend never drops an act. Consequence and context events that wait longer than `maxWindowMs` for an act are dropped and counted the same way.
 
 A system event that should wake the agent on its own, such as a failed deploy or a fired alert, needs an act kind. `closing` is the usual choice.
 
@@ -48,7 +48,7 @@ Both runtimes retain `observedAt` through snapshots, logged inputs, windows and 
 
 ## Continuous quiet duration
 
-A continuous event can supply a finite, nonnegative `quietForMs`. Zero makes its quiet deadline immediate. `push` and `attach` refuse invalid values or a duration on any other kind before admitting the batch or committing its cursor.
+A continuous event can supply a finite, nonnegative `quietForMs`. Zero makes its quiet deadline immediate. `push` and `attach` refuse invalid values or a duration on a kind other than `continuous` or `closing` before admitting the batch or committing its cursor.
 
 Once a continuous entry supplies a duration, that group's deadline is the maximum of each entry's observation time plus its duration. An omitted duration uses `streamGapMs`; an omitted observation uses ingestion time. A late observation can therefore be due on arrival, but settlement still happens at processing time. Entry order does not change.
 
@@ -72,6 +72,28 @@ console.log((await attend.inspect('device'))?.dueAt); // 210
 Closing and passive deadlines can still settle the window earlier. Flush, age and bounds keep their existing precedence. After a wait, only fresh entries set a new quiet deadline; held entries retain their durations as data. Waits, retries and leases keep engine time.
 
 When every continuous entry omits `quietForMs`, existing timing remains unchanged, including backwards engine clocks. Explicit durations persist through snapshots, tails and decisions. Replay uses the snapshot policy for omitted durations. Changing a live engine's policy recalculates those default durations; it never changes an explicit duration. [Storage](storage.md) describes version coordination.
+
+## Closing duration and completion
+
+A `closing` event can supply a finite, nonnegative `quietForMs` in milliseconds. The closing deadline is the latest of the default grace deadline and each explicit entry's effective observation time plus its duration. The default grace applies only to closing entries that omit the field. That group keeps the existing observation-time rule. With no explicit observation in the group, it uses the last entry's ingestion time. Zero gives an explicit entry no grace. Other deadlines can still settle the window earlier.
+
+Use `settles: true` on a `consequence` event when the producer knows the output is complete. If the open window already contains a `closing`, `continuous` or `passive` act, this makes the window due at the consequence's effective observation time under the same settlement rules as `end(scope)`. It can end an ongoing continuous stream immediately, with reason `closing` and `wait` offered within the usual limits. An already-due observation still settles at processing time.
+
+A completion with only background or held entries has no settlement effect. Entries later in the same batch still join that batch. The completion remains a consequence for retention even when it sets an end deadline. Both fields are validated before event admission or cursor commit. Supply `settles` only on a consequence and give it the literal value `true`.
+
+```ts
+import { createAttend } from '@acquiredintelligence/attend';
+
+const attend = createAttend({
+  kind: { saved: 'closing', indexed: 'consequence' },
+  judge: async () => ({ route: 'note' }),
+  sink: 'log',
+});
+await attend.push('document', { name: 'saved', quietForMs: 2000 });
+await attend.push('document', { name: 'indexed', settles: true });
+```
+
+Both fields work through `push`, `attach` and serial intake. Stored entries retain them in snapshots, logged inputs and decision records. Replay uses the snapshot policy for closing entries that use the default grace. See [storage](storage.md) for version coordination.
 
 ## Routes
 
@@ -124,7 +146,7 @@ A timer claims the scope before its write starts. During preparation or immediat
 
 The promise covers the input write and the immediate chain of judgments, deliveries and their completion, release or deferral writes. A failed immediate write rejects it. A persisted wait or retry with a future deadline releases the turn; the promise does not wait for that future attempt or an open window's quiet deadline. A cursor can therefore already be committed when a later effect write fails. A caller that retries must supply stable event ids and make external delivery idempotent.
 
-An opted-in scope refuses ordinary `push`, `attach`, `flush` and `end`, including after close. Same-engine, same-scope `submit` or `close` from preparation, context, judge or delivery rejects with `IntakeError`; awaiting it would wait on itself. Other scopes progress independently. Do not create cycles by awaiting each other's intakes from callbacks.
+An opted-in scope refuses ordinary `push`, `attach`, `flush` and `end`, including after close. Submit a consequence with `settles: true` to end an act in event order. Same-engine, same-scope `submit` or `close` from preparation, context, judge or delivery rejects with `IntakeError`; awaiting it would wait on itself. Other scopes progress independently. Do not create cycles by awaiting each other's intakes from callbacks.
 
 An engine's `stop()` also rejects from its own intake callback context, because shutdown joins that callback. To request shutdown from a callback, abort the signal supplied to `run()` and return; await stop from outside the callback.
 
@@ -149,9 +171,9 @@ const attend = createAttend({
 });
 ```
 
-After a `wait`, fresh entries alone drive quiet. At the horizon, attend reoffers the whole unresolved window, including fresh entries that are not quiet yet. It can offer `wait` again until `maxWaits` or a whole-window bound requires resolution. A provider failure retains the wait count; a successful `wait` retains the provider failure count. The latter selects the next retry backoff.
+After a `wait`, fresh entries alone drive quiet. A consequence with `settles: true` also needs a fresh act earlier in the open window. At the horizon, attend reoffers the whole unresolved window, including fresh entries that are not quiet yet. It can offer `wait` again until `maxWaits` or a whole-window bound requires resolution. A provider failure retains the wait count; a successful `wait` retains the provider failure count. The latter selects the next retry backoff.
 
-During retry, its deadline is a strict not-before time. Fresh quiet, direct address, `flush()`, `end()`, age, count and bytes do not start a judgment earlier. At retry time, every entry still retained after pruning joins the held window. Gap and dropped-entry metadata join its next offer even when no fresh entry survives, and are then cleared from the fresh buffer. A timer that owns serial intake before a later raw registration can retry without that later entry. `flush()` still removes wait and supplies reason `forced`. `end()` applies to fresh open input, keeps reason `closing` and permits wait within the limits; with only an already-settled held window it remains a no-op.
+During retry, its deadline is a strict not-before time. Fresh quiet, direct address, `flush()`, `end()`, `settles: true`, age, count and bytes do not start a judgment earlier. At retry time, every entry still retained after pruning joins the held window. Gap and dropped-entry metadata join its next offer even when no fresh entry survives, and are then cleared from the fresh buffer. A timer that owns serial intake before a later raw registration can retry without that later entry. `flush()` still removes wait and supplies reason `forced`. `end()` applies to fresh open input, keeps reason `closing` and permits wait within the limits; with only an already-settled held window it remains a no-op.
 
 Eligibility uses the complete offered payload after the usual background shedding. Acts are never dropped. Count above `maxEvents`, rendered bytes at or above `maxWindowBytes`, and age at or above `maxWindowMs` withhold wait. Age starts at the earliest unresolved act's effective observation time. These checks also apply at initial offers, exact quiet/age ties and after absorbing an older observation. A bound makes a waiting window due; during backoff it takes effect at retry time. It does not interrupt an already running judge. A bound can withhold wait even when another deadline supplied the window's reason. Count and rendered bytes are not hard memory-allocation limits.
 

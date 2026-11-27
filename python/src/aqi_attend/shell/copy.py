@@ -57,6 +57,8 @@ def copy_event(event: Mapping[str, object], fill: tuple[Callable[[], str], Calla
             raise TypeError("attend: event keys must be strings")
         if key == "data":
             continue
+        if key == "settles" and value is not True:
+            raise TypeError("attend: settles must be true")
         fields[key] = _to_json(value, 1)
     data = event.get("data", {} if fill is not None else None)
     if not isinstance(data, Mapping):

@@ -49,8 +49,11 @@ from .window import (
     window_shed,
 )
 
-REDUCER_VERSION = 6
+REDUCER_VERSION = 7
 """Bumped whenever a release changes a transition. Stored with every snapshot."""
+
+COMPLETION_REVISION = 7
+"""The first revision whose logged inputs give ``settles`` its meaning."""
 
 _LANES: tuple[OutboxLane, OutboxLane] = ("decisions", "deadLetters")
 
@@ -223,6 +226,9 @@ def _ingest(ctx: _Ctx, state: ScopeState, input: EventsInput) -> None:
             duplicates += 1
             continue
         entry = cast(Entry, {**event, "seenAt": ctx.now})
+        # Act presence is checked in admission order, before background retention.
+        if ctx.config.completion and entry["kind"] == "consequence" and entry.get("settles") is True and state.open.summary.first_act_index != -1:
+            state.open.ended_at = observation_time(entry)
         window_append(state.open, entry, estimate_rendered_bytes(entry))
         ctx.out.changed = True
     if state.seen.size > max(0, policy["seenCount"]):

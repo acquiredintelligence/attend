@@ -348,7 +348,7 @@ describe('open window', () => {
 
   test('reports I3 when a trigger summary is corrupted', () => {
     const open = openWindow('scope');
-    open.summary.lastClosingAt = 123;
+    open.summary.lastDefaultClosingAt = 123;
     expect(() => assertWindow('scope', open)).toThrow('I3');
   });
 

@@ -32,6 +32,7 @@ class Event(TypedDict):
     at: float
     observedAt: NotRequired[float]
     quietForMs: NotRequired[float]
+    settles: NotRequired[Literal[True]]
     name: str
     data: JsonObject
     text: NotRequired[str]
@@ -489,6 +490,9 @@ class ApplyConfig:
     decisions: DeliveryMode = "lane"
     dead_letters: DeliveryMode = "lane"
     traces: bool = True
+    completion: bool = True
+    """Read ``settles`` on consequences. False while replaying a tail logged under a reducer older
+    than revision 7, where the field was application metadata with no meaning."""
 
 
 @dataclass(slots=True)
@@ -522,17 +526,18 @@ class TriggerSummary:
     """Everything ``deadline`` reads, kept O(1). Absent times use NaN; minima start at inf and maxima at -inf."""
 
     min_flush_at: float = math.inf
-    last_closing_at: float = math.nan
+    last_default_closing_at: float = math.nan
     last_stream_at: float = math.nan
     last_passive_at: float = math.nan
     first_act_at: float = math.nan
-    max_closing_at: float = -math.inf
+    max_default_closing_at: float = -math.inf
+    max_explicit_closing_end_at: float = -math.inf
     max_stream_at: float = -math.inf
     max_default_stream_at: float = -math.inf
     max_explicit_stream_end_at: float = -math.inf
     max_passive_at: float = -math.inf
     min_act_at: float = math.inf
-    closing_observed: bool = False
+    default_closing_observed: bool = False
     stream_observed: bool = False
     passive_observed: bool = False
     act_observed: bool = False

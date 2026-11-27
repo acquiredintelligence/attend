@@ -17,11 +17,11 @@ export function estimateRenderedBytes(event: Event): number {
 
 function emptySummary(): TriggerSummary {
   return {
-    minFlushAt: Infinity, lastClosingAt: NaN, lastStreamAt: NaN, lastPassiveAt: NaN,
+    minFlushAt: Infinity, lastDefaultClosingAt: NaN, lastStreamAt: NaN, lastPassiveAt: NaN,
     firstActAt: NaN, firstActIndex: -1, prefixMinSheddableAt: Infinity, sheddable: 0, lastSeenAt: NaN,
-    maxClosingAt: -Infinity, maxStreamAt: -Infinity, maxPassiveAt: -Infinity, minActAt: Infinity,
+    maxDefaultClosingAt: -Infinity, maxExplicitClosingEndAt: -Infinity, maxStreamAt: -Infinity, maxPassiveAt: -Infinity, minActAt: Infinity,
     maxDefaultStreamAt: -Infinity, maxExplicitStreamEndAt: -Infinity,
-    closingObserved: false, streamObserved: false, passiveObserved: false, actObserved: false, lastObservationAt: NaN,
+    defaultClosingObserved: false, streamObserved: false, passiveObserved: false, actObserved: false, lastObservationAt: NaN,
   };
 }
 
@@ -31,9 +31,13 @@ function summarizeEntry(summary: TriggerSummary, entry: Entry, index: number): v
   if (entry.kind === 'flush') summary.minFlushAt = Math.min(summary.minFlushAt, entry.seenAt);
   // Without explicit observations, keep the handling of a backwards engine clock.
   if (entry.kind === 'closing') {
-    summary.maxClosingAt = Math.max(summary.maxClosingAt, observedAt);
-    summary.closingObserved ||= explicit;
-    summary.lastClosingAt = summary.closingObserved ? summary.maxClosingAt : entry.seenAt;
+    if (entry.quietForMs === undefined) {
+      summary.maxDefaultClosingAt = Math.max(summary.maxDefaultClosingAt, observedAt);
+      summary.defaultClosingObserved ||= explicit;
+      summary.lastDefaultClosingAt = summary.defaultClosingObserved ? summary.maxDefaultClosingAt : entry.seenAt;
+    } else {
+      summary.maxExplicitClosingEndAt = Math.max(summary.maxExplicitClosingEndAt, observedAt + entry.quietForMs);
+    }
   }
   if (entry.kind === 'continuous') {
     summary.maxStreamAt = Math.max(summary.maxStreamAt, observedAt);
@@ -275,8 +279,11 @@ export function windowDeadline(policy: SettlePolicy, open: OpenWindow): { at: nu
     at = s.minFlushAt;
     reason = 'flush';
   }
-  const closing = s.lastClosingAt + policy.closingGraceMs;
-  if (!Number.isNaN(s.lastClosingAt) && (reason === null || closing < at)) {
+  const hasDefaultClosing = !Number.isNaN(s.lastDefaultClosingAt);
+  const closing = hasDefaultClosing
+    ? Math.max(s.lastDefaultClosingAt + policy.closingGraceMs, s.maxExplicitClosingEndAt)
+    : s.maxExplicitClosingEndAt;
+  if ((hasDefaultClosing || closing !== -Infinity) && (reason === null || closing < at)) {
     at = closing;
     reason = 'closing';
   }

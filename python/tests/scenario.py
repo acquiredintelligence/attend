@@ -27,6 +27,8 @@ def event_spec(spec: Mapping[str, Any]) -> Event:
         event["observedAt"] = spec["observedAt"]
     if "quietForMs" in spec:
         event["quietForMs"] = spec["quietForMs"]
+    if "settles" in spec:
+        event["settles"] = spec["settles"]
     return event
 
 
