@@ -4,6 +4,8 @@ What changed in each release, for people who use attend. The npm package `@acqui
 
 ## Unreleased
 
+- Set `settle.deliveryRetryBackoffMs` (`delivery_retry_backoff_ms` in Python) to give the sink its own retry delays and exhaustion budget. Omit it to keep using the judge schedule. Both runtimes save the option at reducer revision 8.
+
 - Closing events can set a per-event `quietForMs` for their output. A consequence can carry `settles: true` when that output is complete, including through serial intake. Both runtimes persist the fields at reducer revision 7. See [closing duration and completion](docs/reference.md#closing-duration-and-completion).
 
 ## 0.3.0 (2026-11-14)

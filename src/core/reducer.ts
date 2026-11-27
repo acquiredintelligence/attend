@@ -9,7 +9,10 @@ import { seenAdmit, seenRelease, seenTrim } from './seen.js';
 import { estimateRenderedBytes, isBackground, observationTime, openWindow, shedEntries, windowAppend, windowCompact, windowDeadline, windowEntries, windowPrune, windowShed, windowSize } from './window.js';
 
 /** Bumped whenever a release changes a transition. Stored with every snapshot. */
-export const REDUCER_VERSION = 7;
+export const REDUCER_VERSION = 8;
+
+/** The first revision that applies the saved sink retry policy. */
+export const DELIVERY_RETRY_REVISION = 8;
 
 /** The first revision whose logged inputs give `settles` its meaning. */
 export const COMPLETION_REVISION = 7;
@@ -466,8 +469,9 @@ function failDelivery(ctx: Ctx, state: ScopeState, lane: OutboxLane, message: st
   const { attempt } = d.phase;
   const failures = d.phase.failures + 1;
   ctx.out.changed = true;
-  const delay = item.kind === 'deadLetter' ? deadLetterDelay(ctx.config.policy, failures)
-    : permanent ? undefined : ctx.config.policy.retryBackoffMs[failures - 1];
+  const policy = ctx.config.policy;
+  const delay = item.kind === 'deadLetter' ? deadLetterDelay(policy, failures)
+    : permanent ? undefined : (policy.deliveryRetryBackoffMs ?? policy.retryBackoffMs)[failures - 1];
   if (delay !== undefined) {
     const at = ctx.now + delay;
     state.outbox[lane][0] = { item, phase: { phase: 'retrying', attempt, failures, at } };

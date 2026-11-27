@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import inspect
 import math
+import sys
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Mapping, Sequence
 from typing import Any, Literal, Protocol, TypedDict, cast, runtime_checkable
@@ -115,6 +116,7 @@ _SETTLE_KEYS: dict[str, str] = {
     "max_events": "maxEvents",
     "max_window_ms": "maxWindowMs",
     "retry_backoff_ms": "retryBackoffMs",
+    "delivery_retry_backoff_ms": "deliveryRetryBackoffMs",
     "judge_timeout_ms": "judgeTimeoutMs",
     "delivery_timeout_ms": "deliveryTimeoutMs",
     "recent_count": "recentCount",
@@ -139,6 +141,18 @@ def _event_limits(value: object) -> EventLimits:
     return {"counted": counted, "background": background}
 
 
+def _delivery_retry_backoff(value: object) -> list[float]:
+    message = "attend: deliveryRetryBackoffMs requires an array of finite nonnegative numbers"
+    if not isinstance(value, (list, tuple)):
+        raise TypeError(message)
+    delays: list[float] = []
+    for delay in cast(Sequence[object], value):
+        if isinstance(delay, bool) or not isinstance(delay, (int, float)) or not 0 <= delay <= sys.float_info.max:
+            raise TypeError(message)
+        delays.append(delay)
+    return delays
+
+
 def settle_policy(settle: Mapping[str, Any] | None = None) -> SettlePolicy:
     """The defaults with ``settle`` (snake_case names, as ``create_attend`` takes them) applied."""
     if settle is not None and "event_limits" in settle and (settle.get("continuation") != "accumulate" or "max_events" in settle):
@@ -151,7 +165,13 @@ def settle_policy(settle: Mapping[str, Any] | None = None) -> SettlePolicy:
             raise TypeError(f"attend: unknown settle option {name!r}")
         if name == "continuation" and (not isinstance(value, str) or value not in ("separate", "accumulate")):
             raise ValueError("attend: continuation must be separate or accumulate")
-        policy[key] = list(value) if name == "retry_backoff_ms" else _event_limits(value) if name == "event_limits" else value
+        if name == "delivery_retry_backoff_ms":
+            value = _delivery_retry_backoff(value)
+        elif name == "retry_backoff_ms":
+            value = list(value)
+        elif name == "event_limits":
+            value = _event_limits(value)
+        policy[key] = value
     return cast(SettlePolicy, policy)
 
 

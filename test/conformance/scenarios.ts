@@ -15,6 +15,42 @@ const T = 'test/attend.test.ts';
 
 export const SCENARIOS: Scenario[] = [
   {
+    name: 'a short sink backoff unblocks later deliveries while a judge backs off',
+    start: 100, kinds: KINDS,
+    settle: { retryBackoffMs: [1000], deliveryRetryBackoffMs: [10] },
+    judge: {
+      '*': { rules: [{ has: ['provider'], once: true, answer: { fail: 'provider unavailable' } }, { answer: { route: 'note' } }] },
+    },
+    sink: { '*': { attempts: [{ fail: 'store unavailable' }] } },
+    steps: [
+      push('s', ev('first', 'say')), advance(0),
+      advance(1), push('s', ev('next', 'say')), advance(0),
+      advance(1), push('s', ev('provider', 'say')), advance(0), { inspect: 's' },
+      advance(8), { inspect: 's' }, advance(992),
+    ],
+  },
+  {
+    name: 'sink exhaustion and dead-letter handler retries use separate schedules',
+    start: 100, kinds: KINDS,
+    settle: { retryBackoffMs: [200, 500], deliveryRetryBackoffMs: [10] },
+    judge: { '*': { answers: [{ route: 'note' }] } },
+    sink: { '*': { attempts: [{ fail: 'store unavailable' }, { fail: 'still unavailable' }] } },
+    deadLetter: { '*': { attempts: [{ fail: 'handler unavailable' }] } },
+    steps: [
+      push('s', ev('first', 'say')), advance(0),
+      advance(1), push('s', ev('next', 'say')), advance(0),
+      advance(9), { inspect: 's' }, advance(200),
+    ],
+  },
+  {
+    name: 'an empty sink schedule dead-letters an expired first attempt',
+    start: 100, kinds: KINDS,
+    settle: { retryBackoffMs: [200], deliveryRetryBackoffMs: [], deliveryTimeoutMs: 10 },
+    judge: { '*': { answers: [{ route: 'note' }] } },
+    sink: { '*': { attempts: [{ hang: true }] } },
+    steps: [push('s', ev('first', 'say')), advance(0), advance(10), { inspect: 's' }],
+  },
+  {
     name: 'closing combines default grace with explicit deadlines',
     start: 100, kinds: KINDS,
     judge: { '*': { answers: [{ route: 'note' }] } },

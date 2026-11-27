@@ -81,8 +81,10 @@ export interface SettlePolicy {
   maxEvents: number;
   /** A window settles this long after its first act however busy it is; older act-less entries are pruned. */
   maxWindowMs: number;
-  /** Backoff before each retry of a judge call, a delivery or a source; its length is the retry budget for the first two. */
+  /** Judge and source backoff, also used for deliveries by default and as the base for dead-letter handler retries. */
   retryBackoffMs: number[];
+  /** Sink retry delays in ms. Omit to use retryBackoffMs. The length is the sink retry budget. */
+  deliveryRetryBackoffMs?: number[];
   /** Aborts a judge call. Its lease is twice this, so a slow call is never duplicated while live. */
   judgeTimeoutMs: number;
   /** Lease on a delivery. Expiry counts as one failed attempt. */

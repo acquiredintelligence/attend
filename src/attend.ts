@@ -36,6 +36,13 @@ export function createAttendInternal(config: AttendConfig, snapshot: 'ratio' | '
     throw new RangeError('attend: judgeConcurrency must be a positive integer');
   }
   const policy: SettlePolicy = { ...DEFAULT_POLICY, ...config.settle };
+  if (policy.deliveryRetryBackoffMs !== undefined) {
+    const message = 'attend: deliveryRetryBackoffMs requires an array of finite nonnegative numbers';
+    if (!Array.isArray(policy.deliveryRetryBackoffMs)) throw new TypeError(message);
+    const backoff = [...policy.deliveryRetryBackoffMs];
+    if (backoff.some((delay) => !Number.isFinite(delay) || delay < 0)) throw new TypeError(message);
+    policy.deliveryRetryBackoffMs = backoff;
+  }
   if (policy.continuation !== undefined && policy.continuation !== 'separate' && policy.continuation !== 'accumulate') {
     throw new TypeError('attend: continuation must be separate or accumulate');
   }
